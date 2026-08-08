@@ -402,8 +402,8 @@ class WorkerManager:
     ) -> None:
         self._bus = bus
         self._log_dir = log_dir
-        self._mp: SpawnContext = context if context is not None else multiprocessing.get_context(
-            "spawn"
+        self._mp: SpawnContext = (
+            context if context is not None else multiprocessing.get_context("spawn")
         )
         self._handles: dict[str, _Handle] = {}
         self._translators: dict[str, EventTranslator] = {}
@@ -1371,5 +1371,3 @@ def _scope_handler(manager: WorkerManager, scope: RestartScope) -> Callable[[Set
         manager.restart_scope(scope)
 
     return handler
-
-

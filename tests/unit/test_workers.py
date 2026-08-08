@@ -483,9 +483,7 @@ class TestEventsAndLogs:
         manager.register(echo_spec())
         manager.start("echo")
         manager.call_sync("echo", "warn", {"message": "тестовое предупреждение"})
-        assert wait_for(
-            lambda: any("тестовое предупреждение" in line.message for line in lines)
-        )
+        assert wait_for(lambda: any("тестовое предупреждение" in line.message for line in lines))
         forwarded = next(line for line in lines if "тестовое" in line.message)
         assert forwarded.level == "WARNING"
         assert "echo" in forwarded.logger
@@ -847,9 +845,7 @@ class TestApplyPlan:
         assert manager.call_sync("echo", "inherited")["params"] == {"v": 2}
 
     def test_an_unchanged_plan_keeps_the_process(self, manager: WorkerManager):
-        plan = WorkerPlan(
-            workers=(PlannedWorker(spec=echo_spec(), needed=True, autostart=True),)
-        )
+        plan = WorkerPlan(workers=(PlannedWorker(spec=echo_spec(), needed=True, autostart=True),))
         manager.apply_plan(plan)
         first_pid = manager.status()[0].pid
         manager.apply_plan(plan)

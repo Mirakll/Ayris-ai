@@ -372,9 +372,7 @@ def decode(raw: bytes) -> Message:
         raise WorkerProtocolError(f"not a worker frame: {raw[:8]!r}")
     version = raw[len(MAGIC)]
     if version != PROTOCOL_VERSION:
-        raise WorkerProtocolError(
-            f"worker protocol version {version}, expected {PROTOCOL_VERSION}"
-        )
+        raise WorkerProtocolError(f"worker protocol version {version}, expected {PROTOCOL_VERSION}")
     try:
         message = pickle.loads(raw[_HEADER_SIZE:])
     except Exception as exc:
