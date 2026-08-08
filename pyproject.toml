@@ -172,9 +172,10 @@ ignore = [
 "tests/**" = ["ANN201", "ANN001", "ARG001", "ARG002"]
 
 [tool.ruff.lint.flake8-builtins]
-# ayris/core/secrets.py импортируется только как ayris.core.secrets, поэтому
-# заслонить стандартный модуль secrets он не может.
-builtins-allowed-modules = ["secrets"]
+# ayris/core/secrets.py и ayris/core/profile.py импортируются только как
+# ayris.core.*, поэтому заслонить стандартные модули secrets и profile они
+# не могут.
+builtins-allowed-modules = ["profile", "secrets"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
