@@ -8,6 +8,7 @@
 ## Что сделать
 1. `macros/schema.py` — pydantic-модели. `CommandModel`: `id`, `name`, `description`, `tags: list[str]`, `folder_id`, `enabled`, `priority: int`, `cooldown_ms: int`, `require_admin: bool`, `triggers`, `actions`, `variables`, `sounds`, `created_at/updated_at`.
 2. `TriggerModel` — дискриминируемое объединение по полю `type`: `voice` (`phrase`, `fuzzy: bool`, `fuzzy_threshold`, `regex: bool`, `priority`), `hotkey` (`combo`), `event` (`event_name`, `filter_json`), `timer` (`fire_at` либо `cron`). Валидация: у `voice` regex компилируется при сохранении, у `hotkey` комбинация парсится в нормальную форму.
+   Парсер комбинаций живёт здесь — `utils/hotkeys.py`: модель `Hotkey` (модификаторы плюс клавиша), разбор строк во всех нотациях (`ctrl+alt+v`, `Ctrl + Alt + V`, запись VoiceAttack и AutoHotkey), приведение к каноническому виду, русская подпись для UI. Это единственный парсер комбинаций в проекте: им пользуются импортёры задачи 36 и слой хоткеев задачи 37. Чистая логика без WinAPI — регистрация комбинаций в системе остаётся задаче 37.
 3. `ActionBlock`: `type` (имя действия из реестра задачи 19 либо блок логики), `params: dict`, вложенные ветки `then` / `else` / `body` / `catch` как списки блоков, `sound: SoundBinding | None` со `stage` (`on_start` / `on_success` / `on_error`), `enabled`, `comment`, `on_error` (`continue` / `stop`). Рекурсивная модель с ограничением глубины.
 4. `VariableModel`: `name`, `type` (`str`/`int`/`float`/`bool`/`array`/`dict`), `scope` (`local`/`profile`/`global`), `default`, `persistent: bool`. Проверка соответствия `default` объявленному типу.
 5. `macros/serializer.py`: сериализация команды и папки команд в `.ayris` (JSON) с полем `schema_version`, загрузка с миграциями формата (`macros/format_migrations.py`, цепочка `v1 → vN`, отказ с понятным сообщением при версии из будущего). Экспорт/импорт одной команды и папки целиком.
@@ -15,19 +16,22 @@
 7. Маппинг модели на таблицы `commands` / `triggers` / `variables` из задачи 03 (`actions_json` — сериализованное дерево блоков) и тестовые фикстуры: оба примера из раздела 22 ТЗ в виде `.ayris`-файлов.
 
 ## Файлы
-`src/ayris/actions/macros/__init__.py`, `src/ayris/actions/macros/schema.py`, `serializer.py`, `format_migrations.py`, `validator.py`, `tests/unit/test_macro_schema.py`, `tests/fixtures/macros/volume_50.ayris`, `tests/fixtures/macros/work_mode.ayris`
+`src/ayris/actions/macros/__init__.py`, `src/ayris/actions/macros/schema.py`, `serializer.py`, `format_migrations.py`, `validator.py`, `src/ayris/utils/hotkeys.py`, `tests/unit/test_macro_schema.py`, `tests/unit/test_hotkeys.py`, `tests/fixtures/macros/volume_50.ayris`, `tests/fixtures/macros/work_mode.ayris`
 
 ## Осторожно
 - Схема — контракт с UI-редактором, импортёрами и файлами пользователя: переименование поля требует миграции формата, а не правки на месте.
 - Рекурсивные pydantic-модели требуют `model_rebuild()`; следи, чтобы `mypy strict` проходил на вложенных ветках.
 - Не хранить в `.ayris` секреты и абсолютные пути к профилю пользователя.
+- Задача целиком проверяется автоматически — здесь нет ни железа, ни окон. Но тесты гоняются и в Linux-песочнице, и на windows-раннере CI, поэтому в фикстурах `.ayris` не должно быть ни абсолютных путей, ни разделителя `\`: иначе round-trip разъедется по платформам и покраснеет там, где ошибки в коде нет.
+- `utils/hotkeys.py` здесь — только разбор и нормализация строк, без `RegisterHotKey` и без импорта Windows-модулей. Если сюда протечёт WinAPI, парсер перестанет собираться в Linux-песочнице и потянет за собой задачу 36, которой нужен ровно разбор комбинаций и ничего больше.
 
 ## Готово когда
 - [ ] Оба примера из раздела 22 ТЗ загружаются в `CommandModel` и сериализуются обратно без потери данных (round-trip).
 - [ ] Битые параметры блока, ссылка на несуществующую переменную и цикл `CallCommand` дают понятные ошибки валидации с путём до блока.
 - [ ] Файл с более старым `schema_version` подхватывается через миграцию, с более новым — отклоняется с понятным сообщением.
 - [ ] Команда сохраняется в БД и читается обратно идентичной.
-- [ ] Тесты зелёные, ruff и mypy strict проходят.
+- [ ] Комбинации во всех нотациях (`ctrl+alt+v`, `Ctrl + Alt + V`, запись VoiceAttack и AutoHotkey) приводятся к одному каноническому виду.
+- [ ] Тесты зелёные, ruff, black и mypy strict проходят.
 
 ## Промпт для нового чата
-> Прочитай `AYRIS_SPEC.md`, `AYRIS_CONTEXT.md` и код проекта, затем выполни Задачу 30 из `tasks/30_macro_schema.md`: реализуй pydantic-модели команды, триггеров (voice с fuzzy и regex, hotkey, event, timer), рекурсивного блока действия с ветками then/else/body и привязкой звука к стадии, переменных со scope и персистентностью; сериализацию в `.ayris` с `schema_version` и миграциями формата; валидатор ссылок на действия, переменные и циклов `CallCommand`; маппинг на таблицы БД. Оформи оба примера из раздела 22 ТЗ как фикстуры и напиши на них тесты round-trip и валидации. Прогони ruff, mypy, pytest.
+> Прочитай `AYRIS_SPEC.md`, `AYRIS_CONTEXT.md` и код проекта, затем выполни Задачу 30 из `tasks/30_macro_schema.md`: реализуй pydantic-модели команды, триггеров (voice с fuzzy и regex, hotkey, event, timer), рекурсивного блока действия с ветками then/else/body и привязкой звука к стадии, переменных со scope и персистентностью; сериализацию в `.ayris` с `schema_version` и миграциями формата; валидатор ссылок на действия, переменные и циклов `CallCommand`; маппинг на таблицы БД. Сюда же положи `utils/hotkeys.py` — единственный в проекте парсер комбинаций клавиш: разбор всех нотаций (включая VoiceAttack и AutoHotkey), приведение к каноническому виду и русская подпись, без WinAPI. Оформи оба примера из раздела 22 ТЗ как фикстуры и напиши на них тесты round-trip и валидации. Прогони ruff, mypy, pytest.
