@@ -28,12 +28,13 @@ a missing one is skipped with a log line instead of failing the launch.
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import logging
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Self
+from typing import TYPE_CHECKING, Final, Self, cast
 
 from ayris.core.config import RestartScope, Settings
 from ayris.core.models import JsonObject
@@ -43,13 +44,20 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
     from pathlib import Path
 
+    from ayris.core.events import Event
+
+    #: What a worker event becomes on the bus. ``None`` drops the event.
+    EventTranslator = Callable[[str, JsonObject], Event | None]
+
 __all__ = [
+    "TRANSLATOR_ATTR",
     "WORKER_TYPES",
     "PlannedWorker",
     "WorkerKind",
     "WorkerPlan",
     "WorkerSpec",
     "WorkerType",
+    "event_translator",
     "plan_workers",
     "worker_type",
 ]
@@ -397,12 +405,47 @@ def _llm_spec(settings: Settings) -> WorkerSpec:
 
 _ENTRYPOINTS: Final[Mapping[WorkerKind, str]] = MappingProxyType(
     {
-        WorkerKind.AUDIO: "ayris.audio.worker:AudioWorker",
+        WorkerKind.AUDIO: "ayris.workers.audio_worker:AudioWorker",
         WorkerKind.STT: "ayris.audio.stt.worker:SttWorker",
         WorkerKind.TTS: "ayris.audio.tts.worker:TtsWorker",
         WorkerKind.LLM: "ayris.nlu.llm.worker:LlmWorker",
     }
 )
+
+#: Attribute a worker module may expose to say what its events mean on the bus.
+#: See :func:`event_translator`.
+TRANSLATOR_ATTR: Final = "EVENT_TRANSLATOR"
+
+
+def event_translator(kind: str) -> EventTranslator | None:
+    """Return the bus translator a worker type publishes, if it has one.
+
+    The supervisor must not know that the audio worker's ``level`` event is an
+    :class:`~ayris.core.events.AudioLevelChanged` - that knowledge belongs to
+    the subsystem - but something has to introduce the two. Each worker module
+    may expose :data:`TRANSLATOR_ATTR`, and this looks it up by worker type.
+
+    Importing the module here is safe and cheap: the same module is imported in
+    the child process anyway, and :meth:`WorkerType.available` has already
+    checked that it exists. A worker type without a translator, one that is not
+    a known kind (the test fixture worker is not), or one whose module fails to
+    import, yields ``None`` rather than an error - its events then reach the log
+    and stop there.
+    """
+    try:
+        entrypoint = _ENTRYPOINTS[WorkerKind(kind)]
+    except ValueError:
+        return None
+    module_name = entrypoint.partition(":")[0]
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        _log.debug("нет модуля %s для трансляции событий: %s", module_name, exc)
+        return None
+    translator = getattr(module, TRANSLATOR_ATTR, None)
+    if not callable(translator):
+        return None
+    return cast("EventTranslator", translator)
 
 
 def _stt_needed(settings: Settings) -> bool:

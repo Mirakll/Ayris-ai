@@ -22,7 +22,7 @@
   - Появилось: `core/profile.py` (`ProfileManager` — `list_all`/`create`/`copy`/`rename`/`delete`/`switch` с защитой последнего профиля и переключением на лету, `subscribe()` для подписчиков + события `ProfileSwitched`/`ProfilesChanged`, `export`/`preview_import`/`import_bundle` с бэкапом перед импортом, `backup`/`list_backups`/`reset` (ротация до `MAX_BACKUPS`), `open_folder`, `change_root()` — перенос корня установки на другой диск/в облако с миграцией данных и откатом), `core/portable_profile.py` (формат `.zip` `ayris-profile` схемы v1: `export_bundle`/`preview_bundle`/`import_bundle`/`read_manifest`/`strip_secrets`, `BundleManifest`/`BundlePreview`/`ImportReport`, `ConflictPolicy` overwrite/rename/skip, секреты вырезаются и при экспорте и при импорте, защита от zip-slip и zip-bomb, атомарность — файлы через staging + БД одной транзакцией).
 
 ## Этап B — Аудио и речь
-- [ ] **07** — [Аудио захват и устройства](tasks/07_audio_capture.md) — зависит от: 05
+- [x] **07** — [Аудио захват и устройства](tasks/07_audio_capture.md) — зависит от: 05
 - [ ] **08** — [VAD, шумоподавление, калибровка](tasks/08_vad_denoise.md) — зависит от: 07
 - [ ] **09** — [Wake word](tasks/09_wake_word.md) — зависит от: 08
 - [ ] **10** — [STT офлайн](tasks/10_stt_offline.md) — зависит от: 05, 08

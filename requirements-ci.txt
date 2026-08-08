@@ -23,6 +23,7 @@ pydantic-settings==2.8.1
 tomlkit==0.13.2
 keyring==25.6.0
 numpy==1.26.4
+sounddevice==0.5.1
 
 # --- Инструменты проверок ---
 ruff==0.9.6

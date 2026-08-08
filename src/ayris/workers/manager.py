@@ -1329,13 +1329,17 @@ def install_workers(app: AyrisApp) -> WorkerManager:
     # and a worker child must not drag the whole lifecycle module into its process.
     from ayris.core.app import Component, LifecycleStage
     from ayris.core.config import RestartScope
-    from ayris.workers.registry import plan_workers
+    from ayris.workers.registry import event_translator, plan_workers
 
     manager = WorkerManager(app.bus, log_dir=app.paths.logs_dir)
 
     def start() -> None:
         plan = plan_workers(app.settings, log_dir=app.paths.logs_dir)
         _log.info("план воркеров: %s", plan.describe())
+        for planned in plan:
+            translator = event_translator(planned.spec.kind)
+            if translator is not None:
+                manager.set_event_translator(planned.spec.name, translator)
         manager.apply_plan(plan)
 
     def stop() -> None:

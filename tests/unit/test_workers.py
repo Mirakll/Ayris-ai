@@ -691,8 +691,8 @@ class TestRegistry:
             assert kind.label
 
     def test_a_missing_module_is_skipped_rather_than_fatal(self):
-        """Nothing under ``ayris.audio.worker`` exists yet, and launch must survive."""
-        assert plan_workers(Settings()).workers == ()
+        """Only the audio worker exists so far, and launch must survive the rest."""
+        assert [planned.spec.name for planned in plan_workers(Settings())] == ["audio"]
 
     def test_the_default_plan_starts_the_local_workers(self):
         plan = plan_workers(Settings(), include_unavailable=True)
