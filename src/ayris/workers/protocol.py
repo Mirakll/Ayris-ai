@@ -28,6 +28,7 @@ writing side and :func:`open_audio` on the reading side.
 
 from __future__ import annotations
 
+import contextlib
 import pickle
 import sys
 import threading
@@ -43,7 +44,11 @@ from ayris.core.models import JsonObject
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
-    from multiprocessing.connection import Connection
+    from multiprocessing.connection import Connection, PipeConnection
+
+    #: Either end of a duplex pipe. Windows hands out ``PipeConnection``, POSIX a
+    #: ``Connection``, and the two share no common public base class.
+    PipeEnd = Connection[Any, Any] | PipeConnection[Any, Any]
 
 __all__ = [
     "AUDIO_PARAM",
@@ -187,11 +192,15 @@ class WorkerCancelledError(WorkerError):
 
 #: Every :class:`~ayris.core.errors.AyrisError` subclass, by class name, so a
 #: typed failure raised in a worker is re-raised as the same class in the parent.
-#: Built by scanning the module rather than by listing the classes, because a
-#: list here would silently go stale every time a new error class is added.
+#: Built by scanning the modules rather than by listing the classes, because a
+#: list here would silently go stale every time a new error class is added. The
+#: worker errors above are included too: a worker that rejects an unknown method
+#: should surface as :class:`WorkerProtocolError` in the caller, exactly as the
+#: same rejection does when the supervisor detects it locally.
 _ERROR_CLASSES: Final[Mapping[str, type[AyrisError]]] = {
     name: value
-    for name, value in vars(error_module).items()
+    for namespace in (vars(error_module), dict(globals()))
+    for name, value in namespace.items()
     if isinstance(value, type) and issubclass(value, AyrisError)
 }
 
@@ -386,7 +395,7 @@ class Channel:
 
     __slots__ = ("_closed", "_connection", "_send_lock")
 
-    def __init__(self, connection: Connection) -> None:
+    def __init__(self, connection: PipeEnd) -> None:
         self._connection = connection
         self._send_lock = threading.Lock()
         self._closed = False
@@ -572,10 +581,8 @@ def _untrack(name: str) -> None:
     if sys.platform != "win32":
         from multiprocessing import resource_tracker
 
-        try:
+        with contextlib.suppress(KeyError, OSError):
             resource_tracker.unregister(f"/{name}", "shared_memory")
-        except (KeyError, OSError):
-            pass
 
 
 def open_audio(chunk: AudioChunk) -> _AudioReader:

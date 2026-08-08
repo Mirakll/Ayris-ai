@@ -505,6 +505,10 @@ class WorkerManager:
     def ensure_started(self, name: str, *, timeout: float | None = None) -> None:
         """Start the worker unless it is already up. Never raises for a race."""
         handle = self._require(name)
+        # Decide under the lock, act outside it. Spawning holds nothing: the
+        # reader thread needs this same lock to record the worker's ready
+        # message, so waiting for that message while holding it would deadlock
+        # until the start timeout.
         with handle.lock:
             if handle.status is WorkerStatus.READY:
                 return
@@ -512,14 +516,17 @@ class WorkerManager:
                 raise WorkerUnavailableError(
                     f"worker {name!r} failed to start: {handle.error or 'unknown reason'}"
                 )
-            if handle.status.is_live:
-                pass  # A concurrent start is in flight; wait for it below.
-            else:
-                self._spawn(handle, timeout=timeout)
-                return
+            # A live status means another thread is already starting it; wait for
+            # that attempt instead of racing it with a second process.
+            concurrent_start = handle.status.is_live
+
+        if not concurrent_start:
+            self._spawn(handle, timeout=timeout)
+            return
+
         deadline = time.monotonic() + (timeout or handle.spec.start_timeout)
         while time.monotonic() < deadline:
-            if handle.status is WorkerStatus.READY:
+            if self.is_ready(name):
                 return
             time.sleep(0.02)
         raise WorkerStartError(f"worker {name!r} did not become ready")
@@ -792,7 +799,9 @@ class WorkerManager:
         future.set_running_or_notify_cancel()
 
         if not self._send(handle, Request(id=request_id, method=method, params=call_params)):
-            self._settle(handle, request_id, WorkerCrashError(f"worker {worker!r} is not reachable"))
+            self._settle(
+                handle, request_id, WorkerCrashError(f"worker {worker!r} is not reachable")
+            )
         return future
 
     def call_sync(
@@ -1211,7 +1220,9 @@ class WorkerManager:
         except WorkerError as exc:
             _log.error("воркер %s не запустился: %s", name, exc)
 
-    def restart_scope(self, scope: RestartScope, settings_reason: str = "изменились настройки") -> int:
+    def restart_scope(
+        self, scope: RestartScope, settings_reason: str = "изменились настройки"
+    ) -> int:
         """Restart every worker whose settings scope changed. Returns how many."""
         restarted = 0
         for name in self.names:

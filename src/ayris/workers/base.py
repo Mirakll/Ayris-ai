@@ -56,7 +56,6 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from functools import cache
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, TypeVar
 
@@ -300,21 +299,28 @@ def method(name: str | None = None) -> Callable[[F], F]:
     return decorate
 
 
-@cache
+_METHOD_CACHE: dict[type, Mapping[str, str]] = {}
+
+
 def worker_methods(worker_class: type[Worker]) -> Mapping[str, str]:
     """Wire name to attribute name for every :func:`method` on ``worker_class``.
 
     Walks the MRO from the base down, so a subclass may override an inherited
     method under the same wire name. Cached per class — the answer cannot change
-    once the class object exists.
+    once the class object exists, and dispatch consults it on every request.
     """
+    cached = _METHOD_CACHE.get(worker_class)
+    if cached is not None:
+        return cached
     found: dict[str, str] = {}
     for klass in reversed(worker_class.__mro__):
         for attribute, value in vars(klass).items():
             marker = getattr(value, _METHOD_ATTR, None)
             if isinstance(marker, str):
                 found[marker] = attribute
-    return MappingProxyType(found)
+    table = MappingProxyType(found)
+    _METHOD_CACHE[worker_class] = table
+    return table
 
 
 class WorkerContext:
@@ -539,6 +545,7 @@ class _WorkerRuntime:
         "_current_id",
         "_handled",
         "_heartbeat",
+        "_inflight",
         "_lock",
         "_params",
         "_queue",
@@ -558,6 +565,7 @@ class _WorkerRuntime:
         self._stop = threading.Event()
         self._lock = threading.RLock()
         self._cancelled: set[int] = set()
+        self._inflight: set[int] = set()
         self._current_id: int | None = None
         self._handled = 0
         self._seq = 0
@@ -592,7 +600,9 @@ class _WorkerRuntime:
 
     # -- plumbing -------------------------------------------------------
 
-    def _send(self, message: Request | Response | WorkerEvent | Heartbeat | Ready | Stopped) -> None:
+    def _send(
+        self, message: Request | Response | WorkerEvent | Heartbeat | Ready | Stopped
+    ) -> None:
         """Write to the channel, treating a dead pipe as a stop signal."""
         try:
             self._channel.send(message)
@@ -631,6 +641,8 @@ class _WorkerRuntime:
             if isinstance(message, Control):
                 self._handle_control(message)
             elif isinstance(message, Request):
+                with self._lock:
+                    self._inflight.add(message.id)
                 self._queue.put(message)
             else:
                 _log.warning("воркер получил неожиданное сообщение %s", type(message).__name__)
@@ -642,11 +654,13 @@ class _WorkerRuntime:
             self._send(self._beat())
         elif control.kind is ControlKind.CANCEL:
             if control.request_id is None:
-                # A bare cancel aborts whatever is running, which is what the
-                # stop word and the cancel hotkey mean.
+                # A bare cancel aborts everything received and not yet answered,
+                # which is what the stop word and the cancel hotkey mean. Only
+                # cancelling what is running this instant would race dispatch: the
+                # reader handles the control the moment it lands, possibly before
+                # the dispatch thread has taken the request off the queue.
                 with self._lock:
-                    if self._current_id is not None:
-                        self._cancelled.add(self._current_id)
+                    self._cancelled |= self._inflight
             else:
                 with self._lock:
                     self._cancelled.add(control.request_id)
@@ -692,8 +706,12 @@ class _WorkerRuntime:
     def _dispatch(self, request: Request, worker: Worker) -> None:
         with self._lock:
             self._current_id = request.id
+            abandoned = request.id in self._cancelled
         started = time.perf_counter()
         try:
+            if abandoned:
+                # Cancelled while it sat in the queue; never start it at all.
+                raise WorkerCancelledError("call cancelled before it started")
             handler = self._resolve(request.method, worker)
             payload = handler(request.params)
         except Exception as exc:
@@ -713,6 +731,7 @@ class _WorkerRuntime:
             with self._lock:
                 self._current_id = None
                 self._cancelled.discard(request.id)
+                self._inflight.discard(request.id)
                 self._handled += 1
 
         self._reply(request, response)
@@ -730,7 +749,8 @@ class _WorkerRuntime:
                     error=ErrorInfo(
                         error_type=type(exc).__name__,
                         message=f"result of {request.method} cannot be sent: {exc}",
-                        user_message="Фоновый процесс вернул результат, который не удалось передать.",
+                        user_message="Фоновый процесс вернул результат, "
+                        "который не удалось передать.",
                     ),
                     duration_ms=response.duration_ms,
                 )
