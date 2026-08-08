@@ -1,0 +1,107 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+# ВАЖНО: каталог build/ в этом проекте — не артефакт setuptools, а исходники
+# сборщика (nuitka_build.py, portable_spec.py, inno_setup.iss). Поэтому игнорируем
+# не каталог целиком, а только подкаталоги, которые туда кладёт setuptools.
+# Правило `build/` с точечными исключениями уже один раз съело
+# .pre-commit-config.yaml, положенный туда по ошибке.
+build/lib/
+build/lib.*/
+build/bdist.*/
+build/scripts-*/
+build/temp.*/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Virtualenv ---
+.venv/
+venv/
+ENV/
+env/
+
+# --- Testing / coverage ---
+.pytest_cache/
+# pytest с --basetemp вне проекта всё равно иногда роняет сюда каталог-заглушку.
+pytest-cache-files-*/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+junit/
+.tox/
+.nox/
+.hypothesis/
+
+# --- Type checkers / linters ---
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.ruff_cache/
+
+# --- Nuitka ---
+*.build/
+*.dist/
+*.onefile-build/
+ayris.exe
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# --- Ayris runtime data ---
+# Профиль пользователя и всё, что качается/генерируется на лету.
+logs/
+*.log
+models/
+!resources/models/
+!resources/models/**
+screenshots/
+config.toml
+config.toml.broken
+ayris.db
+ayris.db-journal
+ayris.db-wal
+ayris.db-shm
+profiles/
+plugins/*/
+!plugins/.gitkeep
+
+# --- Secrets ---
+.env
+.env.*
+*.pem
+secrets.toml
+_wheels/
+_tools/
+setup-tools.ps1
+
+# --- Заметки по окружению разработчика ---
+# Не про Ayris: настройки песочницы/инструментов конкретной машины.
+egress-allowlist.txt

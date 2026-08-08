@@ -1,0 +1,33 @@
+# Задача 30 — Схема .ayris и модель команды
+
+**Этап:** E — Макросы | **Зависит от:** 03, 19 | **Разделы ТЗ:** 7.1, 22
+
+## Цель
+Типизированная модель команды-макроса и формат экспорта `.ayris`: триггеры, дерево блоков действий, переменные, звуки, состояние. Это контракт, на который опираются интерпретатор, редактор и импортёры.
+
+## Что сделать
+1. `macros/schema.py` — pydantic-модели. `CommandModel`: `id`, `name`, `description`, `tags: list[str]`, `folder_id`, `enabled`, `priority: int`, `cooldown_ms: int`, `require_admin: bool`, `triggers`, `actions`, `variables`, `sounds`, `created_at/updated_at`.
+2. `TriggerModel` — дискриминируемое объединение по полю `type`: `voice` (`phrase`, `fuzzy: bool`, `fuzzy_threshold`, `regex: bool`, `priority`), `hotkey` (`combo`), `event` (`event_name`, `filter_json`), `timer` (`fire_at` либо `cron`). Валидация: у `voice` regex компилируется при сохранении, у `hotkey` комбинация парсится в нормальную форму.
+3. `ActionBlock`: `type` (имя действия из реестра задачи 19 либо блок логики), `params: dict`, вложенные ветки `then` / `else` / `body` / `catch` как списки блоков, `sound: SoundBinding | None` со `stage` (`on_start` / `on_success` / `on_error`), `enabled`, `comment`, `on_error` (`continue` / `stop`). Рекурсивная модель с ограничением глубины.
+4. `VariableModel`: `name`, `type` (`str`/`int`/`float`/`bool`/`array`/`dict`), `scope` (`local`/`profile`/`global`), `default`, `persistent: bool`. Проверка соответствия `default` объявленному типу.
+5. `macros/serializer.py`: сериализация команды и папки команд в `.ayris` (JSON) с полем `schema_version`, загрузка с миграциями формата (`macros/format_migrations.py`, цепочка `v1 → vN`, отказ с понятным сообщением при версии из будущего). Экспорт/импорт одной команды и папки целиком.
+6. `macros/validator.py` — валидация при сохранении: все `type` блоков существуют в реестре действий, параметры проходят `Params` соответствующего действия, ссылки `{var}` указывают на объявленную переменную или слот триггера, `CallCommand` не образует цикл (обход графа вызовов), ветки логических блоков непустые там, где это обязательно. Возвращает список проблем с путём до блока для подсветки в UI.
+7. Маппинг модели на таблицы `commands` / `triggers` / `variables` из задачи 03 (`actions_json` — сериализованное дерево блоков) и тестовые фикстуры: оба примера из раздела 22 ТЗ в виде `.ayris`-файлов.
+
+## Файлы
+`src/ayris/actions/macros/__init__.py`, `src/ayris/actions/macros/schema.py`, `serializer.py`, `format_migrations.py`, `validator.py`, `tests/unit/test_macro_schema.py`, `tests/fixtures/macros/volume_50.ayris`, `tests/fixtures/macros/work_mode.ayris`
+
+## Осторожно
+- Схема — контракт с UI-редактором, импортёрами и файлами пользователя: переименование поля требует миграции формата, а не правки на месте.
+- Рекурсивные pydantic-модели требуют `model_rebuild()`; следи, чтобы `mypy strict` проходил на вложенных ветках.
+- Не хранить в `.ayris` секреты и абсолютные пути к профилю пользователя.
+
+## Готово когда
+- [ ] Оба примера из раздела 22 ТЗ загружаются в `CommandModel` и сериализуются обратно без потери данных (round-trip).
+- [ ] Битые параметры блока, ссылка на несуществующую переменную и цикл `CallCommand` дают понятные ошибки валидации с путём до блока.
+- [ ] Файл с более старым `schema_version` подхватывается через миграцию, с более новым — отклоняется с понятным сообщением.
+- [ ] Команда сохраняется в БД и читается обратно идентичной.
+- [ ] Тесты зелёные, ruff и mypy strict проходят.
+
+## Промпт для нового чата
+> Прочитай `AYRIS_SPEC.md`, `AYRIS_CONTEXT.md` и код проекта, затем выполни Задачу 30 из `tasks/30_macro_schema.md`: реализуй pydantic-модели команды, триггеров (voice с fuzzy и regex, hotkey, event, timer), рекурсивного блока действия с ветками then/else/body и привязкой звука к стадии, переменных со scope и персистентностью; сериализацию в `.ayris` с `schema_version` и миграциями формата; валидатор ссылок на действия, переменные и циклов `CallCommand`; маппинг на таблицы БД. Оформи оба примера из раздела 22 ТЗ как фикстуры и напиши на них тесты round-trip и валидации. Прогони ruff, mypy, pytest.

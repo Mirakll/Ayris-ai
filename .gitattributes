@@ -1,0 +1,53 @@
+# Нормализация переводов строк. Проект пишется под Windows, проверяется в CI
+# и на Linux, поэтому в репозитории всегда LF, а на рабочую копию Windows
+# ничего не разворачивается обратно в CRLF — кроме файлов, которым CRLF нужен.
+* text=auto eol=lf
+
+# Windows-инструменты, которым CRLF обязателен или сильно желателен.
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.iss   text eol=crlf
+*.reg   text eol=crlf
+
+# Явно текстовые.
+*.py    text diff=python
+*.pyi   text diff=python
+*.md    text diff=markdown
+*.toml  text
+*.yml   text
+*.yaml  text
+*.json  text
+*.qss   text
+*.ayris text
+*.cfg   text
+*.txt   text
+
+# Бинарники: без нормализации и без diff-мусора в PR.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.svg   text
+*.wav   binary
+*.mp3   binary
+*.ogg   binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.onnx  binary
+*.bin   binary
+*.gguf  binary
+*.zip   binary
+*.exe   binary
+*.dll   binary
+*.pyd   binary
+*.db    binary
+*.whl   binary
+
+# Не считать за код в статистике GitHub и не показывать в diff по умолчанию.
+_wheels/**  linguist-vendored
+_tools/**   linguist-vendored

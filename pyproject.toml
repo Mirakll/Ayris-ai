@@ -1,0 +1,276 @@
+[build-system]
+requires = ["setuptools>=77.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ayris"
+description = "Ayris - голосовой помощник для Windows 11"
+readme = "README.md"
+requires-python = ">=3.11"
+# SPDX-выражение вместо устаревшей таблицы license = { text = ... }
+# (PEP 639, требует setuptools>=77).
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ayris contributors" }]
+keywords = ["voice-assistant", "windows", "stt", "tts", "macros", "pyside6"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "Intended Audience :: End Users/Desktop",
+    "Natural Language :: Russian",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dynamic = ["version"]
+
+dependencies = [
+    # --- Core ---
+    "PySide6==6.8.1",
+    "pydantic==2.10.6",
+    "pydantic-settings==2.8.1",
+    "tomlkit==0.13.2",
+    "keyring==25.6.0",
+    # --- Audio capture / VAD ---
+    "sounddevice==0.5.1",
+    "numpy==1.26.4",
+    "webrtcvad-wheels==2.0.14",
+    # --- Wake word ---
+    "openwakeword==0.6.0",
+    # --- STT ---
+    "vosk==0.3.45",
+    "faster-whisper==1.1.1",
+    # --- TTS ---
+    "piper-tts==1.2.0",
+    # --- LLM clients ---
+    "httpx==0.28.1",
+    "openai==1.60.0",
+    "anthropic==0.45.2",
+    "ollama==0.4.7",
+    # --- System automation (Windows) ---
+    "pycaw==20240210; sys_platform == 'win32'",
+    "comtypes==1.4.9; sys_platform == 'win32'",
+    "pywinauto==0.6.9; sys_platform == 'win32'",
+    "uiautomation==2.0.20; sys_platform == 'win32'",
+    "screeninfo==0.8.1",
+    "monitorcontrol==3.1.0",
+    "mss==9.0.2",
+    "pyperclip==1.9.0",
+    "keyboard==0.13.5",
+    # --- Web ---
+    "requests==2.32.3",
+    # --- Plugins ---
+    "pluggy==1.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff==0.9.6",
+    "black==25.1.0",
+    "mypy==1.15.0",
+    "pytest==8.3.4",
+    "pytest-asyncio==0.25.3",
+    "pytest-cov==6.0.0",
+    "pytest-qt==4.4.0",
+    "pre-commit==4.1.0",
+]
+# GPU-ускорение faster-whisper / llama.cpp. Ставится отдельно, ~1 ГБ.
+cuda = [
+    "nvidia-cublas-cu12==12.4.5.8",
+    "nvidia-cudnn-cu12==9.1.0.70",
+]
+# OCR для скриншотов (задача 26). paddlepaddle ставится вручную под свою платформу.
+ocr = [
+    "pytesseract==0.3.13",
+    "paddleocr==2.9.1",
+]
+# Хоткеи в полноэкранных играх (задача 37). Требует установки драйвера Interception.
+games = [
+    "interception-python==1.2.0",
+]
+# Браузерная автоматизация для Яндекс Музыки (задача 29).
+web = [
+    "playwright==1.50.0",
+]
+# Локальные LLM без Ollama (задача 62).
+llm-local = [
+    "llama-cpp-python==0.3.7",
+]
+# Клонирование голоса XTTS v2 (задача 12). Тянет torch, ~2.5 ГБ.
+tts-extra = [
+    "coqui-tts==0.25.3",
+]
+# Wake word через Porcupine (задача 09). Бесплатно только для личного использования.
+wake-extra = [
+    "pvporcupine==3.0.5",
+]
+# Сборка дистрибутива (задача 71).
+build = [
+    "nuitka==2.6.7",
+]
+
+[project.scripts]
+ayris = "ayris.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/ayris-app/ayris"
+Issues = "https://github.com/ayris-app/ayris/issues"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.dynamic]
+version = { attr = "ayris.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ayris = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = ["build", "dist", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "A",   # flake8-builtins
+    "C4",  # flake8-comprehensions
+    "T20", # flake8-print - print() в проекте запрещён
+    "SIM", # flake8-simplify
+    "PTH", # flake8-use-pathlib
+    "RUF", # ruff-specific
+    "ANN", # flake8-annotations - полные type hints
+    "ARG", # unused arguments
+    "TID", # tidy imports
+]
+ignore = [
+    "ANN401", # Any допустим в узких местах (ctypes-обёртки WinAPI)
+    "B008",   # вызов в default - нужен для Qt-подобных сигнатур
+    # Русский язык - проектное требование. Кириллица конфузится с латиницей,
+    # из-за чего RUF001-003 шумят на каждой пользовательской строке.
+    "RUF001",
+    "RUF002",
+    "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# В тестах допустимы неаннотированные функции и фикстуры-аргументы.
+# ARG002 — тот же случай, что ARG001, но для тестов внутри классов: фикстуру
+# приходится объявлять аргументом, даже если тело её не читает.
+"tests/**" = ["ANN201", "ANN001", "ARG001", "ARG002"]
+
+[tool.ruff.lint.flake8-builtins]
+# ayris/core/secrets.py импортируется только как ayris.core.secrets, поэтому
+# заслонить стандартный модуль secrets он не может.
+builtins-allowed-modules = ["secrets"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.isort]
+known-first-party = ["ayris"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311", "py312"]
+extend-exclude = '''
+/(
+  | build
+  | dist
+  | \.venv
+)/
+'''
+
+[tool.mypy]
+python_version = "3.11"
+# Ayris - Windows-приложение. Фиксируем платформу, чтобы проверки sys.platform
+# разрешались одинаково и на машине разработчика, и в CI на Linux.
+platform = "win32"
+strict = true
+warn_unreachable = true
+warn_no_return = true
+disallow_any_generics = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_reexport = true
+show_error_codes = true
+pretty = true
+files = ["src/ayris"]
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+# Библиотеки без аннотаций: сторонние WinAPI/аудио/ML-обёртки.
+module = [
+    "comtypes.*",
+    "faster_whisper.*",
+    "keyboard.*",
+    "keyring.*",
+    "monitorcontrol.*",
+    "mss.*",
+    "openwakeword.*",
+    "paddleocr.*",
+    "piper.*",
+    "pycaw.*",
+    "pyperclip.*",
+    "pytesseract.*",
+    "pywinauto.*",
+    "screeninfo.*",
+    "sounddevice.*",
+    "uiautomation.*",
+    "vosk.*",
+    "webrtcvad.*",
+]
+ignore_missing_imports = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--import-mode=importlib",
+]
+markers = [
+    "unit: быстрые изолированные тесты",
+    "integration: тесты с реальными подсистемами",
+    "gui: требует QApplication",
+    "hardware: требует реального аудио-устройства или монитора",
+    "slow: длительные тесты",
+]
+filterwarnings = ["error", "ignore::DeprecationWarning:pkg_resources.*"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["src/ayris"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+

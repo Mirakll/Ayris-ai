@@ -1,0 +1,51 @@
+# Локальные хуки. Ставятся так:
+#   pip install pre-commit
+#   pre-commit install
+# Прогнать по всему проекту разом: pre-commit run --all-files
+#
+# Версия Python намеренно не закреплена: pre-commit возьмёт тот интерпретатор,
+# который есть в системе. Проект поддерживает 3.11 и 3.12, жёсткая привязка
+# ломала бы setup на машине с другой версией.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: \.md$
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: debug-statements
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.6
+    hooks:
+      - id: ruff
+        args: ["--fix", "--exit-non-zero-on-fix"]
+
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        args: ["--config-file=pyproject.toml"]
+        files: ^src/ayris/
+        # Версии совпадают с pyproject.toml. Если поднимаешь их там — подними и здесь,
+        # иначе mypy в хуке и mypy в CI начнут расходиться в выводах.
+        additional_dependencies:
+          - pydantic==2.10.6
+          - pydantic-settings==2.8.1
+          - PySide6==6.8.1
+          - tomlkit==0.13.2
+          - types-requests==2.32.0.20250306
