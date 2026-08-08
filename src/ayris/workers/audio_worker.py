@@ -12,8 +12,18 @@ The worker is a thin shell around :class:`~ayris.audio.capture.AudioCapture`:
 it translates configuration into :class:`~ayris.audio.capture.CaptureSettings`,
 exposes control over the wire, and turns the capture callbacks into worker
 events.  Audio itself does *not* stream over the pipe frame by frame; consumers
-ask for a slice of the ring buffer when they need one (task 08 for VAD, task 09
-for the wake word), and only levels are pushed, at 20 Hz.
+ask for a slice of the ring buffer when they need one (task 09 for the wake
+word), and only levels are pushed, at 20 Hz.
+
+Detection rides along on the same callback.  Every frame capture produces goes
+through :class:`~ayris.audio.denoise.DenoiseStream` and then
+:class:`~ayris.audio.segmenter.Segmenter`, here in the audio process, because
+the alternative - shipping raw frames to the parent and segmenting there - would
+put a GIL-bound consumer between the microphone and the phrase boundary.  What
+crosses the pipe is the *result*: ``speech_started`` and ``speech_ended`` with
+positions and lengths.  The audio of a finished phrase stays here until somebody
+asks for it with :meth:`AudioWorker.segment`, so a wake word that did not match
+costs nothing to discard.
 
 :func:`translate_audio_event` closes the loop on the parent's side by mapping
 those events onto the bus.  The manager cannot know that ``level`` means
@@ -28,6 +38,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Final
 
+from ayris.audio.calibration import (
+    DEFAULT_PHRASE_SEC,
+    DEFAULT_SILENCE_SEC,
+    calibrate_pcm,
+)
 from ayris.audio.capture import (
     TARGET_SAMPLE_RATE,
     AudioCapture,
@@ -36,14 +51,24 @@ from ayris.audio.capture import (
     CaptureSettings,
     CaptureState,
 )
+from ayris.audio.denoise import DenoiseMode, DenoiseSettings, DenoiseStream
 from ayris.audio.devices import AudioBackend, AudioDevice, DeviceChange, SoundDeviceBackend
 from ayris.audio.ring_buffer import DEFAULT_PRE_ROLL_MS
+from ayris.audio.segmenter import (
+    Segmenter,
+    SegmenterCallbacks,
+    SegmenterSettings,
+    SpeechSegment,
+    SpeechStart,
+)
+from ayris.audio.vad import VadSettings
 from ayris.core.errors import AudioError
 from ayris.core.models import JsonObject
 from ayris.core.paths import get_paths
 from ayris.workers.base import Worker, method
 
 if TYPE_CHECKING:
+    from ayris.audio.calibration import CalibrationReport
     from ayris.core.events import Event
     from ayris.workers.base import WorkerContext
 
@@ -71,6 +96,10 @@ class AudioWorker(Worker):
     def __init__(self, context: WorkerContext) -> None:
         super().__init__(context)
         self._capture: AudioCapture | None = None
+        self._denoise: DenoiseStream | None = None
+        self._segmenter: Segmenter | None = None
+        self._last_segment: SpeechSegment | None = None
+        self._calibration_noise: bytes = b""
 
     # ------------------------------------------------------------ lifecycle
 
@@ -91,6 +120,7 @@ class AudioWorker(Worker):
         thread picks the device up as soon as it appears, which is what a user
         who plugs a headset in after launch expects.
         """
+        self._build_detection(self.params)
         capture = AudioCapture(
             settings=self._settings_from_params(self.params),
             backend=self.build_backend(),
@@ -98,6 +128,7 @@ class AudioWorker(Worker):
                 on_level=self._on_level,
                 on_state=self._on_state,
                 on_devices=self._on_devices,
+                on_frames=self._on_frames,
             ),
         )
         self._capture = capture
@@ -108,12 +139,23 @@ class AudioWorker(Worker):
 
     def on_stop(self) -> None:
         """Release the device."""
+        if self._segmenter is not None:
+            self._segmenter.flush()
         if self._capture is not None:
             self._capture.stop()
             self._capture = None
+        self._denoise = None
+        self._segmenter = None
 
     def on_configure(self, params: JsonObject) -> None:
-        """Apply new settings without dropping the stream when possible."""
+        """Apply new settings without dropping the stream when possible.
+
+        Detection is reconfigured before capture: a phrase in progress is closed
+        under the old thresholds, which is the only interpretation that does not
+        lose audio, and the new denoiser is in place before the next frame
+        arrives on the callback.
+        """
+        self._configure_detection(params)
         if self._capture is not None:
             self._capture.configure(self._settings_from_params(params))
 
@@ -123,15 +165,83 @@ class AudioWorker(Worker):
         """Forward a level measurement.
 
         Already throttled by capture - see
-        :attr:`~ayris.audio.capture.CaptureSettings.level_interval_ms`.
+        :attr:`~ayris.audio.capture.CaptureSettings.level_interval_ms`.  The
+        detector's verdict rides along because the overlay needs both numbers at
+        once: a meter that moves while the sphere stays dark is precisely the
+        picture of a gate set too high.
         """
+        segmenter = self._segmenter
         self.emit(
             "level",
-            {"rms": round(level.rms, 4), "peak": round(level.peak, 4), "clipped": level.clipped},
+            {
+                "rms": round(level.rms, 4),
+                "peak": round(level.peak, 4),
+                "clipped": level.clipped,
+                "is_speech": segmenter.is_speech if segmenter is not None else False,
+                "gate_db": round(segmenter.vad.gate_db, 1) if segmenter is not None else 0.0,
+            },
+        )
+
+    def _on_frames(self, pcm: bytes) -> None:
+        """Run captured audio through denoising and phrase detection.
+
+        Called from capture's processing thread, so it must stay cheap: the gate
+        costs a fraction of a millisecond per frame and the detector less than
+        that, which :meth:`vad` reports so a slow machine can be spotted rather
+        than guessed at.
+        """
+        segmenter = self._segmenter
+        denoiser = self._denoise
+        if segmenter is None or denoiser is None:
+            return
+        clean = denoiser.push(pcm)
+        if clean:
+            segmenter.push(clean)
+
+    def _on_speech_started(self, start: SpeechStart) -> None:
+        """Forward a confirmed onset."""
+        capture = self._capture
+        self.emit(
+            "speech_started",
+            {
+                "frame_index": start.frame_index,
+                "pre_roll_ms": start.pre_roll_ms,
+                "position": capture.position if capture is not None else 0,
+            },
+        )
+
+    def _on_speech_ended(self, segment: SpeechSegment) -> None:
+        """Forward a finished phrase, keeping its audio here.
+
+        The PCM is deliberately left out of the event: a rejected segment is
+        never asked for, and an accepted one is fetched once by whoever is going
+        to recognise it.  Pushing every phrase across the pipe would double the
+        cost of a wake word that did not match.
+        """
+        if segment.accepted:
+            self._last_segment = segment
+        capture = self._capture
+        self.emit(
+            "speech_ended",
+            {
+                "frame_index": segment.frame_index,
+                "duration_ms": segment.duration_ms,
+                "speech_ms": segment.speech_ms,
+                "pre_roll_ms": segment.pre_roll_ms,
+                "reason": segment.reason.value,
+                "accepted": segment.accepted,
+                "frames": segment.frames,
+                "position": capture.position if capture is not None else 0,
+            },
         )
 
     def _on_state(self, state: CaptureState, detail: str) -> None:
         """Forward a state transition."""
+        if state is not CaptureState.RUNNING and self._segmenter is not None:
+            # A stream that stopped will not deliver the silence that would
+            # normally close the phrase, so close it here rather than leave a
+            # half-collected segment behind for the next start to inherit.
+            self._segmenter.flush()
         self.emit("state", {"state": state.value, "detail": detail})
 
     def _on_devices(self, change: DeviceChange) -> None:
@@ -324,7 +434,181 @@ class AudioWorker(Worker):
         )
         return {"recording": True, "path": str(path)}
 
+    # ------------------------------------------------------------ detection
+
+    @method()
+    def vad(self, _params: JsonObject) -> JsonObject:
+        """Everything the settings window shows about detection.
+
+        The two halves answer different questions.  ``gate_db`` versus the level
+        meter explains *why* a phrase was or was not heard; ``avg_ms`` and
+        ``fallback`` explain what the machine is actually running, which is the
+        first thing to check when detection works on one computer and not on
+        another.
+        """
+        segmenter = self._segmenter
+        denoiser = self._denoise
+        if segmenter is None or denoiser is None:
+            return {"running": False}
+        stats = segmenter.stats
+        settings = segmenter.vad.settings
+        denoise = denoiser.stats
+        return {
+            "running": True,
+            "engine": segmenter.vad.engine,
+            "aggressiveness": settings.aggressiveness,
+            "threshold": settings.threshold,
+            "noise_floor_db": settings.noise_floor_db,
+            "gate_db": round(segmenter.vad.gate_db, 1),
+            "frame_ms": settings.frame_ms,
+            "state": stats.state.value,
+            "is_speech": segmenter.is_speech,
+            "frames": stats.frames,
+            "speech_frames": stats.speech_frames,
+            "speech_ratio": round(stats.speech_ratio, 3),
+            "segments": stats.segments,
+            "rejected": stats.rejected,
+            "truncated": stats.truncated,
+            "current_ms": stats.current_ms,
+            "silence_ms": segmenter.settings.silence_ms,
+            "min_speech_ms": segmenter.settings.min_speech_ms,
+            "denoise": {
+                "mode": denoise.mode.value,
+                "engine": denoise.engine.value,
+                "fallback": denoise.fallback,
+                "latency_ms": round(denoise.latency_ms, 1),
+                "avg_ms": round(denoise.avg_ms, 3),
+                "max_ms": round(denoise.max_ms, 3),
+                "realtime_factor": round(denoise.realtime_factor, 3),
+                "reduction_db": round(denoise.reduction_db, 1),
+            },
+        }
+
+    @method()
+    def segment(self, params: JsonObject) -> JsonObject:
+        """Return the audio of the last accepted phrase.
+
+        Args:
+            params: ``keep`` - leave the segment available for another caller.
+                The default consumes it, so that a recogniser polling after a
+                restart cannot pick up a phrase from before it.
+
+        Returns:
+            ``pcm`` with its metadata, or ``available: False`` when nothing has
+            been detected yet.
+        """
+        segment = self._last_segment
+        if segment is None:
+            return {"available": False, "pcm": b"", "sample_rate": TARGET_SAMPLE_RATE}
+        if not bool(params.get("keep", False)):
+            self._last_segment = None
+        return {
+            "available": True,
+            "pcm": segment.pcm,
+            "sample_rate": segment.sample_rate,
+            "frames": segment.frames,
+            "frame_index": segment.frame_index,
+            "duration_ms": segment.duration_ms,
+            "speech_ms": segment.speech_ms,
+            "pre_roll_ms": segment.pre_roll_ms,
+            "reason": segment.reason.value,
+        }
+
+    @method()
+    def calibrate(self, params: JsonObject) -> JsonObject:
+        """Measure the room and propose settings, one stage per call.
+
+        Nothing here blocks: the audio is already in the ring buffer, so a stage
+        reads backwards over the last few seconds.  The caller drives the
+        prompts - show "помолчите", wait, call ``silence``; show "скажите
+        фразу", wait, call ``phrase`` - which keeps the GUI responsive and lets
+        a user who coughed simply repeat a stage.
+
+        Args:
+            params: ``stage`` - ``silence``, ``phrase``, ``report`` or
+                ``reset``; ``seconds`` - how far back to read.
+
+        Returns:
+            For ``silence``: the measured floor.  For ``phrase`` and ``report``:
+            the full report from :func:`~ayris.audio.calibration.calibrate_pcm`.
+
+        Raises:
+            AudioError: When ``phrase`` or ``report`` is asked for before
+                ``silence`` - the floor is what every threshold hangs off, and
+                guessing it would make the report a fiction.
+        """
+        capture = self._require()
+        stage = str(params.get("stage", "silence"))
+        if stage == "reset":
+            self._calibration_noise = b""
+            return {"stage": stage, "ready": False}
+        if stage == "silence":
+            seconds = _as_float(params.get("seconds"), DEFAULT_SILENCE_SEC)
+            self._calibration_noise = capture.read_recent(seconds * 1000.0)
+            report = self._calibration_report(capture, None)
+            return {"stage": stage, "ready": True, **report.as_dict()}
+        if not self._calibration_noise:
+            raise AudioError(
+                "calibration: silence stage has not run",
+                user_message="Сначала измерьте уровень тишины.",
+            )
+        if stage == "report":
+            return {
+                "stage": stage,
+                "ready": True,
+                **self._calibration_report(capture, None).as_dict(),
+            }
+        if stage != "phrase":
+            raise AudioError(
+                f"unknown calibration stage {stage!r}",
+                user_message="Неизвестный этап калибровки.",
+            )
+        seconds = _as_float(params.get("seconds"), DEFAULT_PHRASE_SEC)
+        spoken = capture.read_recent(seconds * 1000.0)
+        return {
+            "stage": stage,
+            "ready": True,
+            **self._calibration_report(capture, spoken).as_dict(),
+        }
+
+    def _calibration_report(self, capture: AudioCapture, phrase: bytes | None) -> CalibrationReport:
+        """Analyse the recorded stages against the settings currently in force."""
+        segmenter = self._segmenter
+        denoiser = self._denoise
+        return calibrate_pcm(
+            self._calibration_noise,
+            phrase,
+            sample_rate=capture.settings.sample_rate,
+            vad_settings=segmenter.vad.settings if segmenter is not None else None,
+            segmenter_settings=segmenter.settings if segmenter is not None else None,
+            base_gain=capture.settings.gain,
+            base_denoise=denoiser.settings.mode if denoiser is not None else DenoiseMode.RNNOISE,
+        )
+
     # -------------------------------------------------------------- helpers
+
+    def _build_detection(self, params: JsonObject) -> None:
+        """Create the denoiser and the segmenter for ``params``."""
+        self._denoise = DenoiseStream(_denoise_settings_from_params(params))
+        self._segmenter = Segmenter(
+            _segmenter_settings_from_params(params),
+            _vad_settings_from_params(params),
+            callbacks=SegmenterCallbacks(
+                on_speech_started=self._on_speech_started,
+                on_speech_ended=self._on_speech_ended,
+            ),
+        )
+
+    def _configure_detection(self, params: JsonObject) -> None:
+        """Apply new thresholds to the running detector."""
+        if self._denoise is None or self._segmenter is None:
+            self._build_detection(params)
+            return
+        self._denoise.configure(_denoise_settings_from_params(params))
+        self._segmenter.configure(
+            _segmenter_settings_from_params(params),
+            _vad_settings_from_params(params),
+        )
 
     def _require(self) -> AudioCapture:
         """Return the capture pipeline.
@@ -371,6 +655,55 @@ class AudioWorker(Worker):
         )
 
 
+def _vad_settings_from_params(params: JsonObject) -> VadSettings:
+    """Turn worker parameters into detector settings.
+
+    The names match ``voice.audio_input`` one for one, so the settings window
+    can hand its section over unchanged.
+    """
+    return VadSettings(
+        sample_rate=int(_as_float(params.get("sample_rate"), float(TARGET_SAMPLE_RATE))),
+        frame_ms=int(_as_float(params.get("frame_ms"), 20.0)),
+        aggressiveness=int(_as_float(params.get("vad_aggressiveness"), 2.0)),
+        threshold=_as_float(params.get("vad_threshold"), 0.5),
+        noise_floor_db=_as_float(params.get("noise_floor_db"), -45.0),
+    )
+
+
+def _segmenter_settings_from_params(params: JsonObject) -> SegmenterSettings:
+    """Turn worker parameters into phrase thresholds.
+
+    ``max_utterance_sec`` is seconds in the configuration and milliseconds
+    everywhere below it; the conversion belongs here rather than in the
+    segmenter, which should not have to know what a TOML file looks like.
+    """
+    return SegmenterSettings(
+        silence_ms=int(_as_float(params.get("silence_ms"), 700.0)),
+        max_utterance_ms=int(_as_float(params.get("max_utterance_sec"), 30.0) * 1000.0),
+        pre_roll_ms=int(_as_float(params.get("pre_roll_ms"), float(DEFAULT_PRE_ROLL_MS))),
+    )
+
+
+def _denoise_settings_from_params(params: JsonObject) -> DenoiseSettings:
+    """Turn worker parameters into suppression settings.
+
+    An unknown mode falls back to ``rnnoise`` rather than raising: the value
+    comes from a file a user can edit, and refusing to capture over a typo would
+    be a poor trade.
+    """
+    raw = str(params.get("denoise", DenoiseMode.RNNOISE.value))
+    try:
+        mode = DenoiseMode(raw)
+    except ValueError:
+        mode = DenoiseMode.RNNOISE
+    return DenoiseSettings(
+        mode=mode,
+        sample_rate=int(_as_float(params.get("sample_rate"), float(TARGET_SAMPLE_RATE))),
+        frame_ms=int(_as_float(params.get("frame_ms"), 20.0)),
+        noise_floor_db=_as_float(params.get("noise_floor_db"), -45.0),
+    )
+
+
 def _describe(device: AudioDevice) -> JsonObject:
     """Flatten a device for the settings window."""
     return {
@@ -413,12 +746,41 @@ def translate_audio_event(kind: str, payload: JsonObject) -> Event | None:
         return AudioLevelChanged(
             rms=float(payload.get("rms", 0.0)),
             peak=float(payload.get("peak", 0.0)),
+            is_speech=bool(payload.get("is_speech", False)),
         )
+    if kind == "speech_started":
+        return _speech_started(payload)
+    if kind == "speech_ended":
+        return _speech_ended(payload)
     if kind == "state":
         return _state_notification(payload)
     if kind == "devices":
         return _devices_notification(payload)
     return None
+
+
+def _speech_started(_payload: JsonObject) -> Event:
+    """An onset became a bus event."""
+    from ayris.core.events import SpeechStarted
+
+    return SpeechStarted(source="vad")
+
+
+def _speech_ended(payload: JsonObject) -> Event | None:
+    """A finished phrase became a bus event.
+
+    Rejected segments are published too, with ``reason="too_short"``.  They have
+    to be: the onset was confirmed and ``SpeechStarted`` went out, so the
+    overlay is sitting in its listening state and something must take it out of
+    there.  Subscribers that only want real speech filter on the reason, which
+    is one check in one place instead of a stuck animation.
+    """
+    from ayris.core.events import SpeechEnded
+
+    return SpeechEnded(
+        duration_ms=int(_as_float(payload.get("duration_ms"), 0.0)),
+        reason=str(payload.get("reason", "silence")),
+    )
 
 
 def _state_notification(payload: JsonObject) -> Event | None:

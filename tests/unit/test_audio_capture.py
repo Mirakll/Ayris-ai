@@ -20,6 +20,7 @@ Groups:
 * :class:`TestHotPlug` — device loss, notification, automatic recovery.
 * :class:`TestWav` — the debug dump.
 * :class:`TestWorker` — the worker's method surface and its bus translation.
+* :class:`TestDetection` — task 08's VAD, segment and calibration methods.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ import threading
 import time
 import wave
 from array import array
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -70,7 +72,6 @@ from ayris.workers.registry import WorkerKind, event_translator
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
-    from pathlib import Path
 
     from ayris.core.models import JsonObject
 
@@ -1237,7 +1238,10 @@ class TestWorker:
         assert wait_for(lambda: any(kind == "level" for kind, _ in worker.context.events))
         payload = next(payload for kind, payload in worker.context.events if kind == "level")
         assert payload["rms"] > 0.1
-        assert set(payload) == {"rms", "peak", "clipped"}
+        # is_speech and gate_db joined in task 08: the overlay animates on the
+        # first, and the level meter draws the second as the line a phrase has
+        # to cross.
+        assert set(payload) == {"rms", "peak", "clipped", "is_speech", "gate_db"}
 
     def test_a_dump_lands_in_the_profile_cache_by_default(
         self, worker: AudioWorker, backend: FakeBackend, profile_paths: Any
@@ -1262,6 +1266,109 @@ class TestWorker:
         assert not answer["recording"]
         assert answer["path"] == str(target)
         assert target.is_file()
+
+
+class TestDetection:
+    """Task 08's methods, which need a running capture to say anything.
+
+    The detection logic itself is covered in :mod:`tests.unit.test_vad`; what is
+    tested here is the wiring — that captured audio reaches the segmenter, that
+    a finished phrase becomes an event and stays available for the recogniser,
+    and that calibration reads backwards from the ring buffer instead of
+    blocking the pipe for eight seconds.
+    """
+
+    def test_detection_reports_itself_to_the_settings_window(self, worker: AudioWorker):
+        answer = worker.vad({})
+        assert answer["running"]
+        assert answer["engine"] in {"webrtc", "energy"}
+        assert answer["gate_db"] < 0.0
+        assert answer["state"] == "idle"
+        assert answer["denoise"]["mode"] in {"off", "rnnoise", "spectral"}
+
+    def test_a_phrase_arrives_as_a_pair_of_events(self, worker: AudioWorker, backend: FakeBackend):
+        """The overlay needs both halves: one to start listening, one to stop."""
+        _speak(worker, backend)
+        kinds = [kind for kind, _ in worker.context.events]
+        assert "speech_started" in kinds
+        assert "speech_ended" in kinds
+        payload = next(load for kind, load in worker.context.events if kind == "speech_ended")
+        assert payload["accepted"]
+        assert payload["reason"] == "silence"
+        assert payload["duration_ms"] > 0
+        assert "pcm" not in payload, "звук не должен ехать по трубе в событии"
+
+    def test_the_phrase_audio_is_fetched_separately_and_consumed_once(
+        self, worker: AudioWorker, backend: FakeBackend
+    ):
+        """A recogniser that restarts must not pick up a phrase from before it."""
+        _speak(worker, backend)
+        answer = worker.segment({"keep": True})
+        assert answer["available"]
+        assert answer["duration_ms"] > 0
+        assert len(answer["pcm"]) == answer["frames"] * SAMPLE_WIDTH
+        assert worker.segment({})["available"]
+        assert not worker.segment({})["available"]
+
+    def test_nothing_detected_yet_is_an_answer_not_an_error(self, worker: AudioWorker):
+        assert not worker.segment({})["available"]
+
+    def test_calibration_measures_the_room_without_blocking(
+        self, worker: AudioWorker, backend: FakeBackend
+    ):
+        """Every stage returns straight away: the audio is already buffered."""
+        backend.stream.feed(bytes(TARGET_SAMPLE_RATE * SAMPLE_WIDTH))
+        assert wait_for(lambda: worker.status({})["buffered_ms"] >= 900)
+        answer = worker.calibrate({"stage": "silence", "seconds": 0.5})
+        assert answer["ready"]
+        assert answer["recommended"]["noise_floor_db"] < 0.0
+        assert not answer["phrase"]["checked"]
+
+    def test_the_phrase_stage_needs_the_silence_stage_first(self, worker: AudioWorker):
+        """Guessing the floor would make the whole report a fiction."""
+        with pytest.raises(AudioError, match="silence stage"):
+            worker.calibrate({"stage": "phrase"})
+
+    def test_a_calibration_can_be_restarted_after_a_cough(
+        self, worker: AudioWorker, backend: FakeBackend
+    ):
+        backend.stream.feed(bytes(TARGET_SAMPLE_RATE * SAMPLE_WIDTH))
+        assert wait_for(lambda: worker.status({})["buffered_ms"] >= 900)
+        worker.calibrate({"stage": "silence", "seconds": 0.5})
+        assert not worker.calibrate({"stage": "reset"})["ready"]
+        with pytest.raises(AudioError, match="silence stage"):
+            worker.calibrate({"stage": "report"})
+
+    def test_an_unknown_stage_is_refused(self, worker: AudioWorker, backend: FakeBackend):
+        backend.stream.feed(bytes(TARGET_SAMPLE_RATE * SAMPLE_WIDTH))
+        assert wait_for(lambda: worker.status({})["buffered_ms"] >= 900)
+        worker.calibrate({"stage": "silence", "seconds": 0.5})
+        with pytest.raises(AudioError, match="stage"):
+            worker.calibrate({"stage": "потом"})
+
+    def test_stopping_capture_hands_over_the_phrase_in_progress(
+        self, worker: AudioWorker, backend: FakeBackend
+    ):
+        """Muting mid-sentence should not silently eat what was already said."""
+        backend.stream.feed(_phrase()[: TARGET_SAMPLE_RATE * SAMPLE_WIDTH])
+        assert wait_for(lambda: worker.vad({})["state"] == "speech")
+        worker.pause({"reason": "тест"})
+        assert wait_for(lambda: any(kind == "speech_ended" for kind, _ in worker.context.events))
+        payload = next(load for kind, load in worker.context.events if kind == "speech_ended")
+        assert payload["reason"] == "flush"
+
+
+def _phrase() -> bytes:
+    """The committed phrase fixture, as raw PCM."""
+    path = Path(__file__).resolve().parents[1] / "fixtures" / "audio" / "phrase.wav"
+    with wave.open(str(path), "rb") as handle:
+        return handle.readframes(handle.getnframes())
+
+
+def _speak(worker: AudioWorker, backend: FakeBackend) -> None:
+    """Play the phrase fixture through the fake microphone and wait for the end."""
+    backend.stream.feed(_phrase())
+    assert wait_for(lambda: any(kind == "speech_ended" for kind, _ in worker.context.events))
 
 
 class TestBusTranslation:

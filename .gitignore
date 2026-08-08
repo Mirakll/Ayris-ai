@@ -107,3 +107,4 @@ setup-tools.ps1
 egress-allowlist.txt
 claude-egress.reg
 *.reg
+CLAUDE.md
