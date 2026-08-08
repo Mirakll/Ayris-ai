@@ -105,3 +105,5 @@ setup-tools.ps1
 # --- Заметки по окружению разработчика ---
 # Не про Ayris: настройки песочницы/инструментов конкретной машины.
 egress-allowlist.txt
+claude-egress.reg
+*.reg
