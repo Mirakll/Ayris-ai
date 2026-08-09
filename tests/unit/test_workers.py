@@ -681,8 +681,8 @@ class TestShutdown:
 
 
 class TestRegistry:
-    """Planning rules only. The worker modules themselves arrive in later tasks,
-    so every plan here is built with ``include_unavailable``."""
+    """Planning rules only. Some worker modules arrive in later tasks, so a plan
+    that has to contain all four is built with ``include_unavailable``."""
 
     def test_every_kind_has_a_type_and_a_label(self):
         assert {entry.kind for entry in WORKER_TYPES} == set(WorkerKind)
@@ -691,8 +691,27 @@ class TestRegistry:
             assert kind.label
 
     def test_a_missing_module_is_skipped_rather_than_fatal(self):
-        """Only the audio worker exists so far, and launch must survive the rest."""
-        assert [planned.spec.name for planned in plan_workers(Settings())] == ["audio"]
+        """Launch must survive the workers that are still to be written.
+
+        The list grows as tasks land - audio came with task 07, stt with task 10
+        - so this asserts the two properties that matter rather than an exact
+        roster: everything planned is importable, and nothing that is not.
+        """
+        planned = [entry.spec.name for entry in plan_workers(Settings())]
+        assert planned
+        for name in planned:
+            kind = worker_type(name)
+            assert kind is not None
+            assert kind.available
+        skipped = [
+            entry.spec.name
+            for entry in plan_workers(Settings(), include_unavailable=True)
+            if entry.spec.name not in planned
+        ]
+        for name in skipped:
+            kind = worker_type(name)
+            assert kind is not None
+            assert not kind.available
 
     def test_the_default_plan_starts_the_local_workers(self):
         plan = plan_workers(Settings(), include_unavailable=True)

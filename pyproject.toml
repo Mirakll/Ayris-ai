@@ -217,6 +217,7 @@ plugins = ["pydantic.mypy"]
 # Библиотеки без аннотаций: сторонние WinAPI/аудио/ML-обёртки.
 module = [
     "comtypes.*",
+    "ctranslate2.*",
     "faster_whisper.*",
     "keyboard.*",
     "keyring.*",

@@ -50,6 +50,11 @@ SEED: Final = 20250808
 #: wake fixture cannot shift the dither inside the task 08 ones.
 WAKE_SEED: Final = 20250809
 
+#: Third stream, for the ``stt_*`` files of task 10.  Same reasoning again: a
+#: recognition fixture added later must not rewrite the bytes the task 08 and 09
+#: assertions were tuned against.
+STT_SEED: Final = 20250810
+
 #: Formants of the two vowels the fixtures are built from: centre frequency and
 #: bandwidth, in Hz.  ``a`` is the Russian "а", ``i`` the Russian "и".
 VOWEL_FORMANTS: Final = {
@@ -287,6 +292,7 @@ def build(directory: Path) -> list[Path]:
         )
     )
     written.extend(_build_wake(directory))
+    written.extend(_build_stt(directory))
     return written
 
 
@@ -371,6 +377,63 @@ def _build_wake(directory: Path) -> list[Path]:
             ),
         )
     )
+    return written
+
+
+def _build_stt(directory: Path) -> list[Path]:
+    """Write the task 10 fixtures: a command, a sentence, and an empty room.
+
+    Recognition asks a different question of a fixture than detection does.  The
+    segmenter tests care where a phrase starts and stops; a recogniser is handed
+    a phrase that has already been cut out, and what matters is its *length* -
+    below the minimum, around a command, and long enough that a real-time factor
+    means something.  So these three have almost no leading room tone: they are
+    what the segmenter would have produced, not what the microphone heard.
+    """
+    rng = random.Random(STT_SEED)
+    written: list[Path] = []
+
+    # A short command - "открой браузер" is about this long.  Well past
+    # ``min_speech_ms``, so the model really does run on it.
+    written.append(
+        write(
+            directory / "stt_command.wav",
+            concat(
+                silence(80, rng=rng),
+                vowel("a", 260, rng=rng),
+                vowel("i", 200, rng=rng),
+                fricative(120, rng=rng),
+                vowel("a", 240, rng=rng),
+                silence(120, rng=rng),
+            ),
+        )
+    )
+
+    # A sentence: four groups with breaths between them, 2.7 seconds in total.
+    # Long enough that a real-time factor computed from it is meaningful, and
+    # long enough to produce more than one segment on any engine that segments.
+    written.append(
+        write(
+            directory / "stt_phrase.wav",
+            concat(
+                silence(100, rng=rng),
+                vowel("a", 380, rng=rng),
+                vowel("i", 260, rng=rng),
+                silence(140, rng=rng),
+                vowel("a", 300, rng=rng),
+                fricative(140, rng=rng),
+                vowel("i", 320, rng=rng),
+                silence(160, rng=rng),
+                vowel("a", 420, rng=rng),
+                silence(180, rng=rng),
+            ),
+        )
+    )
+
+    # An empty room, one second of it.  The one case where an engine must return
+    # an empty result rather than an exception - and where Whisper, left to
+    # itself, returns the closing credits of a film.
+    written.append(write(directory / "stt_silence.wav", silence(1000, rng=rng)))
     return written
 
 

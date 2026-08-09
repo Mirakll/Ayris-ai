@@ -347,6 +347,10 @@ def _stt_spec(settings: Settings) -> WorkerSpec:
             "sample_rate": settings.voice.audio_input.sample_rate,
             "threads": settings.performance.stt_threads,
             "gpu": settings.performance.gpu,
+            # The worker enforces the memory cap itself, before a load: it is the
+            # only process that knows how big the model on disk actually is.
+            "ram_limit_mb": settings.performance.ram_limit_mb,
+            "model_idle_sec": settings.performance.model_idle_sec,
         },
         priority=settings.performance.process_priority,
         # Loading a recognition model takes tens of seconds on a cold disk.
@@ -410,7 +414,7 @@ def _llm_spec(settings: Settings) -> WorkerSpec:
 _ENTRYPOINTS: Final[Mapping[WorkerKind, str]] = MappingProxyType(
     {
         WorkerKind.AUDIO: "ayris.workers.audio_worker:AudioWorker",
-        WorkerKind.STT: "ayris.audio.stt.worker:SttWorker",
+        WorkerKind.STT: "ayris.workers.stt_worker:SttWorker",
         WorkerKind.TTS: "ayris.audio.tts.worker:TtsWorker",
         WorkerKind.LLM: "ayris.nlu.llm.worker:LlmWorker",
     }

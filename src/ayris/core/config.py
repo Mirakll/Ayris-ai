@@ -308,6 +308,12 @@ class PerformanceConfig(ConfigSection):
         description="Экономный режим: выгружать простаивающие модели из памяти",
         json_schema_extra=_restart(RestartScope.APP),
     )
+    model_idle_sec: float = Field(
+        default=300.0,
+        ge=0.0,
+        le=3600.0,
+        description="Через сколько секунд простоя выгружать модель. 0 — держать всегда",
+    )
     gpu: Literal["auto", "cuda", "cpu"] = Field(
         default="auto",
         description="Ускорение распознавания на видеокарте",
