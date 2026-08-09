@@ -313,6 +313,10 @@ def _audio_spec(settings: Settings) -> WorkerSpec:
             ],
             "mic_mode": wake.mic_mode,
             "listen_window_sec": wake.listen_window_sec,
+            # The name of the credential, never the credential: the audio worker
+            # reads the key out of the Windows store itself, so a vendor key
+            # cannot end up in a worker spec, a log line or a crash report.
+            "wake_credential_ref": wake.credential_ref,
         },
         # A dropped input buffer is audible and unrecoverable, so this is the one
         # worker allowed above normal priority by default.

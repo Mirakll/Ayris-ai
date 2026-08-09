@@ -228,6 +228,7 @@ module = [
     "pycaw.*",
     "pyperclip.*",
     "pytesseract.*",
+    "pvporcupine.*",
     "pywinauto.*",
     "screeninfo.*",
     "sounddevice.*",

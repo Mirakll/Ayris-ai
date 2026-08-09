@@ -1,4 +1,4 @@
-"""Generates the WAV fixtures the task 08 tests run on.
+"""Generates the WAV fixtures the task 08 and task 09 tests run on.
 
 Committed alongside the files it produces, so that anybody can regenerate them
 and see exactly what they contain.  Run it from the project root::
@@ -17,8 +17,17 @@ speech in 50 frames out of 50, the dither in 0 out of 50.
 The synthesis is a source-filter model, which is the standard way to make a
 vowel: an impulse train at the fundamental (120 Hz, with a little vibrato and
 dither so the spectrum is not a comb of perfect harmonics) is passed through
-three two-pole resonators at 700, 1220 and 2600 Hz - roughly the formants of a
-Russian "а".  The result sounds like a kazoo and classifies like speech.
+three two-pole resonators - for "а" at 700, 1220 and 2600 Hz, roughly the
+formants of the Russian vowel.  The result sounds like a kazoo and classifies
+like speech.
+
+The ``wake_*`` files go one step further: they are built out of *two* vowels,
+because a wake word test that cannot distinguish "айрис" from "ирис" is not
+testing anything.  "а" and "и" sit at opposite ends of the vowel space - "а" has
+its first formant high and its second low, "и" the other way round - so a
+spotter can tell them apart from the spectrum of a single frame, and
+``tests/unit/test_wake_word.py`` builds exactly such a spotter to run on these
+files.
 """
 
 from __future__ import annotations
@@ -37,8 +46,20 @@ SAMPLE_RATE: Final = 16000
 #: Fixed so that a regenerated fixture is byte-identical to the committed one.
 SEED: Final = 20250808
 
-#: Formants of a Russian "а": centre frequency and bandwidth, in Hz.
-_FORMANTS: Final = ((700.0, 80.0), (1220.0, 90.0), (2600.0, 120.0))
+#: Second stream, used only by the ``wake_*`` files.  Separate so that adding a
+#: wake fixture cannot shift the dither inside the task 08 ones.
+WAKE_SEED: Final = 20250809
+
+#: Formants of the two vowels the fixtures are built from: centre frequency and
+#: bandwidth, in Hz.  ``a`` is the Russian "а", ``i`` the Russian "и".
+VOWEL_FORMANTS: Final = {
+    "a": ((700.0, 80.0), (1220.0, 90.0), (2600.0, 120.0)),
+    "i": ((300.0, 60.0), (2200.0, 100.0), (3000.0, 150.0)),
+}
+
+#: Where the noise of an "с" sits.  A fricative has no fundamental at all, which
+#: is the point: it must not read as either vowel.
+_FRICATIVE: Final = (6000.0, 1800.0)
 
 #: Fundamental of the synthetic voice.
 _F0: Final = 120.0
@@ -69,11 +90,22 @@ def silence(ms: int, amplitude: int = QUIET_AMPLITUDE, *, rng: random.Random) ->
 
 
 def voiced(ms: int, amplitude: int = SPEECH_AMPLITUDE, *, rng: random.Random) -> array[int]:
-    """A sustained vowel, normalised to ``amplitude`` peak."""
+    """A sustained "а", normalised to ``amplitude`` peak."""
+    return vowel("a", ms, amplitude, rng=rng)
+
+
+def vowel(
+    kind: str,
+    ms: int,
+    amplitude: int = SPEECH_AMPLITUDE,
+    *,
+    rng: random.Random,
+) -> array[int]:
+    """A sustained vowel from :data:`VOWEL_FORMANTS`, at ``amplitude`` peak."""
     count = SAMPLE_RATE * ms // 1000
     if count <= 0:
         return array("h")
-    coefficients = [_resonator(centre, width) for centre, width in _FORMANTS]
+    coefficients = [_resonator(centre, width) for centre, width in VOWEL_FORMANTS[kind]]
     previous1 = [0.0] * len(coefficients)
     previous2 = [0.0] * len(coefficients)
     phase = 0.0
@@ -93,6 +125,30 @@ def voiced(ms: int, amplitude: int = SPEECH_AMPLITUDE, *, rng: random.Random) ->
             previous1[band] = value
             total += value
         raw.append(total)
+    peak = max(abs(value) for value in raw) or 1.0
+    scale = amplitude / peak
+    return array("h", (_clip(value * scale) for value in raw))
+
+
+def fricative(ms: int, amplitude: int = SPEECH_AMPLITUDE // 3, *, rng: random.Random) -> array[int]:
+    """The hiss of an "с": noise with no fundamental, weighted towards 6 kHz.
+
+    Present in the wake fixtures so the spotter has to survive a segment that is
+    loud and speech-like but belongs to neither vowel.  A word that ends in a
+    consonant is the normal case, not an edge one.
+    """
+    count = SAMPLE_RATE * ms // 1000
+    if count <= 0:
+        return array("h")
+    first, second = _resonator(*_FRICATIVE)
+    previous1 = 0.0
+    previous2 = 0.0
+    raw: list[float] = []
+    for _ in range(count):
+        value = rng.uniform(-1.0, 1.0) + first * previous1 + second * previous2
+        previous2 = previous1
+        previous1 = value
+        raw.append(value)
     peak = max(abs(value) for value in raw) or 1.0
     scale = amplitude / peak
     return array("h", (_clip(value * scale) for value in raw))
@@ -227,6 +283,91 @@ def build(directory: Path) -> list[Path]:
                 silence(400, rng=rng),
                 voiced(900, 260, rng=rng),
                 silence(900, rng=rng),
+            ),
+        )
+    )
+    written.extend(_build_wake(directory))
+    return written
+
+
+def ayris(*, rng: random.Random) -> array[int]:
+    """ "Айрис": an open vowel, a close front one, then the final "с".
+
+    The order is the whole signal.  Any spotter that fires on this file and not
+    on :func:`iris` has to be looking at the *sequence* of vowels rather than at
+    the loudest one, which is what a wake word engine does and what the tests
+    need to see happen.
+    """
+    return concat(
+        vowel("a", 260, rng=rng),
+        vowel("i", 300, rng=rng),
+        fricative(140, rng=rng),
+    )
+
+
+def iris(*, rng: random.Random) -> array[int]:
+    """ "Ирис": the same word without its first vowel.
+
+    The near-miss that matters.  It shares the ending, the length and the
+    loudness with "айрис" and differs only in what a listener hears first, so a
+    detector tuned by amplitude or duration alone fires on it.
+    """
+    return concat(
+        vowel("i", 280, rng=rng),
+        vowel("i", 300, rng=rng),
+        fricative(140, rng=rng),
+    )
+
+
+def _build_wake(directory: Path) -> list[Path]:
+    """Write the task 09 fixtures: the wake word, and three ways to not say it."""
+    rng = random.Random(WAKE_SEED)
+    written: list[Path] = []
+
+    # The word, once, with room on both sides.  Must produce exactly one event.
+    written.append(
+        write(
+            directory / "wake_ayris.wav",
+            concat(silence(500, rng=rng), ayris(rng=rng), silence(800, rng=rng)),
+        )
+    )
+
+    # Speech, at the same level and for longer, that is not the word: two open
+    # vowels and nothing else.  Must produce nothing at all.  A file of silence
+    # would not test this - an engine that never fires passes that trivially.
+    written.append(
+        write(
+            directory / "wake_absent.wav",
+            concat(
+                silence(400, rng=rng),
+                vowel("a", 700, rng=rng),
+                silence(500, rng=rng),
+                vowel("a", 500, rng=rng),
+                silence(800, rng=rng),
+            ),
+        )
+    )
+
+    # "Ирис" - the near-miss.  Must produce nothing either.
+    written.append(
+        write(
+            directory / "wake_similar.wav",
+            concat(silence(500, rng=rng), iris(rng=rng), silence(800, rng=rng)),
+        )
+    )
+
+    # The word twice, 500 ms apart, well inside the 1.5 s debounce window.  A
+    # user repeating themselves because nothing happened yet must not start two
+    # conversations, so this file has to give exactly one event as well.
+    written.append(
+        write(
+            directory / "wake_double.wav",
+            concat(
+                silence(400, rng=rng),
+                ayris(rng=rng),
+                silence(500, rng=rng),
+                ayris(rng=rng),
+                silence(800, rng=rng),
             ),
         )
     )

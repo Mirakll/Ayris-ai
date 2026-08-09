@@ -36,6 +36,7 @@ runs in the main process, and a top-level import would drag the settings model
 from __future__ import annotations
 
 from pathlib import Path
+from time import monotonic
 from typing import TYPE_CHECKING, ClassVar, Final
 
 from ayris.audio.calibration import (
@@ -62,17 +63,33 @@ from ayris.audio.segmenter import (
     SpeechStart,
 )
 from ayris.audio.vad import VadSettings
-from ayris.core.errors import AudioError
+from ayris.audio.wake_word import (
+    DEFAULT_SENSITIVITY,
+    PTT_PHRASE,
+    WakePhrase,
+    WakeWordCallbacks,
+    WakeWordDetector,
+    WakeWordSettings,
+    phrases_from,
+)
+from ayris.audio.wake_word.base import engine_class
+from ayris.audio.wake_word.manager import DEFAULT_DEBOUNCE_MS
+from ayris.core.errors import AudioError, AyrisError
 from ayris.core.models import JsonObject
 from ayris.core.paths import get_paths
+from ayris.utils.logger import get_logger
 from ayris.workers.base import Worker, method
 
 if TYPE_CHECKING:
     from ayris.audio.calibration import CalibrationReport
+    from ayris.audio.wake_word import WakeDetection
     from ayris.core.events import Event
     from ayris.workers.base import WorkerContext
 
 __all__ = ["EVENT_TRANSLATOR", "AudioWorker", "translate_audio_event"]
+
+#: Module logger, for the helpers that run outside a worker instance.
+_log: Final = get_logger(__name__)
 
 #: Largest slice :meth:`AudioWorker.read` will put on the pipe.  Ten seconds of
 #: 16 kHz mono is 320 KiB; anything longer belongs in a WAV file, not in a
@@ -81,6 +98,17 @@ MAX_READ_MS: Final = 10_000
 
 #: Where debug recordings go when the caller does not name a file.
 _DUMP_DIR: Final = "audio"
+
+#: Microphone mode in which the wake word is not listened for at all - the user
+#: activates the assistant with a hotkey.  Spelled out rather than imported from
+#: :class:`~ayris.core.state.MicMode`, because that module pulls in the event
+#: bus and, behind it, the whole settings model: a cost the audio process should
+#: not pay to compare two strings.
+_PTT_ONLY_MODE: Final = "ptt"
+
+#: How long after an activation a finished phrase is still counted as the answer
+#: to it, when the configuration does not say.
+_DEFAULT_LISTEN_WINDOW_SEC: Final = 6.0
 
 
 class AudioWorker(Worker):
@@ -98,8 +126,13 @@ class AudioWorker(Worker):
         self._capture: AudioCapture | None = None
         self._denoise: DenoiseStream | None = None
         self._segmenter: Segmenter | None = None
+        self._wake: WakeWordDetector | None = None
         self._last_segment: SpeechSegment | None = None
         self._calibration_noise: bytes = b""
+        # Deadline, on the monotonic clock, until which a finished phrase still
+        # counts as the answer to an activation.
+        self._listen_until = 0.0
+        self._listen_window_sec = _DEFAULT_LISTEN_WINDOW_SEC
 
     # ------------------------------------------------------------ lifecycle
 
@@ -119,8 +152,13 @@ class AudioWorker(Worker):
         microphone; instead capture enters ``device_lost`` and its monitor
         thread picks the device up as soon as it appears, which is what a user
         who plugs a headset in after launch expects.
+
+        The same is true of the wake word: a profile with no model downloaded
+        starts, captures, and says so in :meth:`wake`, rather than leaving the
+        user without a level meter or dictation because one file is missing.
         """
         self._build_detection(self.params)
+        self._build_wake(self.params)
         capture = AudioCapture(
             settings=self._settings_from_params(self.params),
             backend=self.build_backend(),
@@ -141,6 +179,9 @@ class AudioWorker(Worker):
         """Release the device."""
         if self._segmenter is not None:
             self._segmenter.flush()
+        if self._wake is not None:
+            self._wake.stop()
+            self._wake = None
         if self._capture is not None:
             self._capture.stop()
             self._capture = None
@@ -156,6 +197,7 @@ class AudioWorker(Worker):
         arrives on the callback.
         """
         self._configure_detection(params)
+        self._configure_wake(params)
         if self._capture is not None:
             self._capture.configure(self._settings_from_params(params))
 
@@ -183,13 +225,26 @@ class AudioWorker(Worker):
         )
 
     def _on_frames(self, pcm: bytes) -> None:
-        """Run captured audio through denoising and phrase detection.
+        """Run captured audio through denoising, phrase detection and the wake word.
 
         Called from capture's processing thread, so it must stay cheap: the gate
         costs a fraction of a millisecond per frame and the detector less than
         that, which :meth:`vad` reports so a slow machine can be spotted rather
-        than guessed at.
+        than guessed at.  The wake word costs nothing *here* - it only queues the
+        block - because its inference runs on its own thread; scoring a model on
+        this callback would overrun the block period and drop the very audio the
+        wake word is in.
+
+        One stream feeds both, and the device is opened once.  What differs is
+        which copy each gets: the segmenter takes the denoised audio, because
+        gating is what keeps a fan from looking like speech, while the wake word
+        takes the raw block.  Wake models are trained on unprocessed microphone
+        audio, and suppression removes exactly the low-level detail their first
+        layers key on.
         """
+        wake = self._wake
+        if wake is not None:
+            wake.push(pcm)
         segmenter = self._segmenter
         denoiser = self._denoise
         if segmenter is None or denoiser is None:
@@ -197,6 +252,33 @@ class AudioWorker(Worker):
         clean = denoiser.push(pcm)
         if clean:
             segmenter.push(clean)
+
+    def _on_wake(self, detection: WakeDetection) -> None:
+        """Forward an activation and open the listening window.
+
+        Runs on the wake detector's thread.  The window is what hands control to
+        the segmenter of task 08: the phrase the user is about to say arrives as
+        an ordinary ``speech_ended``, marked ``after_wake`` so that whoever
+        recognises it knows it was addressed to the assistant rather than
+        overheard.
+        """
+        self._listen_until = monotonic() + self._listen_window_sec
+        capture = self._capture
+        self.emit(
+            "wake_word",
+            {
+                "phrase": detection.phrase,
+                "score": round(detection.score, 4),
+                "engine": detection.engine,
+                "timestamp": round(detection.timestamp, 3),
+                "manual": detection.phrase == PTT_PHRASE,
+                "position": capture.position if capture is not None else 0,
+            },
+        )
+
+    def _on_wake_error(self, error: AyrisError) -> None:
+        """Record a wake word failure without taking capture down with it."""
+        self.log.warning("слово активации: %s", error.technical)
 
     def _on_speech_started(self, start: SpeechStart) -> None:
         """Forward a confirmed onset."""
@@ -220,6 +302,11 @@ class AudioWorker(Worker):
         """
         if segment.accepted:
             self._last_segment = segment
+        after_wake = segment.accepted and monotonic() <= self._listen_until
+        if after_wake:
+            # One activation, one phrase.  Leaving the window open would make
+            # the next sentence in the room look addressed to the assistant.
+            self._listen_until = 0.0
         capture = self._capture
         self.emit(
             "speech_ended",
@@ -230,6 +317,7 @@ class AudioWorker(Worker):
                 "pre_roll_ms": segment.pre_roll_ms,
                 "reason": segment.reason.value,
                 "accepted": segment.accepted,
+                "after_wake": after_wake,
                 "frames": segment.frames,
                 "position": capture.position if capture is not None else 0,
             },
@@ -242,6 +330,11 @@ class AudioWorker(Worker):
             # normally close the phrase, so close it here rather than leave a
             # half-collected segment behind for the next start to inherit.
             self._segmenter.flush()
+        if state is not CaptureState.RUNNING and self._wake is not None:
+            # Same reasoning, and one more: the detector's history belongs to
+            # audio from before the interruption, and scoring the new stream
+            # against it is how a wake word fires the instant a device recovers.
+            self._wake.reset()
         self.emit("state", {"state": state.value, "detail": detail})
 
     def _on_devices(self, change: DeviceChange) -> None:
@@ -485,6 +578,159 @@ class AudioWorker(Worker):
         }
 
     @method()
+    def wake(self, _params: JsonObject) -> JsonObject:
+        """Everything the settings window shows about the wake word.
+
+        The counters are the point.  ``below_threshold`` and ``debounced`` split
+        the detections that did not become activations by reason, which is what
+        makes the sensitivity slider usable: "it never triggers" and "it
+        triggers twice per phrase" look identical from outside and need opposite
+        corrections.  ``rate_per_min`` puts the rejections in the unit a user
+        actually perceives - how often the assistant twitched during a call.
+
+        ``avg_ms`` and ``dropped`` answer the other question: whether the
+        machine can run the model at all.  A non-zero ``dropped`` means audio
+        never reached the engine, and no amount of tuning will help.
+        """
+        detector = self._wake
+        if detector is None:
+            return {"running": False, "enabled": False}
+        stats = detector.stats
+        return {
+            "running": stats.running,
+            "enabled": True,
+            "engine": stats.engine,
+            "loaded": stats.loaded,
+            "error": stats.error,
+            "phrases": [
+                {
+                    "phrase": phrase.text,
+                    "sensitivity": round(phrase.sensitivity, 3),
+                    "threshold": round(phrase.threshold, 3),
+                    "enabled": phrase.enabled,
+                }
+                for phrase in detector.phrases
+            ],
+            "debounce_ms": int(detector.settings.debounce_sec * 1000.0),
+            "listen_window_sec": self._listen_window_sec,
+            "listening": monotonic() <= self._listen_until,
+            "frames": stats.frames,
+            "audio_sec": stats.audio_sec,
+            "candidates": stats.candidates,
+            "fired": stats.fired,
+            "manual": stats.manual,
+            "below_threshold": stats.below_threshold,
+            "debounced": stats.debounced,
+            "rejected": stats.rejected,
+            "rate_per_min": round(stats.false_positive_rate, 2),
+            "dropped": stats.dropped,
+            "errors": stats.errors,
+            "last_phrase": stats.last_phrase,
+            "last_score": stats.last_score,
+            "last_fired_sec": stats.last_fired_sec,
+            "avg_ms": stats.avg_ms,
+            "max_ms": stats.max_ms,
+            "fired_by_phrase": dict(stats.fired_by_phrase),
+            "rejected_by_phrase": dict(stats.rejected_by_phrase),
+        }
+
+    @method()
+    def trigger_manual(self, params: JsonObject) -> JsonObject:
+        """Activate the assistant without the microphone: Push-to-Talk.
+
+        The global hotkey that calls this is task 37.  What lives here is the
+        path it uses, and the point of having it is that the path is the same
+        one a spoken activation takes: the same ``wake_word`` event, the same
+        listening window, the same counters.  A caller downstream cannot tell
+        the difference except by the ``manual`` flag, which is exactly what
+        makes the hybrid microphone mode work.
+
+        Works in every microphone mode, including ``ptt``, where no engine is
+        loaded at all - which is the whole reason the detector is built even
+        when the wake word is switched off.
+
+        Args:
+            params: ``source`` - what triggered it, for the log.
+
+        Returns:
+            The activation that was published.
+        """
+        detector = self._wake
+        if detector is None:
+            raise AudioError(
+                "wake word detector is not initialised",
+                user_message="Захват звука ещё не запущен.",
+            )
+        source = str(params.get("source", "hotkey"))
+        detection = detector.trigger_manual(source)
+        return {
+            "phrase": detection.phrase,
+            "score": detection.score,
+            "source": source,
+            "listening": True,
+        }
+
+    @method()
+    def wake_phrases(self, params: JsonObject) -> JsonObject:
+        """Add, remove or retune a variant of the wake word while listening.
+
+        Changing sensitivity has to work on a live stream: a user tunes it by
+        saying the word and watching whether anything happens, and a change that
+        restarted capture would make that impossible to judge.
+
+        Args:
+            params: ``action`` - ``add``, ``remove``, ``sensitivity`` or
+                ``list``; ``phrase`` - the variant; ``sensitivity`` - 0.0-1.0
+                for ``add`` and ``sensitivity``.
+
+        Returns:
+            The resulting list, in the same shape :meth:`wake` reports.
+
+        Raises:
+            AudioError: If the worker has no detector, or the action is unknown.
+        """
+        detector = self._wake
+        if detector is None:
+            raise AudioError(
+                "wake word detector is not initialised",
+                user_message="Захват звука ещё не запущен.",
+            )
+        action = str(params.get("action", "list"))
+        text = str(params.get("phrase", ""))
+        changed = True
+        if action == "add":
+            detector.add_phrase(
+                WakePhrase(
+                    text=text,
+                    sensitivity=_as_float(params.get("sensitivity"), DEFAULT_SENSITIVITY),
+                    engine_model=str(params.get("model", "")),
+                )
+            )
+        elif action == "remove":
+            changed = detector.remove_phrase(text)
+        elif action == "sensitivity":
+            changed = detector.set_sensitivity(
+                text, _as_float(params.get("sensitivity"), DEFAULT_SENSITIVITY)
+            )
+        elif action != "list":
+            raise AudioError(
+                f"unknown wake phrase action {action!r}",
+                user_message="Неизвестное действие со словом активации.",
+            )
+        return {
+            "changed": changed,
+            "phrases": [
+                {
+                    "phrase": phrase.text,
+                    "sensitivity": round(phrase.sensitivity, 3),
+                    "threshold": round(phrase.threshold, 3),
+                    "enabled": phrase.enabled,
+                }
+                for phrase in detector.phrases
+            ],
+        }
+
+    @method()
     def segment(self, params: JsonObject) -> JsonObject:
         """Return the audio of the last accepted phrase.
 
@@ -610,6 +856,43 @@ class AudioWorker(Worker):
             _vad_settings_from_params(params),
         )
 
+    def _build_wake(self, params: JsonObject) -> None:
+        """Create the wake word detector for ``params`` and start it.
+
+        Built even when the wake word is switched off, because Push-to-Talk goes
+        through the same object: :meth:`trigger_manual` has to work in the
+        ``ptt`` microphone mode, where no engine is ever loaded.
+        """
+        self._listen_window_sec = _as_float(
+            params.get("listen_window_sec"), _DEFAULT_LISTEN_WINDOW_SEC
+        )
+        self._listen_until = 0.0
+        detector = WakeWordDetector(
+            _wake_settings_from_params(params),
+            callbacks=WakeWordCallbacks(
+                on_detected=self._on_wake,
+                on_error=self._on_wake_error,
+            ),
+        )
+        self._wake = detector
+        detector.start()
+
+    def _configure_wake(self, params: JsonObject) -> None:
+        """Apply new wake word settings to the running detector.
+
+        Delegated to :meth:`~ayris.audio.wake_word.WakeWordDetector.configure`,
+        which decides for itself whether the change needs the model reloaded: a
+        moved sensitivity slider must not interrupt the stream the user is
+        testing it on.
+        """
+        self._listen_window_sec = _as_float(
+            params.get("listen_window_sec"), _DEFAULT_LISTEN_WINDOW_SEC
+        )
+        if self._wake is None:
+            self._build_wake(params)
+            return
+        self._wake.configure(_wake_settings_from_params(params))
+
     def _require(self) -> AudioCapture:
         """Return the capture pipeline.
 
@@ -704,6 +987,66 @@ def _denoise_settings_from_params(params: JsonObject) -> DenoiseSettings:
     )
 
 
+def _wake_settings_from_params(params: JsonObject) -> WakeWordSettings:
+    """Turn worker parameters into wake word settings.
+
+    Two of the values are not copied straight across.  ``enabled`` folds in the
+    microphone mode: in ``ptt`` the user activates the assistant with a key, and
+    loading a model to listen for a word nobody will say costs a permanent core.
+    ``access_key`` is not in the parameters at all - it comes from the Windows
+    credential store, by the reference the configuration names, so that a
+    vendor key never reaches ``config.toml`` or a worker's log line.
+    """
+    engine = str(params.get("wake_engine", "openwakeword"))
+    listening = bool(params.get("wake_enabled", True)) and (
+        str(params.get("mic_mode", "hybrid")) != _PTT_ONLY_MODE
+    )
+    raw = params.get("wake_phrases")
+    phrases = phrases_from(raw) if isinstance(raw, list) else ()
+    return WakeWordSettings(
+        enabled=listening and bool(phrases),
+        engine=engine,
+        phrases=phrases,
+        debounce_ms=int(_as_float(params.get("wake_debounce_ms"), float(DEFAULT_DEBOUNCE_MS))),
+        source_rate=int(_as_float(params.get("sample_rate"), float(TARGET_SAMPLE_RATE))),
+        models_dir=get_paths().wake_models_dir,
+        access_key=_wake_access_key(engine, str(params.get("wake_credential_ref", ""))),
+    )
+
+
+def _wake_access_key(engine: str, ref: str) -> str:
+    """Read the vendor credential for an engine that needs one.
+
+    Only asked for when the selected engine actually requires it, because
+    opening the credential store costs a COM call on Windows and would be a
+    daily prompt on a machine where the store is locked - for a key openWakeWord
+    has no use for.
+
+    A missing store is not an error here.  The engine raises the sentence the
+    user needs to read when it finds no key; failing at settings-parsing time
+    would take capture down with it.
+    """
+    if not ref:
+        return ""
+    try:
+        needs = engine_class(engine).needs_credential
+    except AyrisError:
+        # An unknown engine name: the detector reports it properly when it tries
+        # to load, and guessing about credentials for it here helps nobody.
+        return ""
+    if not needs:
+        return ""
+    # Imported lazily: the credential store pulls in keyring, which is Windows
+    # machinery the audio process should not load to run openWakeWord.
+    from ayris.core.secrets import get_secrets
+
+    try:
+        return get_secrets().get(ref) or ""
+    except AyrisError as exc:
+        _log.warning("wake word credential %r unavailable: %s", ref, exc.technical)
+        return ""
+
+
 def _describe(device: AudioDevice) -> JsonObject:
     """Flatten a device for the settings window."""
     return {
@@ -750,6 +1093,8 @@ def translate_audio_event(kind: str, payload: JsonObject) -> Event | None:
         )
     if kind == "speech_started":
         return _speech_started(payload)
+    if kind == "wake_word":
+        return _wake_word(payload)
     if kind == "speech_ended":
         return _speech_ended(payload)
     if kind == "state":
@@ -757,6 +1102,24 @@ def translate_audio_event(kind: str, payload: JsonObject) -> Event | None:
     if kind == "devices":
         return _devices_notification(payload)
     return None
+
+
+def _wake_word(payload: JsonObject) -> Event:
+    """An activation became a bus event.
+
+    Manual triggers are published exactly like spoken ones - the phrase is
+    :data:`~ayris.audio.wake_word.PTT_PHRASE` and the engine is the source of
+    the press.  A subscriber that wants to tell them apart looks at the phrase;
+    every subscriber that does not, and there are more of those, needs no
+    special case at all.
+    """
+    from ayris.core.events import WakeWordDetected
+
+    return WakeWordDetected(
+        phrase=str(payload.get("phrase", "")),
+        confidence=_as_float(payload.get("score"), 0.0),
+        engine=str(payload.get("engine", "")),
+    )
 
 
 def _speech_started(_payload: JsonObject) -> Event:
