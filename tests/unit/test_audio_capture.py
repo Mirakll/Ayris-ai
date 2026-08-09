@@ -1350,8 +1350,19 @@ class TestDetection:
         self, worker: AudioWorker, backend: FakeBackend
     ):
         """Muting mid-sentence should not silently eat what was already said."""
+
+        def collected_ms() -> int:
+            answer = worker.vad({})
+            return int(answer["speech_frames"]) * int(answer["frame_ms"])
+
         backend.stream.feed(_phrase()[: TARGET_SAMPLE_RATE * SAMPLE_WIDTH])
         assert wait_for(lambda: worker.vad({})["state"] == "speech")
+        # The state flips after start_frames — 60 ms — and a phrase that short is
+        # rejected as too_short whatever closed it. So wait until there is a
+        # phrase worth handing over, otherwise the reason under test depends on
+        # who wins the race between this thread and the capture thread.
+        floor = int(worker.vad({})["min_speech_ms"]) + 3 * int(worker.vad({})["frame_ms"])
+        assert wait_for(lambda: collected_ms() >= floor)
         worker.pause({"reason": "тест"})
         assert wait_for(lambda: any(kind == "speech_ended" for kind, _ in worker.context.events))
         payload = next(load for kind, load in worker.context.events if kind == "speech_ended")
