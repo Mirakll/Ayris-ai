@@ -24,6 +24,7 @@ keyring==25.6.0
 numpy==1.26.4
 sounddevice==0.5.1
 webrtcvad-wheels==2.0.14
+httpx==0.28.1
 
 # --- Инструменты проверок ---
 ruff==0.9.6

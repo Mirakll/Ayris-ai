@@ -361,6 +361,42 @@ class SttConfig(ConfigSection):
         le=30.0,
         description="Сколько ждать ответ облака перед откатом на офлайн",
     )
+    online_endpoint: str = Field(
+        default="",
+        description="Свой адрес облачного сервиса. Пусто — адрес по умолчанию у провайдера",
+    )
+    online_region: str = Field(
+        default="",
+        description="Регион Azure Speech, например westeurope. Другим провайдерам не нужен",
+    )
+    online_folder_id: str = Field(
+        default="",
+        description="Идентификатор каталога Яндекс Облака. Не секрет, но без него запрос не идёт",
+    )
+    online_auth_scheme: Literal["api-key", "iam"] = Field(
+        default="api-key",
+        description="Способ авторизации Яндекса: долгий API-ключ или IAM-токен на 12 часов",
+    )
+    online_model: str = Field(
+        default="",
+        description="Модель у провайдера, если он даёт выбор. Пусто — модель по умолчанию",
+    )
+    online_retries: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Сколько раз повторить запрос при сетевой ошибке. Квоту не повторяем никогда",
+    )
+    probe_url: str = Field(
+        default="https://www.gstatic.com/generate_204",
+        description="Единственный адрес фоновой проверки связи. Пусто — не проверять в фоне",
+    )
+    probe_interval_sec: float = Field(
+        default=120.0,
+        ge=15.0,
+        le=3600.0,
+        description="Как часто проверять связь в фоне. Реже — тише сеть, дольше возврат в онлайн",
+    )
     punctuation: bool = Field(
         default=True,
         description="Расставлять знаки препинания, если движок умеет",
