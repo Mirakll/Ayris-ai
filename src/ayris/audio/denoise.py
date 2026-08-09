@@ -458,7 +458,7 @@ class RnnoiseDenoiser(Denoiser):
     engine: ClassVar[DenoiseEngine] = DenoiseEngine.RNNOISE
     latency_ms: ClassVar[float] = 1000.0 * RNNOISE_FRAME_SAMPLES / RNNOISE_SAMPLE_RATE
 
-    __slots__ = ("_carry", "_down", "_lib", "_state", "_up")
+    __slots__ = ("_carry", "_down", "_lib", "_out", "_state", "_up")
 
     def __init__(
         self,
@@ -480,31 +480,44 @@ class RnnoiseDenoiser(Denoiser):
         self._up = Resampler(self._settings.sample_rate, RNNOISE_SAMPLE_RATE)
         self._down = Resampler(RNNOISE_SAMPLE_RATE, self._settings.sample_rate)
         self._carry = array("h")
+        self._out = bytearray()
 
     def process(self, pcm: bytes) -> bytes:
         """Upsample, denoise in 480-sample frames, downsample back.
 
-        The output can be a few samples shorter or longer than the input while
-        the resampler's phase settles; callers that care about exact framing
-        push through :class:`DenoiseStream`, which re-frames afterwards.
+        Returns exactly as many samples as it was given, which the base class
+        requires and the ring buffer downstream depends on.  Two things get in
+        the way and both are absorbed here rather than pushed onto the caller:
+        RNNoise insists on 480-sample frames, so a remainder is carried to the
+        next block, and the resampler swallows a couple of samples while its
+        phase settles.  So cleaned audio goes into :attr:`_out` and the block
+        is served from there, starting with silence for the first 10 ms.  That
+        is the algorithmic delay :attr:`latency_ms` advertises; it is a delay
+        and not a loss, and the end of the stream is padded, not dropped.
         """
+        wanted = len(pcm)
         wide = array("h")
         wide.frombytes(self._up.process(pcm))
         if self._carry:
             wide = self._carry + wide
         usable = len(wide) - len(wide) % RNNOISE_FRAME_SAMPLES
         self._carry = wide[usable:]
-        if not usable:
-            return b""
-        cleaned = array("h", bytes(usable * SAMPLE_WIDTH))
-        for start in range(0, usable, RNNOISE_FRAME_SAMPLES):
-            chunk = wide[start : start + RNNOISE_FRAME_SAMPLES]
-            cleaned[start : start + RNNOISE_FRAME_SAMPLES] = self._frame(chunk)
-        return self._down.process(cleaned.tobytes())
+        if usable:
+            cleaned = array("h", bytes(usable * SAMPLE_WIDTH))
+            for start in range(0, usable, RNNOISE_FRAME_SAMPLES):
+                chunk = wide[start : start + RNNOISE_FRAME_SAMPLES]
+                cleaned[start : start + RNNOISE_FRAME_SAMPLES] = self._frame(chunk)
+            self._out += self._down.process(cleaned.tobytes())
+        if len(self._out) < wanted:
+            self._out += bytes(wanted - len(self._out))
+        block = bytes(self._out[:wanted])
+        del self._out[:wanted]
+        return block
 
     def reset(self) -> None:
-        """Drop the carried samples and the resampler phase."""
+        """Drop the carried samples, the pending output and the resampler phase."""
         self._carry = array("h")
+        self._out.clear()
         self._up.reset()
         self._down.reset()
 
@@ -516,6 +529,7 @@ class RnnoiseDenoiser(Denoiser):
             self._up = Resampler(settings.sample_rate, RNNOISE_SAMPLE_RATE)
             self._down = Resampler(RNNOISE_SAMPLE_RATE, settings.sample_rate)
             self._carry = array("h")
+            self._out.clear()
 
     def _frame(self, chunk: array[int]) -> array[int]:
         """Run one 480-sample frame through the network."""

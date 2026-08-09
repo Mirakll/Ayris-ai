@@ -25,6 +25,7 @@ Groups:
 * :class:`TestSegmentation` — the acceptance criteria of the task.
 * :class:`TestSegmenterControl` — stats, reset, reconfiguration, forced close.
 * :class:`TestDenoise` — passthrough, the gate, the RNNoise fallback, timing.
+* :class:`TestRnnoise` — the RNNoise path itself; skipped without the library.
 * :class:`TestCalibration` — noise profile, verdicts, recommendations, report.
 * :class:`TestWorkerWiring` — parameters in, bus events out.
 * :class:`TestLiveMicrophone` — the one test that wants a real device.
@@ -60,6 +61,7 @@ from ayris.audio.denoise import (
     DenoiseStream,
     NoiseGate,
     Passthrough,
+    RnnoiseDenoiser,
     create_denoiser,
     denoise_pcm,
     rnnoise_available,
@@ -171,9 +173,14 @@ class TestFixtures:
         assert len(pcm) * 1000 // (TARGET_SAMPLE_RATE * 2) == duration_ms
 
     def test_the_fixtures_are_small_enough_to_live_in_git(self):
-        """A repository is not an audio archive; the whole set stays under a megabyte."""
+        """A repository is not an audio archive.
+
+        The budget covers every task's fixtures together, not this file's, so it
+        moves up when a task adds a few - task 10 added the three ``stt_*``
+        files.  A megabyte and a half is still nothing next to a single model.
+        """
         total = sum(path.stat().st_size for path in FIXTURES.glob("*.wav"))
-        assert total < 1_000_000, f"фикстуры распухли до {total} байт"
+        assert total < 1_500_000, f"фикстуры распухли до {total} байт"
 
     def test_the_generator_is_committed_next_to_its_output(self):
         """Otherwise nobody can tell what the bytes are, let alone regenerate them."""
@@ -612,6 +619,73 @@ class TestDenoise:
             pcm_level(denoise_pcm(wav("noise.wav"), strong)).rms_db
             < pcm_level(denoise_pcm(wav("noise.wav"), weak)).rms_db
         )
+
+
+# ----------------------------------------------------------------------
+# rnnoise, when the machine actually has it
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not rnnoise_available(), reason="RNNoise не установлена на этой машине")
+class TestRnnoise:
+    """The RNNoise path itself, not the fallback around it.
+
+    Skipped wherever the library is missing — which includes CI — so these
+    assertions are about what RNNoise does when it is really loaded, and can be
+    strict about it. To run them, point :data:`RNNOISE_LIB_ENV` at the shared
+    library; see the note about ``_tools/rnnoise`` in ``CLAUDE.md``.
+    """
+
+    def test_the_mode_selects_rnnoise_and_reports_no_fallback(self):
+        stream = DenoiseStream(DenoiseSettings(mode=DenoiseMode.RNNOISE))
+        stream.push(wav("noise.wav"))
+        assert stream.engine is DenoiseEngine.RNNOISE
+        assert isinstance(stream.denoiser, RnnoiseDenoiser)
+        assert not stream.stats.fallback
+
+    def test_it_suppresses_far_more_than_the_gate(self):
+        """The reason for the dependency: the gate is a compromise, this is not."""
+        noise = wav("noise.wav")
+        gated = pcm_level(denoise_pcm(noise, DenoiseSettings(mode=DenoiseMode.SPECTRAL))).rms_db
+        cleaned = pcm_level(denoise_pcm(noise, DenoiseSettings(mode=DenoiseMode.RNNOISE))).rms_db
+        assert pcm_level(noise).rms_db - cleaned > 20.0
+        assert cleaned < gated
+
+    def test_the_phrase_survives_and_stays_one_segment(self):
+        """Suppression that eats the wake word is a regression, not a feature."""
+        dirty = wav("phrase_in_noise.wav")
+        cleaned = denoise_pcm(dirty, DenoiseSettings(mode=DenoiseMode.RNNOISE))
+        segment = only(segment_pcm(cleaned))
+        assert segment.accepted
+        assert segment.speech_ms >= 800, "речь не должна укоротиться после подавления"
+
+    def test_the_resampling_round_trip_keeps_the_length(self):
+        """16 kHz in, 48 kHz inside, 16 kHz out — off-by-one here shifts everything."""
+        pcm = wav("phrase.wav")
+        assert len(denoise_pcm(pcm, DenoiseSettings(mode=DenoiseMode.RNNOISE))) == len(pcm)
+
+    def test_it_can_be_switched_on_and_off_while_capture_runs(self):
+        """Task 08 wants the toggle live: no restart, no gap, no leaked state."""
+        stream = DenoiseStream(DenoiseSettings(mode=DenoiseMode.OFF))
+        pcm = wav("phrase_in_noise.wav")
+        assert stream.push(pcm) == pcm
+
+        for mode, engine in (
+            (DenoiseMode.RNNOISE, DenoiseEngine.RNNOISE),
+            (DenoiseMode.SPECTRAL, DenoiseEngine.GATE),
+            (DenoiseMode.RNNOISE, DenoiseEngine.RNNOISE),
+            (DenoiseMode.OFF, DenoiseEngine.NONE),
+        ):
+            stream.configure(DenoiseSettings(mode=mode))
+            assert stream.engine is engine
+            assert len(stream.push(pcm) + stream.flush()) == len(pcm)
+
+    def test_it_keeps_up_with_the_microphone(self):
+        stream = DenoiseStream(DenoiseSettings(mode=DenoiseMode.RNNOISE))
+        stream.push(wav("phrase.wav"))
+        stats = stream.stats
+        assert stats.latency_ms == 30.0, "кадр RNNoise — 480 сэмплов при 48 кГц"
+        assert stats.realtime_factor < 0.5, "иначе подавление не успевает за захватом"
 
 
 # ----------------------------------------------------------------------
