@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     # a runtime import here would close a cycle. ``from __future__ import
     # annotations`` keeps these names unevaluated, and no dataclass field needs
     # the real class at runtime.
+    from ayris.core.paths import ModelKind
     from ayris.core.state import AssistantState, MicMode
 
 __all__ = [
@@ -62,6 +63,7 @@ __all__ = [
     "ActionFailed",
     "ActionFinished",
     "ActionStarted",
+    "ActiveModelChanged",
     "AudioLevelChanged",
     "CancelRequested",
     "ConfigChanged",
@@ -72,6 +74,11 @@ __all__ = [
     "LogLine",
     "MicToggled",
     "ModeChanged",
+    "ModelDownloadFailed",
+    "ModelDownloadFinished",
+    "ModelDownloadProgress",
+    "ModelDownloadStarted",
+    "ModelRemoved",
     "NotificationRequested",
     "OnlineStatusChanged",
     "SpeechEnded",
@@ -306,6 +313,117 @@ class OnlineStatusChanged(Event):
 
     online: bool
     detail: str = ""
+
+
+# ----------------------------------------------------------------------
+# models
+# ----------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDownloadStarted(Event):
+    """A model download began, or resumed after an interruption.
+
+    ``downloaded`` is non-zero when a ``.part`` file was picked up, so the
+    progress bar can start where the previous attempt stopped instead of
+    snapping back to zero.
+    """
+
+    model_id: str
+    kind: ModelKind
+    name: str = ""
+    total: int = 0
+    downloaded: int = 0
+    resumed: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDownloadProgress(Event):
+    """How far along a download is.
+
+    Published a few times per second, not per chunk — same treatment as
+    :class:`AudioLevelChanged`, and for the same reason: at a megabyte a second
+    an unthrottled event per 64 KiB block would be sixteen repaints per second of
+    a progress bar nobody can read that fast.
+
+    ``total`` is ``0`` when the server sent no ``Content-Length``, which the UI
+    should render as an indeterminate bar rather than as "0 %".
+    """
+
+    model_id: str
+    downloaded: int
+    total: int = 0
+    speed_bps: float = 0.0
+    eta_s: float = 0.0
+
+    @property
+    def fraction(self) -> float:
+        """Progress in ``0.0..1.0``. ``0.0`` while the total is unknown."""
+        if self.total <= 0:
+            return 0.0
+        return min(1.0, self.downloaded / self.total)
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDownloadFinished(Event):
+    """A model finished downloading, was verified and is installed on disk."""
+
+    model_id: str
+    kind: ModelKind
+    path: str = ""
+    size_bytes: int = 0
+    duration_ms: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ModelDownloadFailed(Event):
+    """A download stopped short.
+
+    ``cancelled`` separates "the user pressed отмена" from a real failure: the
+    first needs no notification, the second does. ``resumable`` says whether the
+    partial file was kept, so the UI can offer «продолжить» instead of
+    «скачать заново».
+    """
+
+    model_id: str
+    error: str = ""
+    user_message: str = ""
+    cancelled: bool = False
+    resumable: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveModelChanged(Event):
+    """The model a subsystem should be using changed.
+
+    Published by :class:`ayris.models.registry.ModelRegistry` whenever the active
+    row for a kind moves, including when it is cleared by a deletion — then
+    ``name`` is empty. The STT, TTS and wake-word workers subscribe and reload;
+    that is the whole point of the event, and it is why it carries ``path`` as
+    well as ``name``, so a reload needs no second trip to the database.
+    """
+
+    kind: ModelKind
+    name: str = ""
+    engine: str = ""
+    path: str = ""
+    model_id: int | None = None
+    catalog_id: str = ""
+
+    @property
+    def cleared(self) -> bool:
+        """Whether this kind now has no active model at all."""
+        return self.model_id is None
+
+
+@dataclass(frozen=True, slots=True)
+class ModelRemoved(Event):
+    """An installed model was deleted, freeing ``freed_bytes`` on disk."""
+
+    model_id: str
+    kind: ModelKind
+    name: str = ""
+    freed_bytes: int = 0
 
 
 # ----------------------------------------------------------------------

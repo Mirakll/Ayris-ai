@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "kind": "llm",
+  "models": [
+    {
+      "id": "qwen25-1_5b-instruct-q4",
+      "name": "Qwen2.5 1.5B Instruct (Q4_K_M)",
+      "engine": "llamacpp",
+      "language": "multi",
+      "version": "q4_k_m",
+      "description": "Самая маленькая из поддерживаемых. Понимает русский, отвечает быстро даже без видеокарты, но путается в сложных просьбах.",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+      "sha256": "6a1a2eb6d15622bf3c96857206351ba97e1af16c30d7a74ee38970e434e9407e",
+      "size_bytes": 1117320736
+    },
+    {
+      "id": "qwen25-3b-instruct-q4",
+      "name": "Qwen2.5 3B Instruct (Q4_K_M)",
+      "engine": "llamacpp",
+      "language": "multi",
+      "version": "q4_k_m",
+      "description": "Разумный компромисс: два гигабайта, заметно лучше разбирает команды, чем 1.5B.",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
+      "sha256": "626b4a6678b86442240e33df819e00132d3ba7dddfe1cdc4fbb18e0a9615c62d",
+      "size_bytes": 2104932768
+    },
+    {
+      "id": "qwen25-7b-instruct-q4",
+      "name": "Qwen2.5 7B Instruct (Q4_K_M)",
+      "engine": "llamacpp",
+      "language": "multi",
+      "version": "q4_k_m",
+      "description": "Лучшее качество из списка. Нужно около 6 ГБ памяти; на процессоре ответ идёт несколько секунд.",
+      "url": "https://huggingface.co/bartowski/Qwen2.5-7B-Instruct-GGUF/resolve/main/Qwen2.5-7B-Instruct-Q4_K_M.gguf",
+      "sha256": "65b8fcd92af6b4fefa935c625d1ac27ea29dcb6ee14589c55a8f115ceaaa1423",
+      "size_bytes": 4683074240
+    },
+    {
+      "id": "qwen25-3b-instruct-q6",
+      "name": "Qwen2.5 3B Instruct (Q6_K)",
+      "engine": "llamacpp",
+      "language": "multi",
+      "version": "q6_k",
+      "description": "Та же 3B с меньшими потерями от квантования: точнее Q4, но на треть больше.",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q6_k.gguf",
+      "sha256": "12da1a5d3fa6905111d8798b00ed49e0f6425441598c8c41bb37a2c36d49d0f3",
+      "size_bytes": 2793410976
+    }
+  ]
+}

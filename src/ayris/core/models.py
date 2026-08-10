@@ -70,7 +70,7 @@ JsonObject = dict[str, Any]
 
 #: Allowed values of ``models.kind``, mirroring the model directories in
 #: :mod:`ayris.core.paths` so a record can always be resolved to a folder.
-MODEL_KINDS: Final[tuple[str, ...]] = get_args(ModelKind)
+MODEL_KINDS: Final[tuple[ModelKind, ...]] = get_args(ModelKind)
 
 
 class TriggerType(StrEnum):
@@ -489,14 +489,28 @@ class ClipboardEntry:
 
 @dataclass(frozen=True, slots=True)
 class ModelRecord:
-    """An installed STT/TTS/wake-word/LLM model."""
+    """An installed STT/TTS/wake-word/LLM model.
+
+    ``name`` is the name on disk inside ``models/<kind>`` — the folder for Vosk,
+    the file for whisper.cpp or a Piper voice — because that is what the settings
+    store and what the engines resolve. ``path`` is the absolute location of the
+    same thing; both are kept, since the profile directory can move.
+
+    ``catalog_id`` links back to the ``resources/models`` entry the model was
+    installed from, and is empty for a model the user dropped in by hand. It is
+    what lets a failed integrity check offer to re-download rather than only
+    report the damage.
+    """
 
     kind: ModelKind
     name: str
     id: int | None = None
+    engine: str = ""
     version: str = ""
     path: str = ""
     sha256: str = ""
+    size_bytes: int = 0
+    catalog_id: str = ""
     installed_at: datetime | None = None
     is_active: bool = False
 
@@ -506,9 +520,12 @@ class ModelRecord:
             id=row["id"],
             kind=row["kind"],
             name=row["name"],
+            engine=row["engine"],
             version=row["version"],
             path=row["path"],
             sha256=row["sha256"],
+            size_bytes=row["size_bytes"],
+            catalog_id=row["catalog_id"],
             installed_at=from_db_timestamp(row["installed_at"]),
             is_active=bool(row["is_active"]),
         )

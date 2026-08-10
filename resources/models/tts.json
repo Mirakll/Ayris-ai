@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "kind": "tts",
+  "models": [
+    {
+      "id": "piper-ru-irina",
+      "name": "Piper — Ирина (женский)",
+      "engine": "piper",
+      "language": "ru",
+      "version": "medium",
+      "description": "Спокойный женский голос. Синтез идёт на процессоре быстрее реального времени.",
+      "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx",
+      "sha256": "8ff38212d23da300bbe3705c645e6e5b9475f0bfde01558eb17813e22acaaaaa",
+      "size_bytes": 63201294,
+      "extra_files": [
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/irina/medium/ru_RU-irina-medium.onnx.json",
+          "sha256": "c2ec28bb38e2b59e93b959b3e40348c1afebbd272f30fed5d41205d08e98a9d7",
+          "size_bytes": 4765
+        }
+      ]
+    },
+    {
+      "id": "piper-ru-dmitri",
+      "name": "Piper — Дмитрий (мужской)",
+      "engine": "piper",
+      "language": "ru",
+      "version": "medium",
+      "description": "Мужской голос той же модели и того же размера, что и Ирина.",
+      "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/dmitri/medium/ru_RU-dmitri-medium.onnx",
+      "sha256": "f073356ebc4bd0f80c5af58df2953a5988bd5bdab1eb38635ce960b071fbefcb",
+      "size_bytes": 63201294,
+      "extra_files": [
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/dmitri/medium/ru_RU-dmitri-medium.onnx.json",
+          "sha256": "667ef3117bc642c2892dff7690d8bdc8ca4228aeaa783b2dc1416df632855e0d",
+          "size_bytes": 4824
+        }
+      ]
+    },
+    {
+      "id": "piper-ru-ruslan",
+      "name": "Piper — Руслан (мужской)",
+      "engine": "piper",
+      "language": "ru",
+      "version": "medium",
+      "description": "Более низкий мужской голос, чем Дмитрий.",
+      "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/ruslan/medium/ru_RU-ruslan-medium.onnx",
+      "sha256": "72a5f88e0b20928064eb45d88e1daa21f8af62d18613580d32cbb4aed48dcf7f",
+      "size_bytes": 63201294,
+      "extra_files": [
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/ruslan/medium/ru_RU-ruslan-medium.onnx.json",
+          "sha256": "706a4fb17bc304abd07809b552deae615e64dcbffbfbd09854ba37ca59e88117",
+          "size_bytes": 4882
+        }
+      ]
+    },
+    {
+      "id": "piper-ru-denis",
+      "name": "Piper — Денис (мужской)",
+      "engine": "piper",
+      "language": "ru",
+      "version": "medium",
+      "description": "Третий мужской голос, чуть быстрее по темпу речи.",
+      "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/denis/medium/ru_RU-denis-medium.onnx",
+      "sha256": "15fab56e11a097858ee115545d0f697fc2a316c41a291a5362349fb870411b0a",
+      "size_bytes": 63201294,
+      "extra_files": [
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/denis/medium/ru_RU-denis-medium.onnx.json",
+          "sha256": "831c860dac0b5073eaa81610a0a638ec23d90a6cf8e5f871b4485c2cec3767c8",
+          "size_bytes": 4823
+        }
+      ]
+    },
+    {
+      "id": "piper-en-amy",
+      "name": "Piper — Amy (английский, женский)",
+      "engine": "piper",
+      "language": "en",
+      "version": "medium",
+      "description": "Английский голос: нужен, если помощник должен читать английский текст.",
+      "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx",
+      "sha256": "b3a6e47b57b8c7fbe6a0ce2518161a50f59a9cdd8a50835c02cb02bdd6206c18",
+      "size_bytes": 63201294,
+      "extra_files": [
+        {
+          "url": "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/amy/medium/en_US-amy-medium.onnx.json",
+          "sha256": "95a23eb4d42909d38df73bb9ac7f45f597dbfcde2d1bf9526fdeaf5466977d77",
+          "size_bytes": 4882
+        }
+      ]
+    }
+  ]
+}

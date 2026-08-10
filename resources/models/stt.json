@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "kind": "stt",
+  "models": [
+    {
+      "id": "vosk-ru-small",
+      "name": "Vosk русский (маленькая)",
+      "engine": "vosk",
+      "language": "ru",
+      "version": "0.22",
+      "description": "Быстрое распознавание без интернета. Работает на любом железе, точность средняя. Хороший выбор по умолчанию.",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip",
+      "sha256": "0e0d33c5a80a68df957a3b0b8e0a8b2f0e40e2a49dbe9c7ed9ba5b6b5b30df8f",
+      "size_bytes": 46236750,
+      "archive": "zip",
+      "target": "vosk-model-small-ru-0.22"
+    },
+    {
+      "id": "vosk-en-small",
+      "name": "Vosk английский (маленькая)",
+      "engine": "vosk",
+      "language": "en",
+      "version": "0.15",
+      "description": "Английское распознавание без интернета, размером с русскую маленькую модель.",
+      "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+      "sha256": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
+      "size_bytes": 41205931,
+      "archive": "zip",
+      "target": "vosk-model-small-en-us-0.15"
+    },
+    {
+      "id": "whispercpp-tiny",
+      "name": "Whisper tiny (GGML)",
+      "engine": "whispercpp",
+      "language": "multi",
+      "version": "tiny",
+      "description": "Самая маленькая Whisper. Многоязычная, но заметно ошибается; берите, если места мало.",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+      "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+      "size_bytes": 77691713
+    },
+    {
+      "id": "whispercpp-base",
+      "name": "Whisper base (GGML)",
+      "engine": "whispercpp",
+      "language": "multi",
+      "version": "base",
+      "description": "Многоязычная Whisper среднего размера. Точнее tiny, всё ещё быстрая на процессоре.",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+      "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+      "size_bytes": 147951465
+    },
+    {
+      "id": "whispercpp-small",
+      "name": "Whisper small (GGML)",
+      "engine": "whispercpp",
+      "language": "multi",
+      "version": "small",
+      "description": "Заметно точнее base на русском. Требует больше памяти и времени на фразу.",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+      "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+      "size_bytes": 487601967
+    },
+    {
+      "id": "whispercpp-base-q5",
+      "name": "Whisper base (сжатая, q5_1)",
+      "engine": "whispercpp",
+      "language": "multi",
+      "version": "base-q5_1",
+      "description": "Та же base, но вдвое меньше на диске и в памяти за счёт квантования.",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
+      "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+      "size_bytes": 59707625
+    },
+    {
+      "id": "whispercpp-small-q5",
+      "name": "Whisper small (сжатая, q5_1)",
+      "engine": "whispercpp",
+      "language": "multi",
+      "version": "small-q5_1",
+      "description": "Точность small при размере вдвое меньше. Обычно лучший компромисс для слабых машин.",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
+      "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+      "size_bytes": 190085487
+    },
+    {
+      "id": "whispercpp-large-v3-turbo",
+      "name": "Whisper large-v3-turbo (GGML)",
+      "engine": "whispercpp",
+      "language": "multi",
+      "version": "large-v3-turbo",
+      "description": "Самая точная из поддерживаемых. Полтора гигабайта и заметная нагрузка: имеет смысл с видеокартой.",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+      "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+      "size_bytes": 1624555275
+    }
+  ]
+}

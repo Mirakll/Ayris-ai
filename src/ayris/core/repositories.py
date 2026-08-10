@@ -1117,7 +1117,10 @@ class ClipboardRepository(_Repository):
 class ModelRepository(_Repository):
     """Installed STT/TTS/wake-word/LLM models."""
 
-    _COLUMNS: Final = "id, kind, name, version, path, sha256, installed_at, is_active"
+    _COLUMNS: Final = (
+        "id, kind, name, engine, version, path, sha256, size_bytes, "
+        "catalog_id, installed_at, is_active"
+    )
 
     def add(self, model: ModelRecord) -> ModelRecord:
         installed = model.installed_at if model.installed_at is not None else utc_now()
@@ -1126,15 +1129,20 @@ class ModelRepository(_Repository):
                 self._deactivate(model.kind)
             model_id = self._db.insert(
                 """
-                INSERT INTO models (kind, name, version, path, sha256, installed_at, is_active)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO models
+                    (kind, name, engine, version, path, sha256, size_bytes,
+                     catalog_id, installed_at, is_active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     model.kind,
                     model.name,
+                    model.engine,
                     model.version,
                     model.path,
                     model.sha256,
+                    model.size_bytes,
+                    model.catalog_id,
                     to_db_timestamp(installed),
                     int(model.is_active),
                 ),
@@ -1143,6 +1151,28 @@ class ModelRepository(_Repository):
 
     def get(self, model_id: int) -> ModelRecord | None:
         row = self._db.query_one(f"SELECT {self._COLUMNS} FROM models WHERE id = ?", (model_id,))
+        return ModelRecord.from_row(row) if row is not None else None
+
+    def by_catalog_id(self, catalog_id: str) -> ModelRecord | None:
+        """The installed copy of a catalog entry, if there is one.
+
+        How :mod:`ayris.models.registry` answers "is this already installed" for
+        the settings list, and how a repeated download becomes an update of the
+        existing row instead of a UNIQUE violation.
+        """
+        if not catalog_id:
+            return None
+        row = self._db.query_one(
+            f"SELECT {self._COLUMNS} FROM models WHERE catalog_id = ?", (catalog_id,)
+        )
+        return ModelRecord.from_row(row) if row is not None else None
+
+    def find(self, kind: ModelKind, name: str, version: str = "") -> ModelRecord | None:
+        """The row matching the UNIQUE key ``(kind, name, version)``."""
+        row = self._db.query_one(
+            f"SELECT {self._COLUMNS} FROM models WHERE kind = ? AND name = ? AND version = ?",
+            (kind, name, version),
+        )
         return ModelRecord.from_row(row) if row is not None else None
 
     def list_by_kind(self, kind: ModelKind) -> list[ModelRecord]:
@@ -1162,6 +1192,45 @@ class ModelRepository(_Repository):
         )
         return ModelRecord.from_row(row) if row is not None else None
 
+    def update(self, model: ModelRecord) -> ModelRecord:
+        """Overwrite the mutable columns of an existing row.
+
+        ``is_active`` is deliberately not among them: it is an invariant across
+        rows, not a property of one, and :meth:`set_active` is the only thing
+        allowed to move it.
+        """
+        if model.id is None:
+            raise DatabaseError(
+                "cannot update a model without an id",
+                user_message="Модель не найдена.",
+            )
+        installed = model.installed_at if model.installed_at is not None else utc_now()
+        cursor = self._db.execute(
+            """
+            UPDATE models
+               SET name = ?, engine = ?, version = ?, path = ?, sha256 = ?,
+                   size_bytes = ?, catalog_id = ?, installed_at = ?
+             WHERE id = ?
+            """,
+            (
+                model.name,
+                model.engine,
+                model.version,
+                model.path,
+                model.sha256,
+                model.size_bytes,
+                model.catalog_id,
+                to_db_timestamp(installed),
+                model.id,
+            ),
+        )
+        if cursor.rowcount == 0:
+            raise DatabaseError(
+                f"model {model.id} not found",
+                user_message="Модель не найдена.",
+            )
+        return replace(model, installed_at=installed)
+
     def set_active(self, model_id: int) -> None:
         """Make a model the active one for its kind.
 
@@ -1178,9 +1247,34 @@ class ModelRepository(_Repository):
             self._deactivate(row["kind"])
             self._db.execute("UPDATE models SET is_active = 1 WHERE id = ?", (model_id,))
 
+    def clear_active(self, kind: ModelKind) -> bool:
+        """Leave a kind with no active model.
+
+        Deleting the active model has to go through this first: the row is gone
+        either way, but the subsystem using it needs to hear about it before its
+        files disappear.
+
+        Returns:
+            Whether a model was actually deselected.
+        """
+        cursor = self._db.execute(
+            "UPDATE models SET is_active = 0 WHERE kind = ? AND is_active = 1", (kind,)
+        )
+        return cursor.rowcount > 0
+
     def delete(self, model_id: int) -> bool:
         cursor = self._db.execute("DELETE FROM models WHERE id = ?", (model_id,))
         return cursor.rowcount > 0
+
+    def total_size(self, kind: ModelKind | None = None) -> int:
+        """Recorded bytes on disk, for one kind or for everything."""
+        if kind is None:
+            return int(self._db.query_value("SELECT SUM(size_bytes) FROM models", default=0))
+        return int(
+            self._db.query_value(
+                "SELECT SUM(size_bytes) FROM models WHERE kind = ?", (kind,), default=0
+            )
+        )
 
     def _deactivate(self, kind: str) -> None:
         self._db.execute(

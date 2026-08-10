@@ -317,6 +317,34 @@ _TTS_USAGE: Final = (
 )
 
 
+#: Bookkeeping the model manager needs and v1 did not have.
+#:
+#: v1 described a model by ``(kind, name, version)``, which is enough to find it
+#: and not enough to manage it. Section 14 asks three more questions of every
+#: installed model: which engine can load it (Vosk and faster-whisper are both
+#: ``stt`` but their files are nothing alike), how much disk it occupies (the
+#: settings window shows a total per kind, and the privacy page offers to free
+#: it), and which catalog entry it came from (so a corrupted model can be offered
+#: for re-download instead of just reported broken).
+#:
+#: ``ALTER TABLE ... ADD COLUMN`` with a default rewrites no rows and is instant
+#: even on a large table; SQLite has supported it since forever, unlike the
+#: ``DROP COLUMN`` that would be needed to undo it. Existing rows keep an empty
+#: ``engine`` and a zero size, which :mod:`ayris.models.registry` treats as "not
+#: measured yet" rather than as "zero bytes".
+_MODEL_MANAGER: Final = (
+    "ALTER TABLE models ADD COLUMN engine TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE models ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE models ADD COLUMN catalog_id TEXT NOT NULL DEFAULT ''",
+    # One installed copy per catalog entry. Partial, because rows written before
+    # this migration - and anything the user drops into models/ by hand - have no
+    # catalog entry, and any number of those may coexist.
+    """
+    CREATE UNIQUE INDEX idx_models_catalog ON models (catalog_id) WHERE catalog_id <> ''
+    """,
+)
+
+
 #: Every migration ever released, in order. Append only.
 MIGRATIONS: Final[tuple[Migration, ...]] = (
     Migration(
@@ -328,6 +356,11 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
         version=2,
         description="учёт расхода облачного синтеза речи",
         statements=_TTS_USAGE,
+    ),
+    Migration(
+        version=3,
+        description="менеджер моделей: движок, размер и запись каталога",
+        statements=_MODEL_MANAGER,
     ),
 )
 
