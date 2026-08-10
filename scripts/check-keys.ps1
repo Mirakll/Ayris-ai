@@ -51,8 +51,25 @@ function Write-Ok   { param($t) Write-Host "      $t" -ForegroundColor Green }
 function Write-Dim  { param($t) Write-Host "      $t" -ForegroundColor DarkGray }
 function Write-Bad  { param($t) Write-Host "      $t" -ForegroundColor Red }
 
+function Remove-File {
+    # Windows подставляет %TEMP% в коротком виде 8.3, если имя профиля не
+    # латиницей: C:\Users\328F~1\AppData\Local\Temp. Скачать и распаковать по
+    # такому пути получается - это делает .NET, - а Remove-Item сначала гоняет
+    # путь через разрешение шаблонов, спотыкается о «~» и заявляет, что объекта
+    # нет. Ошибка терминирующая: её не гасит -ErrorAction SilentlyContinue.
+    # Поэтому удаляем через .NET, буквальным путём.
+    param([string]$Path)
+    try { [System.IO.File]::Delete($Path) } catch { }
+}
+
+function Remove-Tree {
+    # То же самое для каталога: -Recurse -Force спотыкается там же.
+    param([string]$Path)
+    try { [System.IO.Directory]::Delete($Path, $true) } catch { }
+}
+
 if (-not (Test-Path $Script)) { throw "Не найден $Script" }
-if ($Reinstall -and (Test-Path $PyDir)) { Remove-Item -Recurse -Force $PyDir }
+if ($Reinstall -and (Test-Path $PyDir)) { Remove-Tree $PyDir }
 
 Write-Host ''
 Write-Host "Проект: $Root" -ForegroundColor Cyan
@@ -105,12 +122,12 @@ function Get-Python {
             Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
         } catch {
             Write-Dim "нет: $($_.Exception.Message)"
-            Remove-Item $tmp -ErrorAction SilentlyContinue
+            Remove-File $tmp
             continue
         }
         New-Item -ItemType Directory -Force -Path $PyDir | Out-Null
         Expand-Archive -Path $tmp -DestinationPath $PyDir -Force
-        Remove-Item $tmp -ErrorAction SilentlyContinue
+        Remove-File $tmp
         return
     }
     throw 'Не удалось скачать CPython 3.12 с python.org. Проверьте подключение к интернету.'
@@ -141,7 +158,7 @@ function Get-Wheel {
     Invoke-WebRequest -Uri $file.url -OutFile $target -UseBasicParsing
     $actual = (Get-FileHash -Path $target -Algorithm SHA256).Hash.ToLower()
     if ($actual -ne $file.digests.sha256) {
-        Remove-Item $target -Force
+        Remove-File $target
         throw "$($file.filename): sha256 не совпал"
     }
     Write-Dim "скачано $($file.filename)"
