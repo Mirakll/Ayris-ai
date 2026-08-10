@@ -233,6 +233,7 @@ module = [
     "pywinauto.*",
     "screeninfo.*",
     "sounddevice.*",
+    "torch.*",
     "uiautomation.*",
     "vosk.*",
     "webrtcvad.*",

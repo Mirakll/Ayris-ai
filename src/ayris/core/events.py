@@ -56,6 +56,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DRAIN_BATCH",
+    "TTS_REASON_CANCELLED",
+    "TTS_REASON_COMPLETED",
+    "TTS_REASON_ERROR",
     "ActionFailed",
     "ActionFinished",
     "ActionStarted",
@@ -89,6 +92,13 @@ _log = get_logger(__name__)
 #: Events delivered in one :meth:`EventBus.drain` before the loop yields, so a
 #: burst of audio levels cannot starve the Qt event loop of paint events.
 DRAIN_BATCH: Final = 256
+
+#: Values :attr:`TtsFinished.reason` takes. Strings rather than an enum because
+#: the same value crosses the worker pipe as JSON, and one representation on both
+#: sides is worth more here than the type checking an enum would add.
+TTS_REASON_COMPLETED: Final = "completed"
+TTS_REASON_CANCELLED: Final = "cancelled"
+TTS_REASON_ERROR: Final = "error"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -213,19 +223,43 @@ class ActionFailed(Event):
 
 @dataclass(frozen=True, slots=True)
 class TtsStarted(Event):
-    """Synthesis started speaking."""
+    """Sound began coming out of the speakers.
+
+    Published by :class:`ayris.audio.tts.player.TtsPlayer` when a phrase reaches
+    the device, not when synthesis was requested: the overlay's mouth animation
+    has to line up with what the user hears, and the gap between the two is the
+    whole point of the streaming path.
+
+    ``duration_estimate_ms`` is how long the queued audio will take, so the
+    overlay can plan an animation instead of polling. It is exact for a phrase
+    already synthesized in full and a lower bound while more sentences are still
+    coming, which the overlay treats as "at least this long".
+    """
 
     text: str
     engine: str = ""
+    duration_estimate_ms: int = 0
     request_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
 class TtsFinished(Event):
-    """Synthesis stopped, either by finishing or by being interrupted."""
+    """Speaking stopped.
 
-    interrupted: bool = False
+    ``reason`` is one of :data:`TTS_REASON_COMPLETED`,
+    :data:`TTS_REASON_CANCELLED` or :data:`TTS_REASON_ERROR`. The overlay needs
+    the distinction: a completed phrase fades out, an interrupt snaps back to
+    idle, and an error shows the notification.
+    """
+
+    reason: str = "completed"
+    text: str = ""
     request_id: str = ""
+
+    @property
+    def interrupted(self) -> bool:
+        """Whether «Айрис, стоп» - or anything else - cut this phrase short."""
+        return self.reason == TTS_REASON_CANCELLED
 
 
 @dataclass(frozen=True, slots=True)

@@ -375,8 +375,14 @@ def _tts_spec(settings: Settings) -> WorkerSpec:
             "output_device": tts.output_device,
             "cloud_fallback": tts.cloud_fallback,
             "credential_ref": tts.credential_ref,
+            "cache_size_mb": tts.cache_size_mb,
             "threads": settings.performance.tts_threads,
             "gpu": settings.performance.gpu,
+            # Same reasoning as for STT: the worker is the only process that can
+            # measure the voice on disk, and it unloads it again when it goes cold.
+            "ram_limit_mb": settings.performance.ram_limit_mb,
+            "model_idle_sec": settings.performance.model_idle_sec,
+            "eco_mode": settings.performance.eco_mode,
         },
         priority=settings.performance.process_priority,
         start_timeout=90.0,
@@ -415,7 +421,7 @@ _ENTRYPOINTS: Final[Mapping[WorkerKind, str]] = MappingProxyType(
     {
         WorkerKind.AUDIO: "ayris.workers.audio_worker:AudioWorker",
         WorkerKind.STT: "ayris.workers.stt_worker:SttWorker",
-        WorkerKind.TTS: "ayris.audio.tts.worker:TtsWorker",
+        WorkerKind.TTS: "ayris.workers.tts_worker:TtsWorker",
         WorkerKind.LLM: "ayris.nlu.llm.worker:LlmWorker",
     }
 )

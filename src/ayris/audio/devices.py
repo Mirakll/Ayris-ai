@@ -35,6 +35,10 @@ __all__ = [
     "AudioStream",
     "DeviceChange",
     "DeviceDirection",
+    "DeviceEnumerator",
+    "OutputStream",
+    "PlaybackBackend",
+    "PlaybackRequest",
     "RawDevice",
     "SoundDeviceBackend",
     "StreamCallback",
@@ -73,6 +77,13 @@ class DeviceDirection(StrEnum):
         shadowing it with a property of a different shape is a type error.
         """
         return "записи" if self is DeviceDirection.INPUT else "воспроизведения"
+
+    @property
+    def missing_hint(self) -> str:
+        """What to check when there is no device of this kind at all."""
+        if self is DeviceDirection.INPUT:
+            return "Проверьте, подключён ли микрофон."
+        return "Проверьте, подключены ли наушники или колонки."
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,8 +227,30 @@ class AudioStream(Protocol):
         """Release the device.  Must tolerate being called twice."""
 
 
-class AudioBackend(Protocol):
-    """Everything the capture pipeline needs from PortAudio."""
+@dataclass(frozen=True, slots=True)
+class PlaybackRequest:
+    """Parameters for opening a playback stream.
+
+    Unlike capture, playback is pull-based: PortAudio asks for the next block
+    and the player fills it.  ``block_frames`` therefore sets the latency floor -
+    a stop cannot take effect faster than the block already handed to the driver,
+    which is why the player keeps it small.
+    """
+
+    device_index: int
+    sample_rate: int
+    channels: int
+    block_frames: int
+
+
+class DeviceEnumerator(Protocol):
+    """The part of a backend that only lists hardware.
+
+    Split out from :class:`AudioBackend` so that :func:`list_devices` and
+    :func:`resolve_device` work for playback too: the TTS player needs the same
+    stable identifiers and the same "device vanished" handling, but has no use
+    for a capture stream.
+    """
 
     def raw_devices(self) -> Sequence[RawDevice]:
         """Enumerate devices.
@@ -238,6 +271,10 @@ class AudioBackend(Protocol):
         has no stream open.
         """
 
+
+class AudioBackend(DeviceEnumerator, Protocol):
+    """Everything the capture pipeline needs from PortAudio."""
+
     def open_input_stream(self, request: StreamRequest, callback: StreamCallback) -> AudioStream:
         """Open a capture stream.
 
@@ -248,6 +285,60 @@ class AudioBackend(Protocol):
 
     def supports_rate(self, request: StreamRequest) -> bool:
         """Whether the device accepts this exact format without conversion."""
+
+
+class OutputStream(Protocol):
+    """An open playback stream.
+
+    Deliberately not :class:`AudioStream`: playback has no callback of its own
+    and needs :meth:`write`, while capture needs neither.  Sharing one Protocol
+    would leave both sides with methods that raise.
+    """
+
+    @property
+    def sample_rate(self) -> int:
+        """Rate the device accepted."""
+
+    @property
+    def channels(self) -> int:
+        """Channel count the device accepted."""
+
+    @property
+    def active(self) -> bool:
+        """Whether the device is still consuming samples."""
+
+    def start(self) -> None:
+        """Begin consuming written samples."""
+
+    def write(self, pcm: bytes) -> None:
+        """Queue ``int16`` samples, blocking while the buffer is full.
+
+        Raises:
+            AudioError: The device was lost mid-playback.
+        """
+
+    def stop(self) -> None:
+        """Stop now, discarding anything already queued.
+
+        Discarding is the point: «Айрис, стоп» must not be followed by half a
+        second of buffered speech.  Implementations use PortAudio's ``abort``
+        rather than ``stop``, which drains.
+        """
+
+    def close(self) -> None:
+        """Release the device.  Must tolerate being called twice."""
+
+
+class PlaybackBackend(DeviceEnumerator, Protocol):
+    """What the TTS player needs from PortAudio."""
+
+    def open_output_stream(self, request: PlaybackRequest) -> OutputStream:
+        """Open a playback stream in blocking-write mode.
+
+        Raises:
+            AudioError: If the device rejects the format or vanished between
+                enumeration and this call.
+        """
 
 
 # --------------------------------------------------------------------- naming
@@ -277,7 +368,7 @@ def _normalise(text: str) -> str:
 
 
 def list_devices(
-    backend: AudioBackend,
+    backend: DeviceEnumerator,
     direction: DeviceDirection = DeviceDirection.INPUT,
 ) -> tuple[AudioDevice, ...]:
     """Enumerate usable devices in one direction.
@@ -320,7 +411,7 @@ def list_devices(
 
 
 def default_device(
-    backend: AudioBackend,
+    backend: DeviceEnumerator,
     direction: DeviceDirection = DeviceDirection.INPUT,
 ) -> AudioDevice | None:
     """Return the system default device, or the first one, or ``None``."""
@@ -339,7 +430,7 @@ def find_device(devices: Iterable[AudioDevice], spec: str) -> AudioDevice | None
 
 
 def resolve_device(
-    backend: AudioBackend,
+    backend: DeviceEnumerator,
     spec: str = "",
     *,
     direction: DeviceDirection = DeviceDirection.INPUT,
@@ -366,8 +457,9 @@ def resolve_device(
     if not devices:
         raise AudioError(
             f"no {direction.value} devices available",
-            user_message=f"Не найдено ни одного устройства {direction.role}. "
-            "Проверьте, подключён ли микрофон.",
+            user_message=(
+                f"Не найдено ни одного устройства {direction.role}. {direction.missing_hint}"
+            ),
         )
     if not spec:
         return next((device for device in devices if device.is_default), devices[0])
@@ -471,6 +563,99 @@ class _SoundDeviceStream:
             self._stream.close(ignore_errors=True)
         except Exception as exc:  # see above
             _log.debug("ignoring error while closing audio stream: %s", exc)
+
+
+class _SoundDeviceOutput:
+    """:class:`OutputStream` over ``sounddevice.RawOutputStream``."""
+
+    __slots__ = ("_channels", "_closed", "_sample_rate", "_stream")
+
+    def __init__(self, stream: Any, sample_rate: int, channels: int) -> None:
+        self._stream = stream
+        self._sample_rate = sample_rate
+        self._channels = channels
+        self._closed = False
+
+    @property
+    def sample_rate(self) -> int:
+        """Rate the device accepted."""
+        return self._sample_rate
+
+    @property
+    def channels(self) -> int:
+        """Channel count the device accepted."""
+        return self._channels
+
+    def _is_closed(self) -> bool:
+        """Whether :meth:`close` has run.
+
+        A method rather than a bare attribute read because ``close()`` is called
+        from the thread that cancels playback while :meth:`write` is blocked
+        inside PortAudio.  Reading ``self._closed`` twice around that call looks
+        redundant to a type checker - it narrows the second read to ``False`` and
+        calls the branch unreachable - but the value genuinely changes in between.
+        """
+        return self._closed
+
+    @property
+    def active(self) -> bool:
+        """Whether PortAudio still considers the stream alive."""
+        if self._closed:
+            return False
+        try:
+            return bool(self._stream.active)
+        except Exception:  # a dead device raises PortAudioError here
+            return False
+
+    def start(self) -> None:
+        """Start the device."""
+        try:
+            self._stream.start()
+        except Exception as exc:  # PortAudioError et al.
+            raise AudioError(
+                f"cannot start output stream: {exc}",
+                user_message="Не удалось начать воспроизведение.",
+            ) from exc
+
+    def write(self, pcm: bytes) -> None:
+        """Hand samples to PortAudio, blocking while its buffer is full.
+
+        Raises:
+            AudioError: The device was lost.  Writing to a closed stream is not
+                an error - a cancel racing the writer is the normal path, and
+                the player checks its own flag right after.
+        """
+        if self._closed or not pcm:
+            return
+        try:
+            self._stream.write(pcm)
+        except Exception as exc:  # PortAudioError on unplug, ValueError on size
+            if self._is_closed():
+                return
+            raise AudioError(
+                f"cannot write to output stream: {exc}",
+                user_message="Воспроизведение прервалось: устройство недоступно.",
+            ) from exc
+
+    def stop(self) -> None:
+        """Abort playback, discarding what PortAudio still holds."""
+        if self._closed:
+            return
+        try:
+            # abort() drops the buffered tail; stop() would play it out.
+            self._stream.abort(ignore_errors=True)
+        except Exception as exc:  # unplugged devices fail to abort
+            _log.debug("ignoring error while aborting output stream: %s", exc)
+
+    def close(self) -> None:
+        """Release the device."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._stream.close(ignore_errors=True)
+        except Exception as exc:  # see above
+            _log.debug("ignoring error while closing output stream: %s", exc)
 
 
 class SoundDeviceBackend:
@@ -591,6 +776,32 @@ class SoundDeviceBackend:
         except Exception:  # "unsupported" is reported as an exception
             return False
         return True
+
+    def open_output_stream(self, request: PlaybackRequest) -> OutputStream:
+        """Open a raw ``int16`` playback stream in blocking-write mode.
+
+        No callback: the player already owns a thread and writing from it is
+        both simpler and safer than filling a driver buffer from a real-time
+        callback that may not allocate.  PortAudio blocks the write when its
+        buffer is full, which is exactly the pacing the player wants.
+        """
+        sd = self._sd()
+        try:
+            stream = sd.RawOutputStream(
+                device=request.device_index,
+                samplerate=request.sample_rate,
+                channels=request.channels,
+                dtype="int16",
+                blocksize=request.block_frames,
+            )
+        except Exception as exc:  # PortAudioError, ValueError, OSError
+            raise AudioError(
+                f"cannot open output device {request.device_index} at "
+                f"{request.sample_rate} Hz / {request.channels}ch: {exc}",
+                user_message="Не удалось открыть устройство воспроизведения. "
+                "Возможно, оно занято другой программой.",
+            ) from exc
+        return _SoundDeviceOutput(stream, request.sample_rate, request.channels)
 
     @staticmethod
     def _defaults(sd: Any) -> tuple[int, int]:

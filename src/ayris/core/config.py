@@ -465,6 +465,12 @@ class TtsConfig(ConfigSection):
         default=True,
         description="Прерывать озвучку, если пользователь начал говорить",
     )
+    cache_size_mb: int = Field(
+        default=64,
+        ge=0,
+        le=4096,
+        description="Лимит кэша озвученных фраз на диске в МБ. 0 — не кэшировать",
+    )
 
 
 class WakePhrase(ConfigSection):
