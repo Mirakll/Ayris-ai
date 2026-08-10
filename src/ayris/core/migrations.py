@@ -290,12 +290,44 @@ _INITIAL_SCHEMA: Final = (
 )
 
 
+#: Cloud TTS spending, one row per provider per billing month.
+#:
+#: The counter has to survive a restart or it cannot answer the only question
+#: asked of it - "how much of this month's quota is left" - which rules out
+#: keeping it in memory. It is aggregated rather than append-only: a row per
+#: phrase would be a log of everything the user ever had spoken aloud, and
+#: ``privacy`` says that is theirs and does not belong on disk. What is stored is
+#: a character count.
+#:
+#: ``period`` is ``YYYY-MM``, because every provider here resets on a calendar
+#: month, and having it in the key means last month's number stays readable
+#: instead of being overwritten by a reset.
+_TTS_USAGE: Final = (
+    """
+    CREATE TABLE tts_usage (
+        provider    TEXT    NOT NULL,
+        period      TEXT    NOT NULL,
+        characters  INTEGER NOT NULL DEFAULT 0,
+        requests    INTEGER NOT NULL DEFAULT 0,
+        updated_at  TEXT    NOT NULL,
+        PRIMARY KEY (provider, period)
+    )
+    """,
+    "CREATE INDEX idx_tts_usage_period ON tts_usage (period)",
+)
+
+
 #: Every migration ever released, in order. Append only.
 MIGRATIONS: Final[tuple[Migration, ...]] = (
     Migration(
         version=1,
         description="исходная схема",
         statements=_INITIAL_SCHEMA,
+    ),
+    Migration(
+        version=2,
+        description="учёт расхода облачного синтеза речи",
+        statements=_TTS_USAGE,
     ),
 )
 

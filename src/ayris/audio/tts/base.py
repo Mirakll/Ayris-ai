@@ -45,7 +45,8 @@ from __future__ import annotations
 import importlib
 import importlib.util
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
@@ -250,6 +251,12 @@ class TtsOptions:
             speech to 48 kHz in Python costs more than the player's own
             conversion, which happens once per device rather than once per
             sentence.
+        extra: Anything specific to one engine and to no other: a region name,
+            an endpoint override, a credential reference, the HTTP transport a
+            test wants used. Kept as a bag rather than as fields so that adding
+            a cloud provider does not widen the object every local engine also
+            has to carry. Not sent through :meth:`to_params`, because the worker
+            pipe takes JSON and this may hold live objects.
     """
 
     speed: float = DEFAULT_SPEED
@@ -257,6 +264,12 @@ class TtsOptions:
     threads: int = 2
     gpu: str = "auto"
     sample_rate: int = 0
+    extra: Mapping[str, Any] = field(default_factory=dict)
+
+    def option(self, name: str, fallback: str = "") -> str:
+        """Read an extra as a string, tolerating a missing key."""
+        value = self.extra.get(name)
+        return fallback if value is None else str(value)
 
     def to_params(self) -> JsonObject:
         """Flatten for the worker pipe."""
@@ -271,12 +284,14 @@ class TtsOptions:
     @classmethod
     def from_params(cls, params: JsonObject) -> TtsOptions:
         """Build from worker parameters, clamping anything out of range."""
+        raw_extra = params.get("extra")
         return cls(
             speed=clamp_speed(_as_float(params.get("speed"), DEFAULT_SPEED)),
             pitch=clamp_pitch(_as_float(params.get("pitch"), DEFAULT_PITCH)),
             threads=max(1, _as_int(params.get("threads"), 2)),
             gpu=str(params.get("gpu", "auto")) or "auto",
             sample_rate=max(0, _as_int(params.get("sample_rate"), 0)),
+            extra=dict(raw_extra) if isinstance(raw_extra, Mapping) else {},
         )
 
 

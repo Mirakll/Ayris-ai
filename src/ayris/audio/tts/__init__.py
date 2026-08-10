@@ -13,7 +13,15 @@ why splitting, caching and synthesis are all testable without an audio card.
 Engines are reached through :func:`~ayris.audio.tts.base.create_engine` rather
 than imported directly - a vendor library is imported only when its engine is
 actually loaded, so a missing ``piper`` or ``torch`` costs a clear error at load
-time instead of an :class:`ImportError` at startup.
+time instead of an :class:`ImportError` at startup. Cloud voices work the same
+way through :func:`~ayris.audio.tts.cloud_base.create_cloud_engine`.
+
+Nothing above this package chooses an engine either: everything that speaks calls
+:meth:`~ayris.audio.tts.router.TtsRouter.say`, and the router decides between the
+local voice and the paid one. It is imported from its own module rather than from
+here, as :class:`~ayris.audio.stt.router.SttRouter` is, and for the same reason
+the cloud modules are left out of this ``__init__``: they import ``httpx`` at
+module level, which offline mode has no reason to pay for.
 """
 
 from __future__ import annotations
