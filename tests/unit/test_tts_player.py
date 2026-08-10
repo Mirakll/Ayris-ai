@@ -34,6 +34,7 @@ Groups:
 
 from __future__ import annotations
 
+import os
 import threading
 from array import array
 from time import monotonic, sleep
@@ -713,7 +714,32 @@ class TestCancellation:
 
     @pytest.mark.hardware
     def test_a_real_device_goes_silent_immediately(self):  # pragma: no cover - needs speakers
-        pytest.skip("нужны настоящие колонки — проверяется на машине пользователя")
+        """PortAudio's ``abort`` really discards what the driver already holds.
+
+        Three seconds of tone are queued and cancelled after a fifth of one. If
+        ``abort`` merely stopped feeding the device, the buffered tail would keep
+        sounding and the call would return only once it had drained; the
+        assertion is that the whole thing is over long before the phrase would
+        have finished on its own.
+
+        Only meaningful on a machine with a real output device: a null device
+        accepts every write instantly, so it would pass no matter what the code
+        did. Set ``AYRIS_TEST_SPEAKERS=1`` to opt in - and expect a short beep.
+        """
+        if os.environ.get("AYRIS_TEST_SPEAKERS", "") != "1":
+            pytest.skip("AYRIS_TEST_SPEAKERS=1 не задан — нужны настоящие колонки")
+
+        instance = TtsPlayer(volume=0.2)
+        instance.speak(speech("real", ms=3000, rate=DEVICE_RATE))
+        try:
+            sleep(0.2)
+            assert instance.speaking, "фраза не начала звучать — проверьте устройство"
+            started = monotonic()
+            instance.cancel()
+            elapsed = monotonic() - started
+        finally:
+            instance.stop()
+        assert elapsed < 0.5, f"обрыв занял {elapsed:.2f} с вместо мгновенного"
 
 
 # ----------------------------------------------------------------------

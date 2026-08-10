@@ -40,6 +40,7 @@ Groups:
 
 from __future__ import annotations
 
+import os
 import wave
 from array import array
 from math import pi, sin
@@ -806,8 +807,37 @@ class TestPiperEngine:
             )
 
     @pytest.mark.hardware
-    def test_a_real_voice_speaks(self, tmp_path: Path):  # pragma: no cover - needs a model
-        pytest.skip("нужен настоящий .onnx — проверяется на машине пользователя")
+    def test_a_real_voice_speaks(self):  # pragma: no cover - needs a model
+        """Piper on real weights: audio comes out, and it is the right shape.
+
+        Point ``AYRIS_TEST_PIPER_VOICE`` at a ``.onnx`` voice with its ``.json``
+        beside it. The duration is not asserted against a fixed number - a voice
+        decides its own pace - only that a whole sentence lasts longer than the
+        two-word phrase, which is what proves the text reached the model rather
+        than being padded to some default length.
+        """
+        engine = engine_class("piper")()
+        if not engine.available():
+            pytest.skip("piper не установлен")
+        model = os.environ.get("AYRIS_TEST_PIPER_VOICE", "")
+        if not model:
+            pytest.skip("AYRIS_TEST_PIPER_VOICE не задан")
+        if not Path(model).exists():
+            pytest.skip(f"голоса нет: {model}")
+
+        engine.load(VoiceSpec(engine="piper", voice_id=Path(model).stem, path=model), TtsOptions())
+        try:
+            short = engine.synthesize("Айрис, привет.")
+            assert short.pcm
+            assert short.sample_rate >= 16000
+            assert short.channels == 1
+            assert len(short.pcm) % SAMPLE_WIDTH == 0
+            assert short.duration_ms > 100.0
+
+            long = engine.synthesize("Айрис, привет. Сегодня в Москве идёт дождь.")
+            assert long.duration_ms > short.duration_ms
+        finally:
+            engine.unload()
 
 
 class TestSileroEngine:

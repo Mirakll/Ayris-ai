@@ -41,6 +41,7 @@ from __future__ import annotations
 import importlib
 import math
 import os
+import subprocess
 import sys
 import types
 import wave
@@ -89,6 +90,10 @@ if TYPE_CHECKING:
     from ayris.core.models import JsonObject
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "audio"
+
+#: ``pythonpath`` from ``pyproject.toml`` is a pytest setting, so a subprocess
+#: that has to import ``ayris`` needs the directory spelled out.
+SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 
 #: Length of each task 10 fixture, in milliseconds.  Asserted rather than
 #: assumed: every test below reasons about durations.
@@ -1587,9 +1592,28 @@ class TestRegistryWiring:
         assert {"load_model", "transcribe", "unload", "status"} <= names
 
     def test_importing_the_worker_does_not_import_a_vendor_library(self):
-        """A worker start must not pay for CTranslate2 before an engine is chosen."""
-        assert "faster_whisper" not in sys.modules
-        assert "vosk" not in sys.modules
+        """A worker start must not pay for CTranslate2 before an engine is chosen.
+
+        In a fresh interpreter, which is the only place the question has an
+        answer.  ``sys.modules`` in *this* one is shared with every test that ran
+        before it, and one of them loads a real Vosk engine to check the wording
+        of its error - so asserting on this process made the result depend on the
+        order pytest happened to pick, and on whether the vendor library was
+        installed at all.
+        """
+        probe = (
+            "import importlib, sys;"
+            "importlib.import_module('ayris.workers.stt_worker');"
+            "print([m for m in ('faster_whisper', 'vosk') if m in sys.modules])"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONPATH": str(SRC_ROOT)},
+        )
+        assert completed.stdout.strip() == "[]", completed.stdout
 
 
 @pytest.mark.hardware
@@ -1602,18 +1626,26 @@ class TestRealEngines:
     library, on real weights, answers the real fixtures the way the contract
     above says it must.
 
-    Point ``AYRIS_TEST_STT_MODEL`` at a model directory to enable them.
+    Two variables, not one: a Vosk model is a directory with ``am`` inside and a
+    faster-whisper one is a CTranslate2 export with ``model.bin``, so a single
+    path cannot enable both.  Point ``AYRIS_TEST_STT_MODEL`` at the Vosk model
+    and ``AYRIS_TEST_WHISPER_MODEL`` at the Whisper one; each engine's tests
+    skip on their own.
     """
 
     @staticmethod
-    def _model() -> Path:
-        location = os.environ.get("AYRIS_TEST_STT_MODEL", "")
+    def _model(variable: str = "AYRIS_TEST_STT_MODEL") -> Path:
+        location = os.environ.get(variable, "")
         if not location:
-            pytest.skip("AYRIS_TEST_STT_MODEL не задан")
+            pytest.skip(f"{variable} не задан")
         path = Path(location)
         if not path.exists():
             pytest.skip(f"модели нет: {path}")
         return path
+
+    @classmethod
+    def _whisper_model(cls) -> Path:
+        return cls._model("AYRIS_TEST_WHISPER_MODEL")
 
     def test_vosk_transcribes_a_command(self) -> None:
         if not VoskSttEngine.available():
@@ -1648,7 +1680,7 @@ class TestRealEngines:
         if not FasterWhisperEngine.available():
             pytest.skip("faster-whisper не установлен")
         engine = FasterWhisperEngine()
-        engine.load(self._model(), SttOptions(language="ru"))
+        engine.load(self._whisper_model(), SttOptions(language="ru"))
         try:
             assert engine.transcribe(wav("stt_silence.wav")).is_empty
         finally:
@@ -1658,7 +1690,7 @@ class TestRealEngines:
         if not FasterWhisperEngine.available():
             pytest.skip("faster-whisper не установлен")
         engine = FasterWhisperEngine()
-        engine.load(self._model(), SttOptions(language="ru"))
+        engine.load(self._whisper_model(), SttOptions(language="ru"))
         try:
             assert engine.device in {"cpu", "cuda"}
             if engine.device == "cpu":

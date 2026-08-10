@@ -40,6 +40,7 @@ Groups:
 from __future__ import annotations
 
 import math
+import os
 import wave
 from array import array
 from pathlib import Path
@@ -1384,13 +1385,27 @@ class TestRealEngines:
     them. What CI checks instead is that selecting a missing engine produces a
     sentence rather than an ImportError, which is in
     :class:`TestStats.test_load_failure_is_visible_not_fatal`.
+
+    Point ``AYRIS_TEST_WAKE_MODELS`` at a folder of ``.onnx`` files named after
+    the phrases - ``hey_jarvis.onnx`` for "hey jarvis" - the way the profile's
+    ``models/wake`` folder is laid out in production.
     """
+
+    @staticmethod
+    def _models_dir() -> Path:
+        location = os.environ.get("AYRIS_TEST_WAKE_MODELS", "")
+        if not location:
+            pytest.skip("AYRIS_TEST_WAKE_MODELS не задан")
+        path = Path(location)
+        if not path.is_dir():
+            pytest.skip(f"папки моделей нет: {path}")
+        return path
 
     def test_openwakeword_loads(self) -> None:
         if not OpenWakeWordEngine.available():
             pytest.skip("openwakeword is not installed")
         engine = OpenWakeWordEngine()
-        engine.load(ModelSpec(phrases=(WakePhrase("hey jarvis"),)))
+        engine.load(ModelSpec(phrases=(WakePhrase("hey jarvis"),), models_dir=self._models_dir()))
         try:
             assert engine.loaded
             frame = b"\x00\x00" * engine.frame_samples
