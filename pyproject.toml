@@ -170,12 +170,16 @@ ignore = [
 # ARG002 — тот же случай, что ARG001, но для тестов внутри классов: фикстуру
 # приходится объявлять аргументом, даже если тело её не читает.
 "tests/**" = ["ANN201", "ANN001", "ARG001", "ARG002"]
+# У всех типов слотов одна сигнатура parse(raw, context) — иначе их не вызвать
+# единообразно и mypy ругается на несовместимое переопределение. Половине типов
+# контекст не нужен, но выкинуть его из подписи нельзя.
+"src/ayris/nlu/slot_types.py" = ["ARG002"]
 
 [tool.ruff.lint.flake8-builtins]
-# ayris/core/secrets.py и ayris/core/profile.py импортируются только как
-# ayris.core.*, поэтому заслонить стандартные модули secrets и profile они
-# не могут.
-builtins-allowed-modules = ["profile", "secrets"]
+# ayris/core/secrets.py, ayris/core/profile.py и ayris/nlu/numbers.py
+# импортируются только по полному пути ayris.*, поэтому заслонить стандартные
+# модули secrets, profile и numbers они не могут.
+builtins-allowed-modules = ["numbers", "profile", "secrets"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

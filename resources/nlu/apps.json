@@ -1,0 +1,251 @@
+{
+  "schema_version": 1,
+  "apps": [
+    {
+      "id": "chrome",
+      "name": "Google Chrome",
+      "kind": "browser",
+      "executables": ["chrome.exe"],
+      "aliases": ["chrome", "гугл хром", "гуглхром", "хром", "хроме", "google chrome"]
+    },
+    {
+      "id": "yandex-browser",
+      "name": "Яндекс Браузер",
+      "kind": "browser",
+      "executables": ["browser.exe"],
+      "aliases": ["яндекс браузер", "яндекс-браузер", "яндексбраузер", "yandex browser", "яндекс"]
+    },
+    {
+      "id": "firefox",
+      "name": "Mozilla Firefox",
+      "kind": "browser",
+      "executables": ["firefox.exe"],
+      "aliases": ["firefox", "фаерфокс", "файрфокс", "мозила", "мозилла", "лиса"]
+    },
+    {
+      "id": "edge",
+      "name": "Microsoft Edge",
+      "kind": "browser",
+      "executables": ["msedge.exe"],
+      "aliases": ["edge", "эдж", "эйдж", "майкрософт эдж", "microsoft edge"]
+    },
+    {
+      "id": "opera",
+      "name": "Opera",
+      "kind": "browser",
+      "executables": ["opera.exe", "launcher.exe"],
+      "aliases": ["opera", "опера", "оперу", "опере"]
+    },
+    {
+      "id": "telegram",
+      "name": "Telegram",
+      "kind": "messenger",
+      "executables": ["telegram.exe"],
+      "aliases": ["telegram", "телеграм", "телеграмм", "тг", "телега"]
+    },
+    {
+      "id": "discord",
+      "name": "Discord",
+      "kind": "messenger",
+      "executables": ["discord.exe", "update.exe"],
+      "aliases": ["discord", "дискорд", "диск", "дс"]
+    },
+    {
+      "id": "whatsapp",
+      "name": "WhatsApp",
+      "kind": "messenger",
+      "executables": ["whatsapp.exe"],
+      "aliases": ["whatsapp", "ватсап", "вотсап", "воцап", "вацап"]
+    },
+    {
+      "id": "skype",
+      "name": "Skype",
+      "kind": "messenger",
+      "executables": ["skype.exe"],
+      "aliases": ["skype", "скайп", "скайпе"]
+    },
+    {
+      "id": "zoom",
+      "name": "Zoom",
+      "kind": "messenger",
+      "executables": ["zoom.exe"],
+      "aliases": ["zoom", "зум", "зуме"]
+    },
+    {
+      "id": "vscode",
+      "name": "Visual Studio Code",
+      "kind": "editor",
+      "executables": ["code.exe"],
+      "aliases": ["vs code", "vscode", "code", "вс код", "вскод", "вижуал студио код", "код"]
+    },
+    {
+      "id": "notepad",
+      "name": "Блокнот",
+      "kind": "editor",
+      "executables": ["notepad.exe"],
+      "aliases": ["notepad", "блокнот", "блокноте", "нотепад"]
+    },
+    {
+      "id": "notepad-plus-plus",
+      "name": "Notepad++",
+      "kind": "editor",
+      "executables": ["notepad++.exe"],
+      "aliases": ["notepad plus plus", "нотепад плюс плюс", "нотепад плюс", "нотпад"]
+    },
+    {
+      "id": "pycharm",
+      "name": "PyCharm",
+      "kind": "editor",
+      "executables": ["pycharm64.exe", "pycharm.exe"],
+      "aliases": ["pycharm", "пайчарм", "пичарм", "пайчарме"]
+    },
+    {
+      "id": "sublime",
+      "name": "Sublime Text",
+      "kind": "editor",
+      "executables": ["sublime_text.exe"],
+      "aliases": ["sublime", "sublime text", "саблайм", "сублайм"]
+    },
+    {
+      "id": "word",
+      "name": "Microsoft Word",
+      "kind": "office",
+      "executables": ["winword.exe"],
+      "aliases": ["word", "ворд", "ворде", "microsoft word", "майкрософт ворд"]
+    },
+    {
+      "id": "excel",
+      "name": "Microsoft Excel",
+      "kind": "office",
+      "executables": ["excel.exe"],
+      "aliases": ["excel", "эксель", "экселе", "ексель", "таблицы"]
+    },
+    {
+      "id": "powerpoint",
+      "name": "Microsoft PowerPoint",
+      "kind": "office",
+      "executables": ["powerpnt.exe"],
+      "aliases": ["powerpoint", "поверпоинт", "пауэрпоинт", "презентации"]
+    },
+    {
+      "id": "outlook",
+      "name": "Microsoft Outlook",
+      "kind": "office",
+      "executables": ["outlook.exe"],
+      "aliases": ["outlook", "аутлук", "оутлук", "почта"]
+    },
+    {
+      "id": "spotify",
+      "name": "Spotify",
+      "kind": "media",
+      "executables": ["spotify.exe"],
+      "aliases": ["spotify", "спотифай", "спотик"]
+    },
+    {
+      "id": "vlc",
+      "name": "VLC",
+      "kind": "media",
+      "executables": ["vlc.exe"],
+      "aliases": ["vlc", "влс", "ви эл си", "плеер"]
+    },
+    {
+      "id": "aimp",
+      "name": "AIMP",
+      "kind": "media",
+      "executables": ["aimp.exe"],
+      "aliases": ["aimp", "аимп", "аймп"]
+    },
+    {
+      "id": "obs",
+      "name": "OBS Studio",
+      "kind": "media",
+      "executables": ["obs64.exe", "obs32.exe"],
+      "aliases": ["obs", "обс", "обс студио", "obs studio"]
+    },
+    {
+      "id": "steam",
+      "name": "Steam",
+      "kind": "games",
+      "executables": ["steam.exe"],
+      "aliases": ["steam", "стим", "стиме"]
+    },
+    {
+      "id": "epic-games",
+      "name": "Epic Games Launcher",
+      "kind": "games",
+      "executables": ["epicgameslauncher.exe"],
+      "aliases": ["epic games", "epic", "эпик геймс", "эпик"]
+    },
+    {
+      "id": "photoshop",
+      "name": "Adobe Photoshop",
+      "kind": "graphics",
+      "executables": ["photoshop.exe"],
+      "aliases": ["photoshop", "фотошоп", "фотошопе", "пс"]
+    },
+    {
+      "id": "figma",
+      "name": "Figma",
+      "kind": "graphics",
+      "executables": ["figma.exe"],
+      "aliases": ["figma", "фигма", "фигме"]
+    },
+    {
+      "id": "paint",
+      "name": "Paint",
+      "kind": "graphics",
+      "executables": ["mspaint.exe"],
+      "aliases": ["paint", "пейнт", "паинт"]
+    },
+    {
+      "id": "explorer",
+      "name": "Проводник",
+      "kind": "system",
+      "executables": ["explorer.exe"],
+      "aliases": ["explorer", "проводник", "проводнике", "мой компьютер", "этот компьютер", "папки"]
+    },
+    {
+      "id": "calculator",
+      "name": "Калькулятор",
+      "kind": "system",
+      "executables": ["calc.exe"],
+      "aliases": ["calc", "calculator", "калькулятор", "калькуляторе", "счеты"]
+    },
+    {
+      "id": "task-manager",
+      "name": "Диспетчер задач",
+      "kind": "system",
+      "executables": ["taskmgr.exe"],
+      "aliases": ["taskmgr", "task manager", "диспетчер задач", "диспетчер"]
+    },
+    {
+      "id": "settings",
+      "name": "Параметры Windows",
+      "kind": "system",
+      "executables": ["systemsettings.exe"],
+      "uwp": "windows.immersivecontrolpanel_cw5n1h2txyewy!microsoft.windows.immersivecontrolpanel",
+      "aliases": [
+        "settings",
+        "параметры",
+        "настройки",
+        "настройки windows",
+        "настройки виндовс",
+        "настройки системы"
+      ]
+    },
+    {
+      "id": "cmd",
+      "name": "Командная строка",
+      "kind": "system",
+      "executables": ["cmd.exe"],
+      "aliases": ["cmd", "командная строка", "консоль", "терминал"]
+    },
+    {
+      "id": "powershell",
+      "name": "PowerShell",
+      "kind": "system",
+      "executables": ["powershell.exe", "pwsh.exe"],
+      "aliases": ["powershell", "пауэршелл", "повершелл", "повершел"]
+    }
+  ]
+}

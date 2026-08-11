@@ -345,6 +345,48 @@ _MODEL_MANAGER: Final = (
 )
 
 
+#: Where the ``{app}`` slot looks up a name.
+#:
+#: Scanning the registry and the Start menu takes seconds, and a slot is filled
+#: while the user waits for a command to run — so the scan happens in the
+#: background and lands in ``installed_apps``, which the resolver reads instead
+#: of the disk. ``source`` records which scanner found the entry (registry, Start
+#: menu, ``AppsFolder``), because a refresh replaces one source at a time and a
+#: row nobody re-reported is a program that has been uninstalled.
+#:
+#: ``app_aliases`` is the user's own vocabulary: «открой почту» meaning Thunderbird
+#: rather than Outlook. Separate from the shipped dictionary in
+#: ``resources/nlu/apps.json`` so an update to the dictionary cannot silently
+#: drop what the user taught the assistant, and read at higher priority than it
+#: for the same reason.
+_APP_INDEX: Final = (
+    """
+    CREATE TABLE installed_apps (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        name         TEXT    NOT NULL,
+        target       TEXT    NOT NULL,
+        executable   TEXT    NOT NULL DEFAULT '',
+        arguments    TEXT    NOT NULL DEFAULT '',
+        source       TEXT    NOT NULL DEFAULT '',
+        catalog_id   TEXT    NOT NULL DEFAULT '',
+        scanned_at   TEXT    NOT NULL
+    )
+    """,
+    "CREATE UNIQUE INDEX idx_installed_apps_target ON installed_apps (target, source)",
+    "CREATE INDEX idx_installed_apps_name ON installed_apps (name)",
+    """
+    CREATE TABLE app_aliases (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        profile_id  INTEGER REFERENCES profiles (id) ON DELETE CASCADE,
+        alias       TEXT    NOT NULL,
+        app_id      TEXT    NOT NULL,
+        created_at  TEXT    NOT NULL
+    )
+    """,
+    "CREATE UNIQUE INDEX idx_app_aliases_alias ON app_aliases (profile_id, alias)",
+)
+
+
 #: Every migration ever released, in order. Append only.
 MIGRATIONS: Final[tuple[Migration, ...]] = (
     Migration(
@@ -361,6 +403,11 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
         version=3,
         description="менеджер моделей: движок, размер и запись каталога",
         statements=_MODEL_MANAGER,
+    ),
+    Migration(
+        version=4,
+        description="кэш установленных программ и пользовательские названия",
+        statements=_APP_INDEX,
     ),
 )
 

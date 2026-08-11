@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING, Final
 from ayris.core.events import COMMANDS_CHANGE_DELETED, COMMANDS_CHANGE_RELOADED, CommandsChanged
 from ayris.nlu.matcher import Trigger, TriggerKind, compile_pattern, distance_ceiling
 from ayris.nlu.normalize import normalize
+from ayris.nlu.slots import SlotTemplate, SlotTemplateError, compile_slots
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -60,6 +61,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Sequence
 
     from ayris.core.events import EventBus, Unsubscribe
+    from ayris.nlu.matcher import MatchResult
+    from ayris.nlu.slot_types import SlotContext, SlotTypeRegistry
+    from ayris.nlu.slots import SlotSet
 
 __all__ = [
     "GRAM_SIZE",
@@ -108,6 +112,11 @@ class IndexedTrigger:
     compile: :func:`ayris.nlu.matcher.compile_pattern` logs that one and the
     entry is left out of the snapshot, so a broken pattern costs its own trigger
     and nothing else.
+
+    ``slots`` is set only for a template trigger and is what turns the groups a
+    match captured into typed values. It lives here rather than being looked up
+    later because compiling a template validates it, and validating it once per
+    utterance is exactly the work this class exists to avoid.
     """
 
     trigger: Trigger
@@ -115,6 +124,7 @@ class IndexedTrigger:
     spoken: str
     grams: frozenset[str] = field(default_factory=frozenset)
     regex: re.Pattern[str] | None = None
+    slots: SlotTemplate | None = None
 
     @property
     def length(self) -> int:
@@ -123,8 +133,18 @@ class IndexedTrigger:
 
     @property
     def is_regex(self) -> bool:
-        """Whether this entry is matched by pattern rather than by text."""
-        return self.trigger.kind is TriggerKind.REGEX
+        """Whether this entry is matched by pattern rather than by text.
+
+        True for a template as well: a template *is* a regex by the time it
+        reaches the matcher, and the whole point of compiling it at index time is
+        that nothing downstream has to know the difference.
+        """
+        return self.trigger.kind in (TriggerKind.REGEX, TriggerKind.TEMPLATE)
+
+    @property
+    def has_slots(self) -> bool:
+        """Whether a match on this entry can be turned into typed slot values."""
+        return self.slots is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,10 +174,38 @@ class IndexSnapshot:
     postings: dict[str, tuple[int, ...]]
     entries: dict[int, IndexedTrigger]
     generation: int
+    templates: dict[int, IndexedTrigger] = field(default_factory=dict)
 
     def exact_candidates(self, text: str) -> tuple[IndexedTrigger, ...]:
         """Triggers spelled exactly like this. One hash, usually one result."""
         return self.exact.get(text, ())
+
+    def slot_template(self, trigger_id: int) -> SlotTemplate | None:
+        """The template a trigger was compiled from, or ``None`` when it has none.
+
+        ``entries`` cannot answer this: it holds only the phrase triggers, since
+        its purpose is the fuzzy prefilter. Templates therefore get their own map,
+        keyed the same way — a dict lookup per matched phrase, not a scan of every
+        pattern in the library.
+        """
+        entry = self.templates.get(trigger_id)
+        return None if entry is None else entry.slots
+
+    def bind_slots(
+        self,
+        result: MatchResult,
+        context: SlotContext | None = None,
+    ) -> SlotSet | None:
+        """Typed slot values for a match, or ``None`` when the trigger has no slots.
+
+        The seam between matching and dispatch. The matcher has already run the
+        regex and left its named groups in
+        :attr:`~ayris.nlu.matcher.MatchResult.raw_groups`, so this only parses —
+        matching a second time would be wasted work and a second chance to
+        disagree with the result being dispatched.
+        """
+        template = self.slot_template(result.trigger_id)
+        return None if template is None else template.bind(result.raw_groups, context)
 
     def regex_triggers(self) -> tuple[IndexedTrigger, ...]:
         """Every compiled pattern, in index order."""
@@ -233,14 +281,33 @@ class TriggerIndex:
     change), the plugin loader (when a plugin registers commands) and the tests.
     """
 
-    __slots__ = ("_by_command", "_entries", "_generation", "_lock", "_rebuilt", "_snapshot")
+    __slots__ = (
+        "_by_command",
+        "_entries",
+        "_generation",
+        "_lock",
+        "_rebuilt",
+        "_slot_types",
+        "_snapshot",
+    )
 
-    def __init__(self) -> None:
+    def __init__(self, slot_types: SlotTypeRegistry | None = None) -> None:
+        """Build an empty index.
+
+        Args:
+            slot_types: Registry the templates are compiled against. A plugin that
+                registered its own slot type passes the registry holding it;
+                ``None`` means the shipped types. Fixed at construction rather
+                than read per compile, because a template that compiled against
+                one registry and matches against another is a bug with no good
+                error message.
+        """
         self._lock = threading.RLock()
         self._entries: dict[int, IndexedTrigger] = {}
         self._by_command: defaultdict[int, set[int]] = defaultdict(set)
         self._generation = 0
         self._rebuilt = 0
+        self._slot_types = slot_types
         self._snapshot = IndexSnapshot(exact={}, regexes=(), postings={}, entries={}, generation=0)
 
     # ------------------------------------------------------------------
@@ -438,13 +505,18 @@ class TriggerIndex:
         self._entries[trigger.id] = entry
         self._by_command[trigger.command_id].add(trigger.id)
 
-    @staticmethod
-    def _build(trigger: Trigger) -> IndexedTrigger | None:
+    def _build(self, trigger: Trigger) -> IndexedTrigger | None:
         """Precompute a trigger's matchable forms, or reject it.
 
         A regex is not normalised — its punctuation is syntax — but a phrase is,
-        so that the trigger and the recognised text meet in the same shape.
+        so that the trigger and the recognised text meet in the same shape. A
+        template is normalised too, and by the compiler rather than here: the
+        literal stretches between its slots have to be folded the same way the
+        phrase was, and only :func:`~ayris.nlu.slots.compile_slots` knows which
+        stretches those are.
         """
+        if trigger.kind is TriggerKind.TEMPLATE:
+            return self._build_template(trigger)
         if trigger.kind is TriggerKind.REGEX:
             return IndexedTrigger(
                 trigger=trigger,
@@ -462,6 +534,32 @@ class TriggerIndex:
             grams=text_grams(phrase.text) if trigger.fuzzy else frozenset(),
         )
 
+    def _build_template(self, trigger: Trigger) -> IndexedTrigger | None:
+        """Compile a template trigger, or drop it with a line in the log.
+
+        A template the user wrote badly costs its own trigger and nothing else —
+        the same contract :func:`~ayris.nlu.matcher.compile_pattern` has for a
+        broken regex. Raising here would take down the whole index rebuild, and
+        the rebuild is triggered by saving *some other* command.
+        """
+        try:
+            template = compile_slots(trigger.pattern, self._slot_types)
+        except SlotTemplateError as exc:
+            _log.warning(
+                "trigger %d has an invalid slot template %r: %s",
+                trigger.id,
+                trigger.pattern,
+                exc,
+            )
+            return None
+        return IndexedTrigger(
+            trigger=trigger,
+            text=trigger.pattern,
+            spoken=trigger.pattern,
+            regex=template.regex,
+            slots=template,
+        )
+
     def _publish(self) -> None:
         """Rebuild the read-side structures and swap them in atomically.
 
@@ -474,6 +572,7 @@ class TriggerIndex:
         regexes: list[IndexedTrigger] = []
         postings: defaultdict[str, list[int]] = defaultdict(list)
         entries: dict[int, IndexedTrigger] = {}
+        templates: dict[int, IndexedTrigger] = {}
 
         # Sorted by id, so the published order — and every tie-break that falls
         # through to it — is the same after every rebuild.
@@ -481,6 +580,8 @@ class TriggerIndex:
             entry = self._entries[trigger_id]
             if not entry.trigger.enabled:
                 continue
+            if entry.has_slots:
+                templates[trigger_id] = entry
             if entry.is_regex:
                 if entry.regex is not None:
                     regexes.append(entry)
@@ -499,4 +600,5 @@ class TriggerIndex:
             postings={gram: tuple(items) for gram, items in postings.items()},
             entries=entries,
             generation=self._generation,
+            templates=templates,
         )

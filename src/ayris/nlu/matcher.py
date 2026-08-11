@@ -93,10 +93,20 @@ _PATTERN_ADDRESS: Final = re.compile(
 
 
 class TriggerKind(StrEnum):
-    """How a trigger's pattern is meant to be read."""
+    """How a trigger's pattern is meant to be read.
+
+    ``TEMPLATE`` is a phrase with slots in it — «поставь громкость на {volume}».
+    It matches through a regex like ``REGEX`` does, and the named groups it fills
+    are the slot values, but the pattern is compiled by
+    :func:`ayris.nlu.slots.compile_slots` rather than by the user. Kept as its own
+    kind rather than folded into ``REGEX`` so the settings window can validate it
+    with the right error messages and so a stray brace in a plain phrase stays a
+    stray brace instead of becoming a silent capture group.
+    """
 
     PHRASE = "phrase"
     REGEX = "regex"
+    TEMPLATE = "template"
 
 
 class MatchKind(StrEnum):
@@ -403,16 +413,27 @@ def trigger_from_db(
     The database keeps a trigger's weight in its ``priority`` column, which is
     what section 5.2 of the specification calls «приоритет (вес)»; the command's
     own priority is the one that outranks it, and it is passed in.
+
+    The payload names the pattern under exactly one of ``template``, ``regex`` or
+    ``phrase``, and that key is what decides how it is read. Checked in that order
+    because a template contains no regex syntax and a phrase contains no braces,
+    so a payload carrying two of them is a bug in whatever wrote it and the most
+    specific reading is the safe one.
     """
     from ayris.core.models import TriggerType
 
     if row.type is not TriggerType.VOICE:
         return None
     payload = row.payload
-    raw_pattern = payload.get("regex") or payload.get("phrase") or ""
+    raw_pattern = payload.get("template") or payload.get("regex") or payload.get("phrase") or ""
     if not isinstance(raw_pattern, str) or not raw_pattern.strip():
         return None
-    kind = TriggerKind.REGEX if payload.get("regex") else TriggerKind.PHRASE
+    if payload.get("template"):
+        kind = TriggerKind.TEMPLATE
+    elif payload.get("regex"):
+        kind = TriggerKind.REGEX
+    else:
+        kind = TriggerKind.PHRASE
     threshold = payload.get("threshold")
     weight = payload.get("weight")
     return Trigger(

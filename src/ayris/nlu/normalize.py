@@ -51,13 +51,16 @@ from dataclasses import dataclass
 from typing import Final
 
 __all__ = [
+    "CARDINAL_WORDS",
     "DEFAULT_ADDRESS_FORMS",
     "FILLER_WORDS",
+    "SCALE_WORDS",
     "NormalizedText",
     "fold_letters",
     "fold_yo",
     "normalize",
     "normalize_text",
+    "numeral_rank",
     "spoken_to_digits",
     "strip_address",
 ]
@@ -75,12 +78,23 @@ FILLER_WORDS: Final[frozenset[str]] = frozenset({"эй", "хэй", "хей", "о
 #: underscore, which is punctuation as far as speech is concerned.
 _PUNCTUATION: Final = re.compile(r"[^\w\s]|_", re.UNICODE)
 
+#: The percent sign, spelled out before punctuation is stripped. A user typing
+#: «на 10% тише» into the command library and a recogniser hearing «на десять
+#: процентов тише» mean the same thing, and dropping the sign as punctuation
+#: would leave the first one as a bare number — the one shape
+#: :class:`ayris.nlu.slot_types.VolumeType` cannot tell from an absolute step.
+_PERCENT_SIGN: Final = re.compile(r"%")
+
 _WHITESPACE: Final = re.compile(r"\s+")
 
 #: Numerals below one hundred and the hundreds, in the nominative plus the
 #: oblique forms that survive dictation: «на пятьдесят процентов», «двух минут».
 #: Feminine and neuter variants matter — «две минуты» is as common as «два часа».
-_UNITS: Final[dict[str, int]] = {
+#:
+#: Public because :mod:`ayris.nlu.numbers` parses the same words in a context
+#: where they must become an ``int`` rather than a substring, and two tables
+#: would drift apart the first time a case form is added to one of them.
+CARDINAL_WORDS: Final[dict[str, int]] = {
     "ноль": 0,
     "нуль": 0,
     "один": 1,
@@ -165,8 +179,9 @@ _UNITS: Final[dict[str, int]] = {
 }
 
 #: Multipliers. ``полтора`` is deliberately absent: it is not an integer and the
-#: slots of task 16 expect one.
-_SCALES: Final[dict[str, int]] = {
+#: slots of task 16 expect one. :mod:`ayris.nlu.numbers` handles it, on the side
+#: where a fraction is a valid answer.
+SCALE_WORDS: Final[dict[str, int]] = {
     "тысяча": 1_000,
     "тысячи": 1_000,
     "тысяч": 1_000,
@@ -181,12 +196,16 @@ _SCALES: Final[dict[str, int]] = {
 }
 
 
-def _rank(value: int) -> int:
+def numeral_rank(value: int) -> int:
     """Magnitude class of a numeral, used to decide whether words compose.
 
     Russian builds a number from strictly decreasing parts — hundreds, then
     tens, then units. Teens share the rank of units because nothing may follow
     them: ``пятнадцать пять`` is two numbers, not seventeen point something.
+
+    Public for :mod:`ayris.nlu.numbers`, which composes the same words under the
+    same rule while keeping a fraction and a sign that this module has no use
+    for.
     """
     if value >= 100:
         return 2
@@ -287,17 +306,17 @@ def spoken_to_digits(words: tuple[str, ...]) -> tuple[str, ...]:
         pending = False
 
     for word in words:
-        value = _UNITS.get(word)
+        value = CARDINAL_WORDS.get(word)
         if value is not None:
-            rank = _rank(value)
+            rank = numeral_rank(value)
             if rank >= last_rank:
                 flush()
             group += value
-            last_rank = _rank(value)
+            last_rank = numeral_rank(value)
             pending = True
             continue
 
-        scale = _SCALES.get(word)
+        scale = SCALE_WORDS.get(word)
         if scale is not None:
             # ``тысяча тысяча`` is not a number; neither is ``миллион миллиард``.
             # A scale must be smaller than the previous one to keep composing.
@@ -340,7 +359,7 @@ def normalize(
         The phrase folded, stripped, and — in :attr:`NormalizedText.text` —
         with its numerals rewritten as digits.
     """
-    folded = fold_letters(text)
+    folded = _PERCENT_SIGN.sub(" процентов ", fold_letters(text))
     cleaned = _WHITESPACE.sub(" ", _PUNCTUATION.sub(" ", folded)).strip()
     words = tuple(cleaned.split())
     if strip_wake_word and words:
