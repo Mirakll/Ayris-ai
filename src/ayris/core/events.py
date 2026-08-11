@@ -56,6 +56,9 @@ if TYPE_CHECKING:
     from ayris.core.state import AssistantState, MicMode
 
 __all__ = [
+    "COMMANDS_CHANGE_DELETED",
+    "COMMANDS_CHANGE_RELOADED",
+    "COMMANDS_CHANGE_SAVED",
     "DRAIN_BATCH",
     "TTS_REASON_CANCELLED",
     "TTS_REASON_COMPLETED",
@@ -66,6 +69,7 @@ __all__ = [
     "ActiveModelChanged",
     "AudioLevelChanged",
     "CancelRequested",
+    "CommandsChanged",
     "ConfigChanged",
     "Event",
     "EventBus",
@@ -106,6 +110,15 @@ DRAIN_BATCH: Final = 256
 TTS_REASON_COMPLETED: Final = "completed"
 TTS_REASON_CANCELLED: Final = "cancelled"
 TTS_REASON_ERROR: Final = "error"
+
+#: Values :attr:`CommandsChanged.change` takes. ``SAVED`` covers a new command
+#: and an edited one alike — the subscriber reloads that command either way, so
+#: telling the two apart would only give it a distinction to ignore.
+COMMANDS_CHANGE_SAVED: Final = "saved"
+COMMANDS_CHANGE_DELETED: Final = "deleted"
+#: The library as a whole moved: a profile switch, an import, an undo of a batch.
+#: :attr:`CommandsChanged.command_id` is ``None`` and everything is re-read.
+COMMANDS_CHANGE_RELOADED: Final = "reloaded"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -471,6 +484,20 @@ class ConfigChanged(Event):
     def touches(self, prefix: str) -> bool:
         """Whether anything under ``prefix`` changed, e.g. ``"voice.tts"``."""
         return self.diff.touches(prefix)
+
+
+@dataclass(frozen=True, slots=True)
+class CommandsChanged(Event):
+    """The command library changed and anything derived from it is now stale.
+
+    Published by the layer that writes commands, consumed by the trigger index:
+    a saved or deleted command names itself in :attr:`command_id` so only its
+    triggers get rebuilt, while ``reloaded`` leaves it ``None`` and means the
+    whole library moved — a profile switch, an import, an undo of a batch.
+    """
+
+    command_id: int | None = None
+    change: str = COMMANDS_CHANGE_SAVED
 
 
 @dataclass(frozen=True, slots=True)
