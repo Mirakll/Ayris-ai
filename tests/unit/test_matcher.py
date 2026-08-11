@@ -45,7 +45,9 @@ Groups:
 
 from __future__ import annotations
 
+import logging
 import re
+from collections.abc import Iterator
 
 import pytest
 
@@ -73,8 +75,29 @@ from ayris.nlu.matcher import (
     validate_pattern,
 )
 from ayris.nlu.normalize import normalize
+from ayris.utils.logger import ROOT_LOGGER_NAME
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture
+def ayris_log(caplog: pytest.LogCaptureFixture) -> Iterator[pytest.LogCaptureFixture]:
+    """Capture records from the ``ayris`` logger tree.
+
+    ``setup_logging`` sets ``propagate = False`` on that logger and ``caplog``
+    listens on the interpreter root, so a plain ``caplog.at_level`` sees nothing
+    once any earlier test in the run has configured logging. Attaching the
+    handler directly makes the assertion independent of test order.
+    """
+    logger = logging.getLogger(ROOT_LOGGER_NAME)
+    previous = logger.level
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(caplog.handler)
+    try:
+        yield caplog
+    finally:
+        logger.removeHandler(caplog.handler)
+        logger.setLevel(previous)
 
 
 def phrase(trigger_id: int, command_id: int, text: str, **kwargs: object) -> Trigger:
@@ -240,10 +263,9 @@ class TestPatterns:
     def test_compile_refuses_a_broken_pattern(self) -> None:
         assert compile_pattern("(открой") is None
 
-    def test_broken_pattern_is_logged(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level("WARNING", logger="ayris"):
-            assert compile_pattern("(открой") is None
-        assert "не компилируется" in caplog.text
+    def test_broken_pattern_is_logged(self, ayris_log: pytest.LogCaptureFixture) -> None:
+        assert compile_pattern("(открой") is None
+        assert "не компилируется" in ayris_log.text
 
 
 class TestExact:
