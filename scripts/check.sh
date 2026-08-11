@@ -89,6 +89,43 @@ stage() {
     rm -f "$log"
 }
 
+# Тесты - самая долгая проверка, и они ждут не процессор, а порождённые процессы.
+# Поэтому pytest уходит в фон, линтеры идут поверх него, и полный прогон
+# укладывается в ~120 с вместо ~155: без этого холодный mypy (31 с на пустом
+# /tmp) съедал весь запас до обрыва вызова на 178-й секунде.
+PYTEST_LOG=""
+PYTEST_PID=""
+pytest_start() {
+    PT=(-q --tb=short "--basetemp=/tmp/pt_${RANDOM}${RANDOM}_$$" -p no:cacheprovider)
+    if ((JOBS > 1)) && "$PY" -c 'import xdist' 2>/dev/null; then
+        PT+=(-n "$JOBS" --dist=load)
+    fi
+    # Без этой переменной rnnoise_available() отдаёт False, весь путь RNNoise
+    # молча уходит в noise gate, а TestRnnoise пропускается.
+    [[ -f $RNNOISE ]] && export AYRIS_RNNOISE_LIB="$RNNOISE"
+    PYTEST_LOG=$(mktemp /tmp/ayris-check-pytest-XXXXXX.log)
+    PYTEST_START=$(date +%s)
+    "$PY" -m pytest "${PT[@]}" "${PYTEST_ARGS[@]}" >"$PYTEST_LOG" 2>&1 &
+    PYTEST_PID=$!
+}
+
+pytest_wait() {
+    local spent
+    wait "$PYTEST_PID"
+    local code=$?
+    spent=$(($(date +%s) - PYTEST_START))
+    if ((code == 0)); then
+        printf '%-7s ok      %4ds  %s\n' pytest "$spent" "$(tail -n 1 "$PYTEST_LOG")"
+    else
+        printf '%-7s ПАДАЕТ  %4ds\n' pytest "$spent"
+        tail -n "$TAIL" "$PYTEST_LOG" | sed 's/^/  | /'
+        FAILED+=(pytest)
+    fi
+    rm -f "$PYTEST_LOG"
+}
+
+((RUN_TESTS)) && pytest_start
+
 if ((RUN_LINT)); then
     # Ровно те же цели, что в CI: src и tests. Расширять список нельзя, иначе
     # песочница краснеет там, где CI зелёный.
@@ -102,18 +139,7 @@ if ((RUN_LINT)); then
     stage mypy "$PY" -m mypy --cache-dir=/tmp/mypycache src
 fi
 
-if ((RUN_TESTS)); then
-    # basetemp каждый раз новый: переиспользованный путь роняет pytest на
-    # FileExistsError, а без него удаление tmp_path уходит в RecursionError.
-    PT=(-q --tb=short "--basetemp=/tmp/pt_${RANDOM}${RANDOM}_$$" -p no:cacheprovider)
-    if ((JOBS > 1)) && "$PY" -c 'import xdist' 2>/dev/null; then
-        PT+=(-n "$JOBS" --dist=load)
-    fi
-    # Без этой переменной rnnoise_available() отдаёт False, весь путь RNNoise
-    # молча уходит в noise gate, а TestRnnoise пропускается.
-    [[ -f $RNNOISE ]] && export AYRIS_RNNOISE_LIB="$RNNOISE"
-    stage pytest "$PY" -m pytest "${PT[@]}" "${PYTEST_ARGS[@]}"
-fi
+((RUN_TESTS)) && pytest_wait
 
 # Куски склеены, чтобы git grep не нашёл сам этот файл.
 SECRET_PAT='githu''b_pat_|gh''p_|sk-[A-Za-z0-9]{20}|BEGIN (RSA|OPENSSH|PRIVATE)'

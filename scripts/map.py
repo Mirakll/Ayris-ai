@@ -150,11 +150,14 @@ def _print_module(path: Path) -> None:
         elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and _is_public(node.name):
             fn_doc = _summary(node)
             _say(f"  {_signature(node)}" + (f"  # {fn_doc}" if fn_doc else ""))
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and _is_public(node.target.id)
+        ):
             # Модульные константы: SAMPLE_RATE, KNOWN_SLOTS и прочее, на что
             # ссылаются соседние модули.
-            if _is_public(node.target.id):
-                _say(f"  {node.target.id}: {ast.unparse(node.annotation)}")
+            _say(f"  {node.target.id}: {ast.unparse(node.annotation)}")
 
 
 def _print_events() -> None:
