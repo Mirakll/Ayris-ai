@@ -105,6 +105,29 @@ def _milliseconds(call: Callable[[], object], repeats: int) -> float:
     return best * 1000.0
 
 
+def _best_ratio(
+    fast: Callable[[], object],
+    slow: Callable[[], object],
+    *,
+    rounds: int,
+    between: Callable[[], object] = lambda: None,
+) -> float:
+    """Best ``fast / slow`` over interleaved pairs of measurements.
+
+    Two separate best-of runs would compare a lucky sample against an unlucky
+    one: the sandbox has two cores and the suite runs in eight processes, so
+    whichever measurement happens to be preempted loses. Pairing them and
+    keeping the best round means one unpreempted round is enough.
+    """
+    best = float("inf")
+    for _ in range(rounds):
+        quick = _milliseconds(fast, 1)
+        between()
+        whole = _milliseconds(slow, 1)
+        best = min(best, quick / whole)
+    return best
+
+
 class TestMatchBudget:
     def test_the_library_is_the_size_it_claims(self, big_index: TriggerIndex) -> None:
         assert len(big_index) >= 1000
@@ -226,13 +249,19 @@ class TestIndexBudget:
         # to five times slower than the machine these numbers were taken on.
         triggers = [entry.trigger for entry in big_index.snapshot().all_triggers()]
         fresh = TriggerIndex()
-        rebuild = _milliseconds(lambda: fresh.replace_all(triggers), 3)
 
         replacement = [Trigger(id=1, command_id=0, pattern="совсем другая фраза для команды ноль")]
         original = list(big_index.triggers_for(0))
         try:
-            elapsed = _milliseconds(lambda: big_index.update_command(0, replacement), 5)
-            assert elapsed < rebuild / 3.0
+            ratio = _best_ratio(
+                lambda: big_index.update_command(0, replacement),
+                lambda: fresh.replace_all(triggers),
+                rounds=5,
+                # Every round must edit the same library, so put the original
+                # triggers back before the next one — untimed.
+                between=lambda: big_index.update_command(0, original),
+            )
+            assert ratio < 1 / 3.0, f"правка стоит {ratio:.0%} полной пересборки"
         finally:
             big_index.update_command(0, original)
 
