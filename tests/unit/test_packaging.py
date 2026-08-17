@@ -7,6 +7,11 @@ forgotten in the other means the sandbox, CI and a developer machine each type-c
 and test against a different library — the kind of drift that surfaces as an
 unreproducible failure weeks later.
 
+``requirements-ci-nodeps.txt`` is the same list for packages CI installs with
+``--no-deps``, so its pins are checked alongside the others — and the workflow is
+checked for actually passing that flag, because dropping it silently pulls a
+hundred megabytes of transitive dependencies onto three runners.
+
 These tests are cheap and run everywhere, so the drift is caught at commit time.
 """
 
@@ -21,6 +26,8 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 REQUIREMENTS_CI = PROJECT_ROOT / "requirements-ci.txt"
+REQUIREMENTS_CI_NODEPS = PROJECT_ROOT / "requirements-ci-nodeps.txt"
+WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
 
 #: ``name==version`` with the extras/markers tail ignored.
 _PIN = re.compile(r"^(?P<name>[A-Za-z0-9._-]+)\s*==\s*(?P<version>[^\s;#]+)")
@@ -53,12 +60,16 @@ def _pyproject_pins() -> dict[str, str]:
 
 
 def _requirements_pins() -> dict[str, str]:
-    return _parse_pins(REQUIREMENTS_CI.read_text(encoding="utf-8").splitlines())
+    """Every pin CI installs, from both requirements files at once."""
+    pins = _parse_pins(REQUIREMENTS_CI.read_text(encoding="utf-8").splitlines())
+    pins.update(_parse_pins(REQUIREMENTS_CI_NODEPS.read_text(encoding="utf-8").splitlines()))
+    return pins
 
 
 @pytest.mark.unit
 def test_requirements_ci_exists() -> None:
     assert REQUIREMENTS_CI.is_file(), "requirements-ci.txt пропал — CI не соберётся"
+    assert REQUIREMENTS_CI_NODEPS.is_file(), "requirements-ci-nodeps.txt пропал — CI не соберётся"
 
 
 @pytest.mark.unit
@@ -82,6 +93,30 @@ def test_ci_requirements_match_pyproject() -> None:
         "версии разошлись между pyproject.toml и requirements-ci.txt "
         f"(pyproject, requirements-ci): {mismatched}"
     )
+
+
+@pytest.mark.unit
+def test_the_nodeps_requirements_are_installed_without_dependencies() -> None:
+    """Every job that installs requirements must install both files, the second
+    one with ``--no-deps``.
+
+    Without the flag pip resolves pyrnnoise's ``Requires-Dist`` and drags
+    matplotlib, audiolab and av onto all three runners — and, worse, gets a say in
+    the numpy version the tests then run against. The flag is easy to lose while
+    editing yaml, and nothing else would notice: the suite would still be green,
+    just slower and pinned differently.
+    """
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    installs = [line.strip() for line in workflow.splitlines() if "pip install" in line]
+
+    plain = [line for line in installs if "-r requirements-ci.txt" in line]
+    nodeps = [line for line in installs if "-r requirements-ci-nodeps.txt" in line]
+    assert len(nodeps) == len(plain) > 0, (
+        f"requirements-ci.txt ставится в {len(plain)} местах, "
+        f"requirements-ci-nodeps.txt — в {len(nodeps)}"
+    )
+    without_flag = [line for line in nodeps if "--no-deps" not in line]
+    assert not without_flag, f"без --no-deps: {without_flag}"
 
 
 @pytest.mark.unit

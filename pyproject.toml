@@ -37,6 +37,12 @@ dependencies = [
     "sounddevice==0.5.1",
     "numpy==1.26.4",
     "webrtcvad-wheels==2.0.14",
+    # Ships a prebuilt RNNoise for win_amd64, manylinux и macOS; ayris.audio.denoise
+    # берёт из пакета только саму библиотеку через ctypes, его питонью обёртку — нет.
+    # Поэтому CI ставит его из requirements-ci-nodeps.txt с --no-deps: matplotlib и
+    # audiolab нужны обёртке, а не нам. Отсутствие пакета не ошибка — шумоподавление
+    # тогда уходит в noise gate.
+    "pyrnnoise==0.4.3",
     # --- Wake word ---
     "openwakeword==0.6.0",
     # --- STT ---

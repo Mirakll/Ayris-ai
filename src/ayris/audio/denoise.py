@@ -5,9 +5,10 @@ everywhere.
 
 **RNNoise** is a small recurrent network trained on noisy speech; it removes
 keyboard clatter and fan hum that a level-based gate cannot touch, and it costs
-about 1% of a core.  It is a compiled C library, so it is an *optional*
-dependency: Ayris looks for it, uses it when it is there, and says so in the
-settings window when it is not.  Nothing breaks in its absence, which is the
+about 1% of a core.  It is a compiled C library, so it stays an *optional*
+dependency even though the ``pyrnnoise`` wheel ships a prebuilt one for the
+platforms we target: Ayris looks for it, uses it when it is there, and says so in
+the settings window when it is not.  Nothing breaks in its absence, which is the
 whole point of :func:`create_denoiser`.
 
 **The gate** is the fallback and the "spectral" setting in
@@ -43,6 +44,7 @@ from abc import ABC, abstractmethod
 from array import array
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from ayris.audio.capture import MIN_DBFS, TARGET_SAMPLE_RATE, Resampler
@@ -93,6 +95,13 @@ _LIBRARY_NAMES: Final = (
     "librnnoise.so",
     "librnnoise.dylib",
 )
+
+#: Package that ships a prebuilt RNNoise next to its Python code.  ``pip install
+#: pyrnnoise`` puts ``rnnoise.dll`` (Windows) or ``librnnoise.so`` (Linux, macOS)
+#: inside the package directory, where the plain names above never find it: the
+#: dynamic loader does not search site-packages.  Looked up by path, without
+#: importing the package - its own module builds a wrapper we do not use.
+_BUNDLED_PACKAGE: Final = "pyrnnoise"
 
 #: How far a band is pulled down when it sits at the noise floor.  12 dB is the
 #: usual compromise: audibly quieter, still not a hole in the recording that
@@ -435,10 +444,10 @@ class NoiseGate(Denoiser):
 class RnnoiseDenoiser(Denoiser):
     """RNNoise through :mod:`ctypes`, with the resampling it needs around it.
 
-    The library is loaded lazily and by name - there is no Python package to
-    depend on, users install it from their distribution or drop a DLL next to
-    Ayris - so :func:`rnnoise_library` is where "is it available" is decided,
-    and this class simply refuses to construct without one.
+    The library is loaded lazily and by name or path - it may come from the
+    ``pyrnnoise`` wheel, from the distribution, or as a DLL dropped next to Ayris
+    - so :func:`rnnoise_library` is where "is it available" is decided, and this
+    class simply refuses to construct without one.
 
     Two adaptations sit around the call.  RNNoise runs at 48 kHz while capture
     runs at 16 kHz, so audio is resampled up and back; and it insists on exactly
@@ -709,18 +718,23 @@ class DenoiseStream:
 def rnnoise_library() -> Any:
     """Load the RNNoise shared library, or return ``None``.
 
-    Tried in order: the path in :data:`RNNOISE_LIB_ENV`, then the plain library
-    names.  Failures are logged at debug level and swallowed - a missing
-    optional dependency is not an error, it is the common case.
+    Tried in order: the path in :data:`RNNOISE_LIB_ENV`, then the library shipped
+    inside :data:`_BUNDLED_PACKAGE`, then the plain library names for a
+    system-wide install.  Failures are logged at debug level and swallowed - a
+    missing optional dependency is not an error, it is the common case.
     """
     import ctypes
 
-    candidates = [os.environ.get(RNNOISE_LIB_ENV, "").strip(), *_LIBRARY_NAMES]
+    candidates = [
+        os.environ.get(RNNOISE_LIB_ENV, "").strip(),
+        *_bundled_libraries(),
+        *_LIBRARY_NAMES,
+    ]
     for candidate in candidates:
         if not candidate:
             continue
         try:
-            lib = ctypes.CDLL(candidate)
+            lib = ctypes.CDLL(str(candidate))
         except OSError as exc:
             _log.debug("RNNoise: %s not loadable (%s)", candidate, exc)
             continue
@@ -732,6 +746,30 @@ def rnnoise_library() -> Any:
         _log.info("RNNoise загружена: %s", candidate)
         return lib
     return None
+
+
+def _bundled_libraries() -> list[Path]:
+    """Absolute paths to the library inside an installed ``pyrnnoise``, if any.
+
+    Uses :mod:`importlib.util` rather than an import: finding the spec locates
+    the package directory without executing its ``__init__``, which pulls in
+    NumPy and builds a wrapper of its own.  An absent package is the common case
+    and returns an empty list.
+    """
+    import importlib.util
+
+    try:
+        spec = importlib.util.find_spec(_BUNDLED_PACKAGE)
+    except (ImportError, ValueError):  # pragma: no cover - a broken install
+        return []
+    if spec is None or not spec.submodule_search_locations:
+        return []
+    return [
+        path
+        for root in spec.submodule_search_locations
+        for name in _LIBRARY_NAMES
+        if (path := Path(root) / name).is_file()
+    ]
 
 
 def _declare(lib: Any) -> None:

@@ -25,6 +25,8 @@ Groups:
 * :class:`TestSegmentation` — the acceptance criteria of the task.
 * :class:`TestSegmenterControl` — stats, reset, reconfiguration, forced close.
 * :class:`TestDenoise` — passthrough, the gate, the RNNoise fallback, timing.
+* :class:`TestRnnoiseLookup` — where the library is searched for, and what a
+  missing one costs.
 * :class:`TestRnnoise` — the RNNoise path itself; skipped without the library.
 * :class:`TestCalibration` — noise profile, verdicts, recommendations, report.
 * :class:`TestWorkerWiring` — parameters in, bus events out.
@@ -33,6 +35,7 @@ Groups:
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import math
 import wave
@@ -55,6 +58,7 @@ from ayris.audio.calibration import (
 )
 from ayris.audio.capture import TARGET_SAMPLE_RATE, pcm_level
 from ayris.audio.denoise import (
+    RNNOISE_LIB_ENV,
     DenoiseEngine,
     DenoiseMode,
     DenoiseSettings,
@@ -62,9 +66,11 @@ from ayris.audio.denoise import (
     NoiseGate,
     Passthrough,
     RnnoiseDenoiser,
+    _bundled_libraries,
     create_denoiser,
     denoise_pcm,
     rnnoise_available,
+    rnnoise_library,
 )
 from ayris.audio.segmenter import (
     EndReason,
@@ -626,14 +632,73 @@ class TestDenoise:
 # ----------------------------------------------------------------------
 
 
+class TestRnnoiseLookup:
+    """Where the shared library is looked for.
+
+    This is what decides whether the group below runs at all, so it is tested
+    apart from it: until ``pyrnnoise`` went into ``requirements-ci-nodeps.txt``
+    the search only knew plain library names, the loader never looks inside
+    site-packages, and every RNNoise assertion was skipped on all three runners.
+    """
+
+    def test_the_wheel_ships_the_library_and_it_is_found(self):
+        """``pip install pyrnnoise`` must be enough — no environment variable."""
+        if importlib.util.find_spec("pyrnnoise") is None:  # pragma: no cover - it is pinned
+            pytest.skip("pyrnnoise не установлен")
+        found = _bundled_libraries()
+        assert found, "колесо кладёт библиотеку рядом со своим кодом"
+        for path in found:
+            assert path.is_file()
+            assert path.parent.name == "pyrnnoise"
+
+    def test_it_loads_without_the_environment_override(self, monkeypatch):
+        if importlib.util.find_spec("pyrnnoise") is None:  # pragma: no cover - it is pinned
+            pytest.skip("pyrnnoise не установлен")
+        monkeypatch.delenv(RNNOISE_LIB_ENV, raising=False)
+        assert rnnoise_library() is not None
+
+    def test_a_wrong_override_does_not_hide_the_wheel(self, monkeypatch):
+        """A stale path in the variable must not switch RNNoise off."""
+        if importlib.util.find_spec("pyrnnoise") is None:  # pragma: no cover - it is pinned
+            pytest.skip("pyrnnoise не установлен")
+        monkeypatch.setenv(RNNOISE_LIB_ENV, "/no/such/librnnoise.so")
+        assert rnnoise_library() is not None
+
+    def test_without_the_package_the_search_is_empty_rather_than_loud(self, monkeypatch):
+        def absent(name: str) -> None:
+            return None
+
+        monkeypatch.setattr(importlib.util, "find_spec", absent)
+        assert _bundled_libraries() == []
+
+    def test_a_package_without_a_directory_is_ignored(self, monkeypatch):
+        """A namespace package, or a module that is a single file."""
+        spec = importlib.util.spec_from_loader("pyrnnoise", loader=None)
+
+        def flat(name: str) -> object:
+            return spec
+
+        monkeypatch.setattr(importlib.util, "find_spec", flat)
+        assert _bundled_libraries() == []
+
+    def test_a_broken_install_is_not_an_exception_either(self, monkeypatch):
+        def explode(name: str) -> None:
+            raise ValueError(f"{name}.__spec__ is not set")
+
+        monkeypatch.setattr(importlib.util, "find_spec", explode)
+        assert _bundled_libraries() == []
+
+
 @pytest.mark.skipif(not rnnoise_available(), reason="RNNoise не установлена на этой машине")
 class TestRnnoise:
     """The RNNoise path itself, not the fallback around it.
 
-    Skipped wherever the library is missing — which includes CI — so these
-    assertions are about what RNNoise does when it is really loaded, and can be
-    strict about it. To run them, point :data:`RNNOISE_LIB_ENV` at the shared
-    library; see the note about ``_tools/rnnoise`` in ``CLAUDE.md``.
+    Runs wherever the library can be loaded, which since ``pyrnnoise`` landed in
+    ``requirements-ci-nodeps.txt`` means all three runners as well as the sandbox
+    — so these assertions are about what RNNoise does when it is really loaded,
+    and can be strict about it. Still skipped rather than failed on a machine
+    without it: the dependency stays optional on purpose. To point at a library
+    elsewhere, use :data:`RNNOISE_LIB_ENV`.
     """
 
     def test_the_mode_selects_rnnoise_and_reports_no_fallback(self):
