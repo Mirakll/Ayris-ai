@@ -41,6 +41,14 @@ triggers were added: two runs over the same library give the same answer.
 :meth:`Matcher.match` returns the head of that list, or ``None``. The full list
 is what the DevTools tab of task 58 shows when a user asks why the wrong command
 fired.
+
+**Conditions are applied while candidates are collected, not after.** A trigger
+may carry conditions — an active window, a part of the day, a variable — and
+:meth:`Matcher.match` takes a ``predicate`` that drops the inactive ones. It has
+to run before ranking: a conditional trigger that wins on priority and only then
+fails its condition would leave the phrase unmatched, even though the trigger
+meant for the other application was sitting right there and would have matched.
+Filtering early also keeps the fuzzy sweep off triggers that cannot fire.
 """
 
 from __future__ import annotations
@@ -51,6 +59,12 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
 from ayris.nlu.normalize import DEFAULT_ADDRESS_FORMS, NormalizedText, fold_yo, normalize
+from ayris.nlu.trigger_filters import (
+    UNCONDITIONAL,
+    TriggerConditions,
+    conditions_from_payload,
+    context_predicate,
+)
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -58,7 +72,9 @@ if TYPE_CHECKING:
 
     from ayris.core.config import CommandsConfig
     from ayris.core.models import Trigger as DbTrigger
+    from ayris.nlu.context import ContextSnapshot
     from ayris.nlu.index import IndexedTrigger, IndexSnapshot, TriggerIndex
+    from ayris.nlu.trigger_filters import TriggerPredicate
 
 __all__ = [
     "DEFAULT_THRESHOLD",
@@ -145,6 +161,13 @@ class Trigger:
     ``threshold`` overrides :attr:`MatcherSettings.threshold` for this trigger
     alone: a phrase full of proper nouns can afford to be strict, a long one can
     afford not to be.
+
+    ``conditions`` is when the trigger is allowed to fire — the foreground window,
+    the part of the day, a variable. It sits on the trigger rather than being
+    looked up per phrase for the same reason ``priority`` does: matching may not
+    open the database, and parsing a JSON payload a thousand times per utterance
+    is the work the index exists to avoid. :data:`~ayris.nlu.trigger_filters.UNCONDITIONAL`
+    is shared, so the common case costs no allocation at all.
     """
 
     id: int
@@ -156,6 +179,7 @@ class Trigger:
     weight: float = 1.0
     priority: int = 0
     enabled: bool = True
+    conditions: TriggerConditions = UNCONDITIONAL
 
 
 @dataclass(frozen=True, slots=True)
@@ -419,6 +443,11 @@ def trigger_from_db(
     because a template contains no regex syntax and a phrase contains no braces,
     so a payload carrying two of them is a bug in whatever wrote it and the most
     specific reading is the safe one.
+
+    The ``when_*`` keys of the same payload become
+    :attr:`Trigger.conditions`. Read here, once per load, rather than at match
+    time: this is the only place a payload is in scope, and a condition parsed per
+    utterance would be a JSON walk on the hot path.
     """
     from ayris.core.models import TriggerType
 
@@ -446,6 +475,7 @@ def trigger_from_db(
         weight=float(weight) if isinstance(weight, int | float) else float(row.priority),
         priority=command_priority,
         enabled=enabled and bool(payload.get("enabled", True)),
+        conditions=conditions_from_payload(payload),
     )
 
 
@@ -496,28 +526,58 @@ class Matcher:
         """The index being matched against."""
         return self._index
 
-    def match(self, text: str | NormalizedText) -> MatchResult | None:
-        """Best match for a phrase, or ``None`` when nothing is close enough."""
-        results = self.match_all(text, limit=1)
+    def match(
+        self,
+        text: str | NormalizedText,
+        *,
+        predicate: TriggerPredicate | None = None,
+        context: ContextSnapshot | None = None,
+    ) -> MatchResult | None:
+        """Best match for a phrase, or ``None`` when nothing is close enough.
+
+        ``context`` is what makes «сохрани» mean different things in different
+        applications: hand over the snapshot taken at the start of the utterance and
+        the triggers whose conditions it fails stop being candidates. ``predicate``
+        is the general form of the same thing, for a caller with a restriction of
+        its own — the pipeline re-running one command, a test standing in for a
+        condition. Both may be given, and then both must be satisfied. Neither
+        costs anything when omitted.
+        """
+        results = self.match_all(text, limit=1, predicate=predicate, context=context)
         return results[0] if results else None
 
-    def match_all(self, text: str | NormalizedText, limit: int | None = None) -> list[MatchResult]:
+    def match_all(
+        self,
+        text: str | NormalizedText,
+        limit: int | None = None,
+        *,
+        predicate: TriggerPredicate | None = None,
+        context: ContextSnapshot | None = None,
+    ) -> list[MatchResult]:
         """Every trigger that fired, best first.
 
         Used by the DevTools tab and by the tests; the pipeline wants
         :meth:`match`. Fuzzy candidates are only collected when nothing matched
         exactly — an exact hit is the answer, and sweeping the library after
         finding one would spend milliseconds to change nothing.
+
+        Conditions are applied to every candidate before it is scored, so a
+        trigger whose conditions do not hold cannot win on priority and leave the
+        phrase with nothing — the trigger meant for the other window is still in
+        the running. It also means «nothing matched exactly» is judged after
+        filtering, so a conditional exact hit that is inactive still lets the fuzzy
+        sweep run.
         """
         phrase = normalize(text) if isinstance(text, str) else text
         if phrase.is_empty:
             return []
+        active = context_predicate(context, extra=predicate)
         snapshot = self._index.snapshot()
         results: list[MatchResult] = []
-        results.extend(self._match_exact(snapshot, phrase))
-        results.extend(self._match_regex(snapshot, phrase))
+        results.extend(self._match_exact(snapshot, phrase, active))
+        results.extend(self._match_regex(snapshot, phrase, active))
         if not results and self._settings.fuzzy_enabled:
-            results.extend(self._match_fuzzy(snapshot, phrase, skip=results))
+            results.extend(self._match_fuzzy(snapshot, phrase, skip=results, predicate=active))
         results.sort(key=lambda item: item.sort_key, reverse=True)
         cap = self._settings.max_results if limit is None else limit
         return results[:cap]
@@ -526,19 +586,31 @@ class Matcher:
     # strategies
     # ------------------------------------------------------------------
 
-    def _match_exact(self, snapshot: IndexSnapshot, phrase: NormalizedText) -> list[MatchResult]:
+    def _match_exact(
+        self,
+        snapshot: IndexSnapshot,
+        phrase: NormalizedText,
+        predicate: TriggerPredicate | None = None,
+    ) -> list[MatchResult]:
         return [
             self._result(entry, 1.0, MatchKind.EXACT, phrase, matched=entry.text)
-            for entry in snapshot.exact_candidates(phrase.text)
+            for entry in snapshot.exact_candidates(phrase.text, predicate)
         ]
 
-    def _match_regex(self, snapshot: IndexSnapshot, phrase: NormalizedText) -> list[MatchResult]:
+    def _match_regex(
+        self,
+        snapshot: IndexSnapshot,
+        phrase: NormalizedText,
+        predicate: TriggerPredicate | None = None,
+    ) -> list[MatchResult]:
         results: list[MatchResult] = []
         # The spoken form first: a pattern written with number words has to see
         # them. The digit form is a fallback, so ``\d+`` also works for a user
         # who says the number out loud.
         subjects = (phrase.spoken, phrase.text) if phrase.has_numerals else (phrase.text,)
-        for entry in snapshot.regex_triggers():
+        # Filtered before the search rather than after: running a pattern only to
+        # discard the match is the one cost the predicate exists to avoid.
+        for entry in snapshot.regex_triggers(predicate):
             pattern = entry.regex
             if pattern is None:
                 continue
@@ -569,6 +641,7 @@ class Matcher:
         snapshot: IndexSnapshot,
         phrase: NormalizedText,
         skip: Sequence[MatchResult],
+        predicate: TriggerPredicate | None = None,
     ) -> list[MatchResult]:
         settings = self._settings
         if not settings.fuzzy_enabled:
@@ -578,7 +651,7 @@ class Matcher:
             return []
         seen = {result.trigger_id for result in skip}
         results: list[MatchResult] = []
-        for entry in snapshot.fuzzy_candidates(query, settings.threshold):
+        for entry in snapshot.fuzzy_candidates(query, settings.threshold, predicate):
             if entry.trigger.id in seen:
                 continue
             required = entry.trigger.threshold

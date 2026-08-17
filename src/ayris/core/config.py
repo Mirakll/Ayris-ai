@@ -749,6 +749,30 @@ class CommandsConfig(ConfigSection):
         default=False,
         description="Проговаривать начало выполнения долгой команды",
     )
+    followup_ttl_s: float = Field(
+        default=30.0,
+        ge=0.0,
+        le=600.0,
+        description="Сколько секунд можно продолжать разговор без обращения по имени",
+    )
+    object_ttl_s: float = Field(
+        default=60.0,
+        ge=0.0,
+        le=3600.0,
+        description="Сколько секунд «его» и «это» указывают на последний объект",
+    )
+    answer_ttl_s: float = Field(
+        default=600.0,
+        ge=0.0,
+        le=86400.0,
+        description="Сколько секунд «повтори» ещё возвращает последний ответ",
+    )
+    clarify_timeout_s: float = Field(
+        default=20.0,
+        ge=0.0,
+        le=300.0,
+        description="Сколько ждать ответа на уточняющий вопрос",
+    )
 
 
 #: Fields of :class:`HotkeysConfig` that hold a combo, in settings-tab order.

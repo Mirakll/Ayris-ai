@@ -64,6 +64,7 @@ if TYPE_CHECKING:
     from ayris.nlu.matcher import MatchResult
     from ayris.nlu.slot_types import SlotContext, SlotTypeRegistry
     from ayris.nlu.slots import SlotSet
+    from ayris.nlu.trigger_filters import TriggerConditions, TriggerPredicate
 
 __all__ = [
     "GRAM_SIZE",
@@ -127,6 +128,23 @@ class IndexedTrigger:
     slots: SlotTemplate | None = None
 
     @property
+    def conditions(self) -> TriggerConditions:
+        """When this trigger may fire, as parsed when it was loaded.
+
+        Forwarded from the trigger rather than stored a second time: the matcher's
+        predicate reads it per candidate, and a property on a slotted dataclass is
+        an attribute lookup either way. Keeping one copy also means
+        :meth:`TriggerIndex.set_priority` and friends, which rewrite the trigger in
+        place, cannot leave the conditions pointing at a stale one.
+        """
+        return self.trigger.conditions
+
+    @property
+    def is_conditional(self) -> bool:
+        """Whether anything has to hold for this trigger to be a candidate."""
+        return not self.trigger.conditions.is_empty
+
+    @property
     def length(self) -> int:
         """Length of the normalised phrase, for the fuzzy threshold ramp."""
         return len(self.text)
@@ -176,9 +194,31 @@ class IndexSnapshot:
     generation: int
     templates: dict[int, IndexedTrigger] = field(default_factory=dict)
 
-    def exact_candidates(self, text: str) -> tuple[IndexedTrigger, ...]:
-        """Triggers spelled exactly like this. One hash, usually one result."""
-        return self.exact.get(text, ())
+    def exact_candidates(
+        self,
+        text: str,
+        predicate: TriggerPredicate | None = None,
+    ) -> tuple[IndexedTrigger, ...]:
+        """Triggers spelled exactly like this. One hash, usually one result.
+
+        ``predicate`` drops the ones whose conditions do not hold — the trigger
+        written for Photoshop when the foreground window is a text editor. It is
+        applied here rather than by the caller so that «сохрани» with two spellings
+        behaves the same way whichever of them the user said.
+        """
+        found = self.exact.get(text, ())
+        if predicate is None or not found:
+            return found
+        return tuple(entry for entry in found if predicate(entry))
+
+    def conditional_triggers(self) -> tuple[IndexedTrigger, ...]:
+        """Every published entry carrying a condition, in trigger-id order.
+
+        For DevTools and for the tests: «why did this trigger never fire» is
+        answered by the conditions on it, and finding them by walking the whole
+        library is what this saves.
+        """
+        return tuple(entry for entry in self.all_triggers() if entry.is_conditional)
 
     def slot_template(self, trigger_id: int) -> SlotTemplate | None:
         """The template a trigger was compiled from, or ``None`` when it has none.
@@ -207,11 +247,26 @@ class IndexSnapshot:
         template = self.slot_template(result.trigger_id)
         return None if template is None else template.bind(result.raw_groups, context)
 
-    def regex_triggers(self) -> tuple[IndexedTrigger, ...]:
-        """Every compiled pattern, in index order."""
-        return self.regexes
+    def regex_triggers(
+        self,
+        predicate: TriggerPredicate | None = None,
+    ) -> tuple[IndexedTrigger, ...]:
+        """Every compiled pattern, in index order, minus the inactive ones.
 
-    def fuzzy_candidates(self, text: str, threshold: float) -> list[IndexedTrigger]:
+        Filtering here rather than after the search is what saves the work: a
+        pattern that cannot fire should not be run, and the regex sweep is the
+        second most expensive thing the matcher does.
+        """
+        if predicate is None:
+            return self.regexes
+        return tuple(entry for entry in self.regexes if predicate(entry))
+
+    def fuzzy_candidates(
+        self,
+        text: str,
+        threshold: float,
+        predicate: TriggerPredicate | None = None,
+    ) -> list[IndexedTrigger]:
         """Triggers that could still clear ``threshold``, cheapest test first.
 
         Both tests share one number: ``edits``, the distance the pair may be
@@ -235,6 +290,11 @@ class IndexSnapshot:
         ``threshold`` must be the *lowest* any trigger could ask for, since a
         per-trigger override may be looser than the global setting; the matcher
         passes its base threshold, and per-trigger overrides are checked after.
+
+        ``predicate`` drops the triggers whose conditions do not hold, and it runs
+        last of the three tests on purpose: it is a Python call, while the other
+        two are integer comparisons, so it is cheapest to ask it only about the
+        handful of candidates that survived the arithmetic.
         """
         grams = text_grams(text)
         if not grams:
@@ -259,8 +319,11 @@ class IndexSnapshot:
             edits = distance_ceiling(threshold, length if length > query_length else query_length)
             if length - query_length > edits or query_length - length > edits:
                 continue
-            if count >= max(query_grams, len(entry.grams)) - GRAM_SIZE * edits:
-                candidates.append(entry)
+            if count < max(query_grams, len(entry.grams)) - GRAM_SIZE * edits:
+                continue
+            if predicate is not None and not predicate(entry):
+                continue
+            candidates.append(entry)
         # Longest first: a long trigger is the likelier intent behind a long
         # phrase, and it lets the caller's early exit tighten sooner.
         candidates.sort(key=lambda item: (-item.length, item.trigger.id))
