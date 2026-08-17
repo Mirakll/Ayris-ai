@@ -51,10 +51,9 @@ Groups:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -94,8 +93,9 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.unit
 
 #: Moscow, and midday. Same reasoning as ``test_timeparse``: no DST, and both
-#: readings of a bare hour available so the resolver's rules are exercised.
-MSK = ZoneInfo("Europe/Moscow")
+#: readings of a bare hour available so the resolver's rules are exercised. As a
+#: plain offset, not a named zone — Windows has no system tz database.
+MSK = timezone(timedelta(hours=3))
 NOON = datetime(2026, 8, 11, 12, 0, tzinfo=MSK)
 
 #: The shipped dictionary, read once. Every ``{app}`` test resolves against the

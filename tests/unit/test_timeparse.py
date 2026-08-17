@@ -1,10 +1,10 @@
 """Task 16: clock readings and durations, as people say them out loud.
 
 Nothing here reads the system clock. Every test pins ``now`` to a literal moment
-with an explicit :class:`~zoneinfo.ZoneInfo`, and that is not tidiness: the CI
-runners are UTC, the user's machine is not, and «в семь» resolves differently
-depending on which side of noon it was said on. A test that took the real time
-would pass here and fail in CI three hours later, or the other way round.
+with an explicit offset, and that is not tidiness: the CI runners are UTC, the
+user's machine is not, and «в семь» resolves differently depending on which side
+of noon it was said on. A test that took the real time would pass here and fail
+in CI three hours later, or the other way round.
 
 Three decisions are the whole of the module's guessing, and each has its own
 group below.
@@ -38,8 +38,7 @@ Groups:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -55,10 +54,14 @@ from ayris.nlu.timeparse import (
     resolve_clock,
 )
 
-#: The timezone every test pins to. Moscow has no DST, so a literal moment here
-#: means one thing forever — which is the point: an offset that shifts twice a
-#: year would make «в семь» resolve differently in March than in October.
-MSK = ZoneInfo("Europe/Moscow")
+#: The timezone every test pins to: Moscow, written as a plain offset. Moscow has
+#: no DST, so a literal moment here means one thing forever — which is the point,
+#: an offset that shifts twice a year would make «в семь» resolve differently in
+#: March than in October. Not ``ZoneInfo("Europe/Moscow")``, because Windows has
+#: no system tz database: there ``zoneinfo`` needs the ``tzdata`` wheel, and the
+#: windows runners collected this module with ``ZoneInfoNotFoundError``. A named
+#: zone would buy nothing over UTC+3, which Moscow has kept since 2014.
+MSK = timezone(timedelta(hours=3))
 
 #: Midday, Tuesday 11 August 2026. Noon so that both readings of a bare hour are
 #: available: one has passed and one has not, which is the case the resolver's
