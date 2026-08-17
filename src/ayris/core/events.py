@@ -53,6 +53,7 @@ if TYPE_CHECKING:
     # annotations`` keeps these names unevaluated, and no dataclass field needs
     # the real class at runtime.
     from ayris.core.paths import ModelKind
+    from ayris.core.pipeline_states import PipelineState
     from ayris.core.state import AssistantState, MicMode
 
 __all__ = [
@@ -85,6 +86,7 @@ __all__ = [
     "ModelRemoved",
     "NotificationRequested",
     "OnlineStatusChanged",
+    "PipelineStateChanged",
     "SpeechEnded",
     "SpeechStarted",
     "TimerFired",
@@ -309,6 +311,25 @@ class ModeChanged(Event):
     state: AssistantState
     previous: AssistantState
     mic_mode: MicMode
+    detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class PipelineStateChanged(Event):
+    """The dispatcher moved between the stages of one request.
+
+    Finer-grained than :class:`ModeChanged`: the overlay only needs to know
+    whether Ayris is listening or thinking, while DevTools and the trace want to
+    see ``transcribing`` and ``understanding`` apart. ``session_id`` is empty
+    only for the return to ``idle`` that ends a session, so a subscriber can
+    always tell which attempt a state belongs to.
+
+    Published by :class:`ayris.core.pipeline.Pipeline`.
+    """
+
+    state: PipelineState
+    previous: PipelineState
+    session_id: str = ""
     detail: str = ""
 
 
