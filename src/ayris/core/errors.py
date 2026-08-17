@@ -16,8 +16,19 @@ showing an English traceback fragment to the user.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 __all__ = [
     "ActionError",
+    "ActionNotFound",
+    "ActionParamsInvalid",
+    "ActionRequiresAdmin",
+    "ActionTimeout",
+    "ActionUnavailable",
     "AudioError",
     "AyrisError",
     "ConfigError",
@@ -26,6 +37,7 @@ __all__ = [
     "LlmError",
     "MacroError",
     "ModelError",
+    "ParamProblem",
     "PermissionDeniedError",
     "PluginError",
     "ProfileError",
@@ -138,9 +150,93 @@ class ModelError(AyrisError):
 
 
 class ActionError(AyrisError):
-    """A registered action failed during execution."""
+    """A registered action failed during execution.
+
+    The action layer is the one place where a typed error is not a convenience
+    but a requirement: :meth:`ayris.actions.registry.ActionRegistry.execute`
+    wraps *everything* an action can raise into a subclass of this, so a caller
+    - the pipeline, a macro, a plugin - never has to catch bare ``Exception`` to
+    stay alive.
+
+    The subclasses below exist because the caller reacts differently to each:
+    a missing action is a library problem to show in the editor, invalid
+    parameters are a form to fix, a timeout is worth retrying, and missing rights
+    are worth an elevation prompt (task 39).
+    """
 
     default_user_message = "Не удалось выполнить команду."
+
+    @property
+    def user_message_ru(self) -> str:
+        """Alias of :attr:`AyrisError.user_message`.
+
+        The action layer and the plugin SDK spell the Russian channel out in the
+        field name, because a plugin author has no reason to know that
+        ``user_message`` is Russian by convention. Same string, one storage.
+        """
+        return self.user_message
+
+
+class ActionNotFound(ActionError):
+    """No action is registered under that name."""
+
+    default_user_message = "Не знаю такого действия."
+
+
+@dataclass(frozen=True, slots=True)
+class ParamProblem:
+    """One rejected parameter: which field, and what is wrong with it in Russian.
+
+    Kept structured rather than pre-formatted because the same list feeds three
+    places: the log line, the phrase Ayris says, and the editor, which highlights
+    the offending field and needs its name apart from the complaint.
+    """
+
+    field: str
+    message: str
+
+    def __str__(self) -> str:
+        return f"{self.field}: {self.message}" if self.field else self.message
+
+
+class ActionParamsInvalid(ActionError):
+    """Parameters failed validation against the action's schema."""
+
+    default_user_message = "Не поняла параметры команды."
+
+    def __init__(
+        self,
+        technical: str,
+        *,
+        problems: Sequence[ParamProblem] = (),
+        user_message: str | None = None,
+        recoverable: bool = True,
+    ) -> None:
+        super().__init__(technical, user_message=user_message, recoverable=recoverable)
+        self.problems: tuple[ParamProblem, ...] = tuple(problems)
+
+    @property
+    def fields(self) -> tuple[str, ...]:
+        """Names of the fields that were rejected, in the order pydantic saw them."""
+        return tuple(problem.field for problem in self.problems if problem.field)
+
+
+class ActionTimeout(ActionError):
+    """The action did not finish inside :attr:`ActionMeta.timeout_ms`."""
+
+    default_user_message = "Действие не успело выполниться."
+
+
+class ActionRequiresAdmin(ActionError):
+    """The action is marked ``require_admin`` and Ayris is not elevated."""
+
+    default_user_message = "Для этого нужны права администратора."
+
+
+class ActionUnavailable(ActionError):
+    """The action cannot run here: wrong OS, missing dependency, no hardware."""
+
+    default_user_message = "Это действие сейчас недоступно."
 
 
 class MacroError(AyrisError):

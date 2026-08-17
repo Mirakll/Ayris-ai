@@ -216,11 +216,17 @@ class IntentMatched(Event):
 
 @dataclass(frozen=True, slots=True)
 class ActionStarted(Event):
-    """A registered action began executing."""
+    """A registered action began executing.
+
+    ``params`` arrives already masked: the registry replaces anything the action's
+    schema marks secret before publishing, because the bus is mirrored into the
+    DevTools log view where a token would otherwise be readable on screen.
+    """
 
     action: str
     command_id: int | None = None
     request_id: str = ""
+    params: JsonObject = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,6 +237,7 @@ class ActionFinished(Event):
     result: str = ""
     duration_ms: int = 0
     request_id: str = ""
+    ok: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +248,7 @@ class ActionFailed(Event):
     error: str
     user_message: str = ""
     request_id: str = ""
+    reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)

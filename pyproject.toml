@@ -180,6 +180,12 @@ ignore = [
 # единообразно и mypy ругается на несовместимое переопределение. Половине типов
 # контекст не нужен, но выкинуть его из подписи нельзя.
 "src/ayris/nlu/slot_types.py" = ["ARG002"]
+# N818 требует суффикс Error у исключений. Ошибки слоя действий названы в ТЗ
+# (ActionTimeout, ActionNotFound, ActionParamsInvalid, ActionRequiresAdmin,
+# ActionUnavailable) и этими же именами торчат в SDK плагинов: переименовать —
+# значит разойтись со спецификацией и с чужим кодом. Базовый ActionError суффикс
+# имеет, так что тип ошибки на месте вызова всё равно очевиден.
+"src/ayris/core/errors.py" = ["N818"]
 
 [tool.ruff.lint.flake8-builtins]
 # ayris/core/secrets.py, ayris/core/profile.py и ayris/nlu/numbers.py
