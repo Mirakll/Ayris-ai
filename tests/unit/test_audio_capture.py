@@ -1188,9 +1188,23 @@ class TestWorker:
     def test_a_read_cannot_put_an_unbounded_blob_on_the_pipe(
         self, worker: AudioWorker, backend: FakeBackend
     ):
-        for _ in range(100):
-            backend.stream.feed(tone(1600))
-        assert wait_for(lambda: worker.status({})["buffered_ms"] >= 10_000)
+        # Двенадцать блоков по секунде: столько влезает и в приёмную очередь
+        # (она роняет блок после сотни), и в тридцатисекундный ринг, а мелкая
+        # нарезка под нагрузкой теряла четыре пятых поданного. Дальше ждём
+        # разбора, подкидывая по кадру на каждый опрос: пауза без новых блоков
+        # длиннее тика монитора выглядит как отключённый микрофон, и сторож
+        # закрывает поток вместе с буфером. Ожидание щедрое — через DSP надо
+        # протолкнуть 160 000 отсчётов чистым питоном, и под покрытием в восемь
+        # процессов это ощутимо дольше секунды.
+        second = tone(TARGET_SAMPLE_RATE)
+        for _ in range(12):
+            backend.stream.feed(second)
+
+        def drained() -> bool:
+            backend.stream.feed(tone(1))
+            return bool(worker.status({})["buffered_ms"] >= 10_000)
+
+        assert wait_for(drained, timeout=30.0)
         assert worker.read({"ms": 999_999})["frames"] <= TARGET_SAMPLE_RATE * 10
 
     def test_control_methods_report_the_new_state(self, worker: AudioWorker):
