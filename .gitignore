@@ -119,3 +119,4 @@ CLAUDE.md
 
 # hookify-правила (локальные, не для репозитория)
 .claude/*.local.md
+.claude/settings.local.json
