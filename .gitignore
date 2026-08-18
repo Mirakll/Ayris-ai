@@ -116,3 +116,6 @@ egress-allowlist.txt
 claude-egress.reg
 *.reg
 CLAUDE.md
+
+# hookify-правила (локальные, не для репозитория)
+.claude/*.local.md

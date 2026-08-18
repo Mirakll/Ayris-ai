@@ -186,6 +186,10 @@ ignore = [
 # значит разойтись со спецификацией и с чужим кодом. Базовый ActionError суффикс
 # имеет, так что тип ошибки на месте вызова всё равно очевиден.
 "src/ayris/core/errors.py" = ["N818"]
+# Ошибки действий продолжают тот же ряд: AppNotFound рядом с ActionNotFound,
+# DesktopUnavailable рядом с ActionUnavailable. Дать им суффикс Error значило бы
+# завести два стиля имён в одной иерархии — все они наследуют ActionError.
+"src/ayris/actions/system/*.py" = ["N818"]
 
 [tool.ruff.lint.flake8-builtins]
 # ayris/core/secrets.py, ayris/core/profile.py и ayris/nlu/numbers.py
