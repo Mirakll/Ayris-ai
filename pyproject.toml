@@ -47,9 +47,15 @@ dependencies = [
     "openwakeword==0.6.0",
     # --- STT ---
     "vosk==0.3.45",
-    "faster-whisper==1.1.1",
+    # 1.2 сменила API стрима: было `synthesize_stream_raw`, стало
+    # `synthesize` с чанками. Движок умеет оба (`_vendor_stream`), но пин
+    # держим на новом: под ним идут тесты на настоящих весах.
+    "faster-whisper==1.2.1",
     # --- TTS ---
-    "piper-tts==1.2.0",
+    # 1.7 избавилась от piper-phonemize: зависимости теперь только
+    # onnxruntime и pathvalidate, оба с колёсами под windows-раннеры.
+    # Ради этого джоб test-models и стал возможен.
+    "piper-tts==1.7.0",
     # --- LLM clients ---
     "httpx==0.28.1",
     "openai==1.60.0",
@@ -279,6 +285,8 @@ markers = [
     "unit: быстрые изолированные тесты",
     "integration: тесты с реальными подсистемами",
     "gui: требует QApplication",
+    "models: требует скачанных весов движка, но не железа",
+    "network: ходит в интернет к чужим серверам",
     "hardware: требует реального аудио-устройства или монитора",
     "slow: длительные тесты",
 ]

@@ -7,10 +7,17 @@ forgotten in the other means the sandbox, CI and a developer machine each type-c
 and test against a different library — the kind of drift that surfaces as an
 unreproducible failure weeks later.
 
-``requirements-ci-nodeps.txt`` is the same list for packages CI installs with
-``--no-deps``, so its pins are checked alongside the others — and the workflow is
-checked for actually passing that flag, because dropping it silently pulls a
-hundred megabytes of transitive dependencies onto three runners.
+Two more files are the same list under different install flags, so their pins are
+checked alongside the others:
+
+* ``requirements-ci-nodeps.txt`` — installed with ``--no-deps``, and the workflow
+  is checked for actually passing that flag, because dropping it silently pulls a
+  hundred megabytes of transitive dependencies onto three runners.
+* ``requirements-ci-models.txt`` — the speech engines, installed in the one job
+  that downloads weights, and checked for being installed with
+  ``-c requirements-ci.txt``: without the constraint pip raises numpy past the
+  project's pin to satisfy scipy, and that job silently stops testing the
+  environment the application actually runs in.
 
 These tests are cheap and run everywhere, so the drift is caught at commit time.
 """
@@ -27,6 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 REQUIREMENTS_CI = PROJECT_ROOT / "requirements-ci.txt"
 REQUIREMENTS_CI_NODEPS = PROJECT_ROOT / "requirements-ci-nodeps.txt"
+REQUIREMENTS_CI_MODELS = PROJECT_ROOT / "requirements-ci-models.txt"
 WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "ci.yml"
 
 #: ``name==version`` with the extras/markers tail ignored.
@@ -60,9 +68,10 @@ def _pyproject_pins() -> dict[str, str]:
 
 
 def _requirements_pins() -> dict[str, str]:
-    """Every pin CI installs, from both requirements files at once."""
+    """Every pin CI installs, from all three requirements files at once."""
     pins = _parse_pins(REQUIREMENTS_CI.read_text(encoding="utf-8").splitlines())
     pins.update(_parse_pins(REQUIREMENTS_CI_NODEPS.read_text(encoding="utf-8").splitlines()))
+    pins.update(_parse_pins(REQUIREMENTS_CI_MODELS.read_text(encoding="utf-8").splitlines()))
     return pins
 
 
@@ -70,6 +79,7 @@ def _requirements_pins() -> dict[str, str]:
 def test_requirements_ci_exists() -> None:
     assert REQUIREMENTS_CI.is_file(), "requirements-ci.txt пропал — CI не соберётся"
     assert REQUIREMENTS_CI_NODEPS.is_file(), "requirements-ci-nodeps.txt пропал — CI не соберётся"
+    assert REQUIREMENTS_CI_MODELS.is_file(), "requirements-ci-models.txt пропал — CI не соберётся"
 
 
 @pytest.mark.unit
@@ -117,6 +127,32 @@ def test_the_nodeps_requirements_are_installed_without_dependencies() -> None:
     )
     without_flag = [line for line in nodeps if "--no-deps" not in line]
     assert not without_flag, f"без --no-deps: {without_flag}"
+
+
+@pytest.mark.unit
+def test_the_engine_requirements_are_installed_under_constraints() -> None:
+    """The weights job must install the engines with ``-c requirements-ci.txt``.
+
+    openwakeword asks for scipy and scikit-learn — it imports them only in its
+    training code, but pip does not know that — and their current releases require
+    ``numpy>=2.3``. Without a constraints file pip resolves that by quietly
+    raising numpy past the project's own pin of 1.26.4, and the job stays green
+    while testing an environment nobody ships. With it, pip either finds versions
+    that fit or fails loudly, which is the outcome we want.
+
+    Only the weights job installs this file, so unlike the other two the count is
+    not compared against anything: one place is correct.
+    """
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    installs = [
+        line.strip()
+        for line in workflow.splitlines()
+        if "pip install" in line and "-r requirements-ci-models.txt" in line
+    ]
+
+    assert installs, "requirements-ci-models.txt не ставится ни в одном джобе"
+    without_constraint = [line for line in installs if "-c requirements-ci.txt" not in line]
+    assert not without_constraint, f"без -c requirements-ci.txt: {without_constraint}"
 
 
 @pytest.mark.unit

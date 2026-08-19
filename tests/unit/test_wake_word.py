@@ -17,15 +17,16 @@ are built from two vowels rather than one.
 
 Neither is the shipped engine. openWakeWord, Porcupine and Vosk all need weights
 or a vendor key that the repository deliberately does not contain, so the tests
-that touch them carry the ``hardware`` marker and CI skips them; what is checked
-here without them is that selecting a missing engine produces a sentence for the
-user instead of an ImportError at startup.
+that touch them carry the ``models`` marker and run only where the weights were
+downloaded; what is checked without them is that selecting a missing engine
+produces a sentence for the user instead of an ImportError at startup.
 
 Groups:
 
 * :class:`TestFixtures` — the ``wake_*.wav`` files are what the rest assumes.
 * :class:`TestWakePhrase` — validation and the sensitivity-to-threshold curve.
 * :class:`TestEngineRegistry` — names, lazy imports, missing libraries.
+* :class:`TestCatalogLayout` — the catalog's file names are the engine's.
 * :class:`TestEngineContract` — what the base class guarantees to the manager.
 * :class:`TestDetector` — thresholds and per-phrase sensitivity, on scores.
 * :class:`TestDebounce` — one utterance, one activation.
@@ -81,6 +82,7 @@ from ayris.audio.wake_word.porcupine import PorcupineEngine
 from ayris.audio.wake_word.vosk_kws import VoskKwsEngine
 from ayris.core.errors import WakeWordError
 from ayris.core.secrets import SecretsStore, reset_secrets
+from ayris.models.catalog import catalog_dir, load_catalog
 from ayris.workers.audio_worker import (
     _wake_access_key,
     _wake_settings_from_params,
@@ -1376,14 +1378,76 @@ class _FakeKeyring:
         del self._entries[service_name, username]
 
 
-@pytest.mark.hardware
+class TestCatalogLayout:
+    """The names the catalog writes are the names the engine looks for.
+
+    Two halves of the application meet on a file name and nothing else: the model
+    manager saves an artifact under :attr:`ModelEntry.target`, and
+    :class:`OpenWakeWordEngine` looks for ``<phrase with underscores>.onnx`` in
+    the models folder.  Nothing in either module makes them agree, and they did
+    not: the release asset is called ``hey_jarvis_v0.1.onnx``, so a user who
+    installed the phrase through the settings window got a file the engine then
+    refused to find.
+
+    Checked on empty files on purpose - only the name is the subject, and empty
+    files mean this runs everywhere, not just where the weights are.
+    """
+
+    #: Feature models :meth:`OpenWakeWordEngine._feature_models` needs, by
+    #: catalog id.  Both are shared by every phrase, so a rename here breaks all
+    #: of them at once.
+    FEATURE_FILES: ClassVar[dict[str, str]] = {
+        "oww-melspectrogram": "melspectrogram.onnx",
+        "oww-embedding": "embedding_model.onnx",
+    }
+
+    #: Phrase models, and the phrase each one answers.
+    PHRASE_FILES: ClassVar[dict[str, str]] = {
+        "oww-hey-jarvis": "hey jarvis",
+        "oww-alexa": "alexa",
+    }
+
+    @staticmethod
+    def _installed(tmp_path: Path) -> Path:
+        """A models folder laid out the way the installer would lay it out."""
+        directory = catalog_dir()
+        if not directory.is_dir():  # pragma: no cover - only in a stripped checkout
+            pytest.skip("resources/models отсутствует")
+        models_dir = tmp_path / "wake"
+        models_dir.mkdir()
+        for entry in load_catalog(directory).for_engine("wake", "openwakeword"):
+            (models_dir / entry.target).touch()
+        return models_dir
+
+    def test_the_feature_models_are_where_the_engine_looks(self, tmp_path: Path) -> None:
+        models_dir = self._installed(tmp_path)
+
+        found = OpenWakeWordEngine._feature_models(models_dir, "onnx")
+
+        assert set(found) == {"melspec_model_path", "embedding_model_path"}
+        assert {Path(value).name for value in found.values()} == set(self.FEATURE_FILES.values())
+
+    @pytest.mark.parametrize("catalog_id", sorted(PHRASE_FILES))
+    def test_a_phrase_model_is_found_by_its_phrase(self, catalog_id: str, tmp_path: Path) -> None:
+        """The catalog id is not the point; the phrase the user says is."""
+        models_dir = self._installed(tmp_path)
+        phrase = WakePhrase(self.PHRASE_FILES[catalog_id])
+
+        resolved = OpenWakeWordEngine()._resolve(phrase, models_dir)
+
+        assert Path(resolved).is_file()
+        assert Path(resolved).stem == phrase.text.replace(" ", "_")
+
+
+@pytest.mark.models
 class TestRealEngines:
-    """Needs vendor libraries and model weights; excluded from CI.
+    """Needs vendor libraries and model weights, but no device.
 
     The weights are not committed - openWakeWord's are tens of megabytes and
     Porcupine's need a licence - so these run only where somebody has installed
-    them. What CI checks instead is that selecting a missing engine produces a
-    sentence rather than an ImportError, which is in
+    them: a developer's machine, or the ``test-models`` CI job for the ones the
+    catalogue can fetch. What the ordinary jobs check instead is that selecting a
+    missing engine produces a sentence rather than an ImportError, which is in
     :class:`TestStats.test_load_failure_is_visible_not_fatal`.
 
     Point ``AYRIS_TEST_WAKE_MODELS`` at a folder of ``.onnx`` files named after

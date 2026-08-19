@@ -21,7 +21,7 @@ from ayris.core import paths as paths_module
 from ayris.core import secrets as secrets_module
 from ayris.utils import logger as logger_module
 
-#: Variables that point the ``hardware`` tests at locally downloaded weights.
+#: Variables that point the ``models`` tests at locally downloaded weights.
 #: They share the settings prefix but are not settings, so the isolation fixture
 #: below leaves them alone.
 HARNESS_ENV_PREFIX = f"{config_module.ENV_PREFIX}TEST_"
@@ -37,7 +37,7 @@ def _isolated_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
     monkeypatch.delenv(paths_module.PORTABLE_ENV_VAR, raising=False)
     # Settings read AYRIS_* variables; a stray one would silently override the
     # default a test is asserting on.  AYRIS_TEST_* is the exception: those name
-    # model directories for the ``hardware`` tests, no settings field is called
+    # model directories for the ``models`` tests, no settings field is called
     # ``test_*``, and wiping them made every one of those tests skip itself even
     # on a machine where the weights were sitting right there.
     for name in [key for key in os.environ if key.startswith(config_module.ENV_PREFIX)]:
@@ -68,7 +68,7 @@ def ascii_weights() -> Iterator[Callable[[Path], Path]]:
 
     Vosk and CTranslate2 hand the path to a C++ library as UTF-8 bytes, which
     Windows then reads back through the ANSI code page - so a checkout in a
-    folder like ``E:\\мистер бит ест рис`` is unopenable, and the ``hardware``
+    folder like ``E:\\мистер бит ест рис`` is unopenable, and the ``models``
     tests that use real weights could only ever be skipped here.  Production
     handles this by asking Windows for the 8.3 spelling (see
     :func:`ayris.core.paths.native_path`) and refusing with a clear message when

@@ -120,3 +120,9 @@ CLAUDE.md
 # hookify-правила (локальные, не для репозитория)
 .claude/*.local.md
 .claude/settings.local.json
+
+# --- Веса моделей ---
+# Кэш скачанных весов для тестов с маркером models: scripts/fetch_models.py
+# кладёт сюда, actions/cache в CI указывает на этот же путь. Это гигабайты
+# чужих файлов, в репозитории им не место.
+.models-cache/

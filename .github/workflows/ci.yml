@@ -81,10 +81,13 @@ jobs:
           python -m pip install -e . --no-deps
 
       - name: pytest
-        # hardware — тесты, которым нужен настоящий микрофон или монитор;
-        # на раннере их нет, поэтому они исключены и остаются для ручного прогона.
+        # hardware — тесты, которым нужен настоящий микрофон, динамики или
+        # монитор; на раннере их нет, они остаются для ручного прогона.
+        # models — тесты на скачанных весах; для них есть джоб test-models.
+        # network — ходят к чужим серверам; там же, где веса, чтобы падение
+        # чужого сайта не красило четыре джоба сразу.
         run: >
-          pytest -m "not hardware"
+          pytest -m "not hardware and not models and not network"
           --cov --cov-report=xml --cov-report=term-missing
           --junitxml=junit/pytest-${{ matrix.python }}.xml
 
@@ -134,4 +137,59 @@ jobs:
         # На Linux часть подсистем недоступна принципиально (WinAPI, реестр,
         # Credential Manager). Такие тесты сами скипаются по sys.platform.
         # Прогон здесь нужен, чтобы совпадать с тем, что проверяется в песочнице.
-        run: pytest -m "not hardware"
+        run: pytest -m "not hardware and not models"
+
+  test-models:
+    name: Тесты на настоящих весах / Windows
+    runs-on: windows-latest
+    # Восемь тестов, которые проверяют то, чего заглушка проверить не может:
+    # что Vosk распознаёт фикстуру, что Piper выдаёт звук нужной длины, что
+    # openWakeWord загружается. Пока они не шли нигде, кроме машины
+    # разработчика, в путях к моделям спокойно жили пять багов — и все пять
+    # всплыли в тот день, когда веса наконец скачали. Отдельный джоб, а не
+    # matrix: веса нужны один раз, а не на каждую версию python.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-ci.txt
+            requirements-ci-nodeps.txt
+            requirements-ci-models.txt
+
+      - name: Установить зависимости
+        # -c: без файла ограничений pip поднимает numpy выше пина проекта, чтобы
+        # угодить scipy из зависимостей openwakeword. Подробнее — в комментарии
+        # внутри requirements-ci-models.txt.
+        run: |
+          python -m pip install -r requirements-ci.txt
+          python -m pip install --no-deps -r requirements-ci-nodeps.txt
+          python -m pip install -c requirements-ci.txt -r requirements-ci-models.txt
+          python -m pip install -e . --no-deps
+
+      - name: Кэш весов
+        # Ключ — по самим файлам каталога: поменялся адрес или sha256, значит
+        # кэш недействителен. Иначе — ни одного байта из сети, и джоб идёт
+        # столько же, сколько обычный.
+        uses: actions/cache@v4
+        with:
+          path: .models-cache
+          key: models-${{ hashFiles('resources/models/*.json') }}-whisper-tiny
+
+      - name: Скачать веса
+        # Через собственный каталог проекта, а не curl: так проверяется и сама
+        # машинерия — адреса живы, sha256 совпадают, архив распаковывается,
+        # файлы ложатся под именами, которые потом ищут движки. Последнее и было
+        # сломано у openWakeWord.
+        run: python scripts/fetch_models.py
+
+      - name: pytest
+        run: pytest -m "models"
+
+      - name: Окружение то, что заявлено
+        # Проверка на подмену пинов при установке: numpy должен остаться тем,
+        # который стоит в pyproject.toml, а не тем, который потребовал scipy.
+        run: python -m pip check

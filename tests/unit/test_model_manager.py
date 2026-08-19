@@ -1,6 +1,9 @@
 """Task 14: the model manager, on mocked HTTP and a temporary disk.
 
-Not one test here opens a socket. :class:`httpx.MockTransport` goes in through
+Only one test here opens a socket, and it is marked ``network`` for it:
+:meth:`TestShippedCatalog.test_every_url_is_still_there`, which asks whether the
+twenty-two addresses in the shipped catalog still answer. Everything else is
+offline. :class:`httpx.MockTransport` goes in through
 :class:`~ayris.models.downloader.Downloader`'s ``transport=`` seam, so the
 requests the downloader *would* have sent are inspected as objects — which is the
 only way to assert the thing that actually matters about resume: that the second
@@ -16,7 +19,8 @@ and that every entry is well-formed — see :class:`TestShippedCatalog`.
 Groups:
 
 * :class:`TestCatalog` — parsing, validation and the error a broken file gives.
-* :class:`TestShippedCatalog` — ``resources/models/*.json`` really loads.
+* :class:`TestShippedCatalog` — ``resources/models/*.json`` loads, and its
+  addresses are still live (that one test is marked ``network``).
 * :class:`TestDownload` — the happy path, progress and the staged result.
 * :class:`TestResume` — interruption, ``Range``, ``If-Range`` and a changed file.
 * :class:`TestIntegrity` — a mismatched digest deletes the file and raises.
@@ -497,6 +501,9 @@ class TestCatalog:
 class TestShippedCatalog:
     """``resources/models/*.json`` must parse — it ships with the application."""
 
+    #: One test in here opens a socket and the rest do not, so the marker sits on
+    #: the method rather than the class.
+
     def test_every_shipped_file_loads(self) -> None:
         directory = catalog_dir()
         if not directory.is_dir():  # pragma: no cover - only in a stripped checkout
@@ -506,6 +513,51 @@ class TestShippedCatalog:
 
         assert len(catalog) > 0
         assert len(set(catalog.ids)) == len(catalog)
+
+    @pytest.mark.network
+    def test_every_url_is_still_there(self) -> None:
+        """Every address in the catalog answers, with the size the catalog claims.
+
+        The one test here that opens a socket, and the reason it is worth the
+        exception: these are twenty-two links to somebody else's files. Upstream
+        renames a release asset, Hugging Face moves a voice, and nothing in the
+        repository changes — the failure lands on a user's first run, in the one
+        moment when the application has nothing to fall back on. A ``HEAD`` per
+        entry costs a couple of seconds and moves that discovery here.
+
+        Sizes are compared but digests are not: verifying sha256 means
+        downloading two gigabytes, which belongs to the job that installs the
+        weights, not to a liveness check.
+        """
+        directory = catalog_dir()
+        if not directory.is_dir():  # pragma: no cover - only in a stripped checkout
+            pytest.skip("resources/models отсутствует")
+
+        broken: list[str] = []
+        with httpx.Client(follow_redirects=True, timeout=30.0) as client:
+            for entry in load_catalog(directory):
+                for file in entry.files:
+                    try:
+                        response = client.head(file.url)
+                    except httpx.HTTPError as exc:
+                        broken.append(f"{entry.id}/{file.target}: {type(exc).__name__} {exc}")
+                        continue
+                    if response.status_code != httpx.codes.OK:
+                        broken.append(f"{entry.id}/{file.target}: HTTP {response.status_code}")
+                        continue
+                    # Не у всякого сервера есть Content-Length на HEAD; если он
+                    # есть, он обязан совпасть - иначе файл на том же адресе
+                    # заменили другим, и sha256 не сойдётся уже у пользователя.
+                    length = response.headers.get("content-length")
+                    if length is not None and int(length) != file.size_bytes:
+                        broken.append(
+                            f"{entry.id}/{file.target}: {length} байт "
+                            f"вместо {file.size_bytes} из каталога"
+                        )
+
+        assert not broken, "адреса в каталоге больше не отдают то, что заявлено:\n" + "\n".join(
+            broken
+        )
 
     def test_the_default_stt_model_is_offered(self) -> None:
         """The settings default has to be installable, or a fresh profile is stuck."""

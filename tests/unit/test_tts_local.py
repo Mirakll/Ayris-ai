@@ -9,8 +9,9 @@ tone of a predictable length, and the stub is the stricter subject — it lets a
 assertion say "the worker loaded the voice exactly once", which no real Piper
 would let us see.
 
-Anything that needs a real ``.onnx`` on disk carries ``@pytest.mark.hardware``
-and is skipped everywhere except a machine that has one.
+Anything that needs a real ``.onnx`` on disk carries ``@pytest.mark.models``
+and is skipped everywhere except a machine that has one — including the CI job
+that downloads the voice from the catalogue.
 
 The player has its own file, :mod:`tests.unit.test_tts_player`, because its
 subject is a device rather than a model.
@@ -806,7 +807,7 @@ class TestPiperEngine:
                 TtsOptions(),
             )
 
-    @pytest.mark.hardware
+    @pytest.mark.models
     def test_a_real_voice_speaks(self):  # pragma: no cover - needs a model
         """Piper on real weights: audio comes out, and it is the right shape.
 

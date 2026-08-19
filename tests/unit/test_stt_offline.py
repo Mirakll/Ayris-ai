@@ -9,8 +9,9 @@ of that is exercised here on a stub engine that returns a fixed transcript, and 
 stub is in fact the stricter test — it lets an assertion say "the worker called
 ``load`` exactly once", which no real model would let us see.
 
-What genuinely needs a model carries ``@pytest.mark.hardware`` and is skipped
-everywhere except a developer's machine that has one.
+What genuinely needs a model carries ``@pytest.mark.models``: the weights are
+not in the repository, so those tests run where somebody downloaded them — a
+developer's machine, or the CI job that fetches them from the catalogue.
 
 The audio comes from ``tests/fixtures/audio/stt_*.wav``, synthesised by
 ``make_fixtures.py`` next to them: a command, a sentence and an empty room.  The
@@ -1666,15 +1667,16 @@ class TestRegistryWiring:
         assert completed.stdout.strip() == "[]", completed.stdout
 
 
-@pytest.mark.hardware
+@pytest.mark.models
 class TestRealEngines:
-    """Needs a vendor library and model weights; excluded from CI.
+    """Needs a vendor library and model weights, but no device.
 
     A Vosk model is fifty megabytes and a Whisper one is a gigabyte, so neither
-    is committed and neither exists on a runner.  These run where somebody has
-    downloaded one, and they check the single thing a stub cannot: that the real
-    library, on real weights, answers the real fixtures the way the contract
-    above says it must.
+    is committed.  These run where somebody has downloaded one — a developer's
+    machine, or the ``test-models`` CI job, which fetches the weights through the
+    project's own catalogue — and they check the single thing a stub cannot: that
+    the real library, on real weights, answers the real fixtures the way the
+    contract above says it must.
 
     Two variables, not one: a Vosk model is a directory with ``am`` inside and a
     faster-whisper one is a CTranslate2 export with ``model.bin``, so a single

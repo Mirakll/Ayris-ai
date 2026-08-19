@@ -33,7 +33,8 @@
       "description": "Готовая фраза активации. Требует обе общие части движка.",
       "url": "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/hey_jarvis_v0.1.onnx",
       "sha256": "94a13cfe60075b132f6a472e7e462e8123ee70861bc3fb58434a73712ee0d2cb",
-      "size_bytes": 1271370
+      "size_bytes": 1271370,
+      "target": "hey_jarvis.onnx"
     },
     {
       "id": "oww-alexa",
@@ -44,7 +45,8 @@
       "description": "Ещё одна готовая фраза активации, самая точная из набора.",
       "url": "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1/alexa_v0.1.onnx",
       "sha256": "6ff566a01d12670e8d9e3c59da32651db1575d17272a601b7f8a39283dfbae3e",
-      "size_bytes": 854246
+      "size_bytes": 854246,
+      "target": "alexa.onnx"
     },
     {
       "id": "silero-vad",
