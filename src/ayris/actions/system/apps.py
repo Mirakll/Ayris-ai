@@ -60,6 +60,7 @@ __all__ = [
     "LaunchRequest",
     "RunApp",
     "WinApiLauncher",
+    "executable_stem",
     "get_launcher",
     "set_launcher",
 ]
@@ -303,13 +304,18 @@ def app_windows(
     otherwise — a Store application runs inside ``ApplicationFrameHost.exe`` along
     with every other Store application, so its process name identifies nothing.
     """
-    stem = _executable_stem(candidate)
+    stem = executable_stem(candidate)
     query = WindowQuery(process=stem) if stem else WindowQuery(title=candidate.name)
     return [record for record in backend.list_windows() if query.matches(record)]
 
 
-def _executable_stem(candidate: AppCandidate) -> str:
-    """Process name to look for, without ``.exe``, or ``""`` for Store apps."""
+def executable_stem(candidate: AppCandidate) -> str:
+    """Process name to look for, without ``.exe``, or ``""`` for Store apps.
+
+    Public because a resolved program has to be matched against process names in
+    more than one place — windows here, mixer sessions in
+    :mod:`ayris.actions.system.audio` — and two copies of this would drift.
+    """
     app = candidate.app
     if app is not None:
         if app.is_store:

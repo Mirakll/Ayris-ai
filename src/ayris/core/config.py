@@ -3,10 +3,11 @@
 The schema mirrors the settings window one-to-one, so a tab is a section and a
 control is a field: :class:`GeneralConfig`, :class:`VoiceConfig` (with ``stt``,
 ``tts``, ``wake`` and ``audio_input`` inside it), :class:`AiConfig`,
-:class:`HotkeysConfig`, :class:`OverlayConfig`, :class:`PluginsConfig`,
-:class:`PrivacyConfig`, :class:`PerformanceConfig`, :class:`UpdatesConfig` and
-:class:`DevtoolsConfig`. Adding a control means adding a field, and the TOML
-file, the environment overrides and the change diff follow for free.
+:class:`ActionsConfig`, :class:`HotkeysConfig`, :class:`OverlayConfig`,
+:class:`PluginsConfig`, :class:`PrivacyConfig`, :class:`PerformanceConfig`,
+:class:`UpdatesConfig` and :class:`DevtoolsConfig`. Adding a control means adding
+a field, and the TOML file, the environment overrides and the change diff follow
+for free.
 
 Three properties are worth knowing before touching this module.
 
@@ -66,7 +67,9 @@ __all__ = [
     "ENV_PREFIX",
     "RAM_LIMIT_CHOICES",
     "SCHEMA_VERSION",
+    "ActionsConfig",
     "AiConfig",
+    "AudioActionsConfig",
     "AudioInputConfig",
     "CommandsConfig",
     "ConfigChange",
@@ -775,6 +778,32 @@ class CommandsConfig(ConfigSection):
     )
 
 
+class AudioActionsConfig(ConfigSection):
+    """Sub-section ``[actions.audio]`` — how far one «громче» moves the volume.
+
+    Ten percent is what the media keys on most keyboards do; five is inaudible
+    over a video and twenty overshoots. The same step serves the microphone: a
+    user who says «микрофон тише» means the same size of change they mean for
+    the speakers.
+    """
+
+    volume_step: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="На сколько процентов «громче» и «тише» меняют громкость",
+    )
+
+
+class ActionsConfig(ConfigSection):
+    """Tab «Действия» — what the action library reads out of the settings."""
+
+    audio: AudioActionsConfig = Field(
+        default_factory=AudioActionsConfig,
+        description="Громкость и звуковые устройства",
+    )
+
+
 #: Fields of :class:`HotkeysConfig` that hold a combo, in settings-tab order.
 _HOTKEY_FIELDS: Final[tuple[str, ...]] = (
     "push_to_talk",
@@ -1065,6 +1094,7 @@ class Settings(BaseSettings):
     general: GeneralConfig = Field(default_factory=GeneralConfig, description="Общие")
     voice: VoiceConfig = Field(default_factory=VoiceConfig, description="Голос")
     commands: CommandsConfig = Field(default_factory=CommandsConfig, description="Команды")
+    actions: ActionsConfig = Field(default_factory=ActionsConfig, description="Действия")
     ai: AiConfig = Field(default_factory=AiConfig, description="ИИ / LLM")
     hotkeys: HotkeysConfig = Field(default_factory=HotkeysConfig, description="Горячие клавиши")
     overlay: OverlayConfig = Field(default_factory=OverlayConfig, description="Оверлей")
@@ -1097,6 +1127,7 @@ _SECTION_TITLES: Final[tuple[tuple[str, str], ...]] = (
     ("general", "Общие: язык, тема, автозапуск, поведение окна"),
     ("voice", "Голос: распознавание, синтез, слово активации, микрофон"),
     ("commands", "Команды: сопоставление фраз и ограничения выполнения"),
+    ("actions", "Действия: шаг громкости и прочие настройки системных действий"),
     ("ai", "ИИ / LLM: режимы, поставщик, промпты, память"),
     ("hotkeys", "Горячие клавиши помощника"),
     ("overlay", "Оверлей: положение, вид, анимации"),
