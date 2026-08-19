@@ -1172,9 +1172,17 @@ class TestSchemas:
         assert build_schema(SetAudioDevice).require_admin is False
 
 
+@pytest.mark.hardware
 @pytest.mark.skipif(sys.platform != "win32", reason="needs a real sound stack")
 class TestLiveAudio:
-    """Read-only against the machine's own WASAPI. Nothing here changes a setting."""
+    """Read-only against the machine's own WASAPI. Nothing here changes a setting.
+
+    Marked ``hardware`` because that is what it is: a runner has no sound card at
+    all, so «прочитал громкость» there means «наткнулся на отсутствие устройства».
+    The pycaw code path itself *is* checked in CI — by
+    :meth:`TestBackendSeams.test_on_windows_the_real_backend_is_the_default`,
+    which needs the library imported and not a speaker plugged in.
+    """
 
     def test_the_master_volume_reads_back_as_a_percentage(self) -> None:
         set_audio_backend(None)
