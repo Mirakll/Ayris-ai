@@ -341,11 +341,12 @@ class TestShortcutParser:
 
     def test_a_shortcut_is_its_own_target(self) -> None:
         """``ShellExecuteW`` reads the ``.lnk`` itself, COM and all."""
-        app = parse_shortcut(Path("/menu/Telegram.lnk"))
+        path = Path("/menu/Telegram.lnk")
+        app = parse_shortcut(path)
         assert app is not None
         assert app.name == "Telegram"
-        assert app.target == "/menu/Telegram.lnk"
-        assert app.icon == "/menu/Telegram.lnk"
+        assert app.target == str(path)
+        assert app.icon == str(path)
         assert app.source is IndexSource.START_MENU
         assert app.is_shortcut
 
