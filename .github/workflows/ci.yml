@@ -137,7 +137,7 @@ jobs:
         # На Linux часть подсистем недоступна принципиально (WinAPI, реестр,
         # Credential Manager). Такие тесты сами скипаются по sys.platform.
         # Прогон здесь нужен, чтобы совпадать с тем, что проверяется в песочнице.
-        run: pytest -m "not hardware and not models"
+        run: pytest -m "not hardware and not models and not network"
 
   test-models:
     name: Тесты на настоящих весах / Windows

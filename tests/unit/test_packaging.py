@@ -20,6 +20,11 @@ checked alongside the others:
   environment the application actually runs in.
 
 These tests are cheap and run everywhere, so the drift is caught at commit time.
+The workflow itself is read as text for the same reason: yaml has no way to say
+"this flag matters", and the two flags that matter here (``--no-deps``, ``-c``) are
+invisible when lost. The pytest marker expressions are checked in the same spirit —
+a marker excluded by every job and run by none is indistinguishable from a passing
+suite.
 """
 
 from __future__ import annotations
@@ -153,6 +158,39 @@ def test_the_engine_requirements_are_installed_under_constraints() -> None:
     assert installs, "requirements-ci-models.txt не ставится ни в одном джобе"
     without_constraint = [line for line in installs if "-c requirements-ci.txt" not in line]
     assert not without_constraint, f"без -c requirements-ci.txt: {without_constraint}"
+
+
+@pytest.mark.unit
+def test_the_special_markers_are_excluded_everywhere_and_run_somewhere() -> None:
+    """Each of ``hardware``, ``models``, ``network`` is excluded by every ordinary
+    pytest job, and ``models`` is actually run by one of them.
+
+    Both halves have already gone wrong. The markers were introduced one at a
+    time, and adding ``network`` to the windows job left the linux job running the
+    twenty-two ``HEAD`` requests it was meant to be spared — a job that goes red
+    when somebody else's website is down. The other direction is worse and quieter:
+    a marker excluded everywhere and run nowhere looks exactly like a green suite,
+    which is how eight tests on real weights sat unrun for months.
+
+    ``hardware`` is deliberately absent from the second half: a runner has no
+    microphone, and those three tests are for a human at a real machine.
+    """
+    expressions = [
+        line.split('"')[1]
+        for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+        if "pytest -m " in line and '"' in line
+    ]
+    assert expressions, "ни один джоб не запускает pytest с маркерами"
+
+    excluding = [text for text in expressions if text.startswith("not ")]
+    assert excluding, "ни один джоб не исключает маркеры"
+    for marker in ("hardware", "models", "network"):
+        missing = [text for text in excluding if f"not {marker}" not in text]
+        assert not missing, f"{marker} не исключён в: {missing}"
+
+    assert any(
+        text == "models" for text in expressions
+    ), f"маркер models исключён везде и не запускается нигде: {expressions}"
 
 
 @pytest.mark.unit
