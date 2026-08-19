@@ -10,7 +10,7 @@
       "version": "0.22",
       "description": "Быстрое распознавание без интернета. Работает на любом железе, точность средняя. Хороший выбор по умолчанию.",
       "url": "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip",
-      "sha256": "0e0d33c5a80a68df957a3b0b8e0a8b2f0e40e2a49dbe9c7ed9ba5b6b5b30df8f",
+      "sha256": "961d5ff98a17f4aa6de69864d0aa71fa5bac682301d2b5d17a3f24c5c99a46d4",
       "size_bytes": 46236750,
       "archive": "zip",
       "target": "vosk-model-small-ru-0.22"
