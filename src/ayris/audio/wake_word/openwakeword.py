@@ -106,6 +106,7 @@ class OpenWakeWordEngine(WakeWordEngine):
             self._model = module.Model(
                 wakeword_models=list(paths.values()),
                 inference_framework=framework,
+                **self._feature_models(spec.models_dir, framework),
             )
         except Exception as exc:
             # The library raises whatever its runtime raises - a bare OSError
@@ -185,6 +186,32 @@ class OpenWakeWordEngine(WakeWordEngine):
             reset()
 
     # ------------------------------------------------------------------ helpers
+
+    @staticmethod
+    def _feature_models(models_dir: Path | None, framework: str) -> dict[str, str]:
+        """Point the library at the shared feature extractors we ship.
+
+        Every phrase model runs on top of two models the library shares between
+        them: a melspectrogram and Google's speech embedding.  By default it
+        looks for them inside its own package, where they appear only after
+        ``openwakeword.utils.download_models()`` has been run - which never
+        happens in a frozen build, and does not happen in the profile layout
+        either, since Ayris downloads wake models into ``models/wake``.  So when
+        they are next to the phrase models, say so explicitly; when they are not,
+        stay quiet and let the library look in its own package.
+        """
+        if models_dir is None:
+            return {}
+        suffix = ".tflite" if framework == "tflite" else ".onnx"
+        found: dict[str, str] = {}
+        for keyword, stem in (
+            ("melspec_model_path", "melspectrogram"),
+            ("embedding_model_path", "embedding_model"),
+        ):
+            candidate = models_dir / f"{stem}{suffix}"
+            if candidate.is_file():
+                found[keyword] = str(candidate)
+        return found
 
     def _resolve(self, phrase: WakePhrase, models_dir: Path | None) -> str:
         """Find the model file for one phrase.

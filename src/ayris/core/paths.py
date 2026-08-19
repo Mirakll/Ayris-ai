@@ -69,10 +69,14 @@ __all__ = [
     "executable_dir",
     "get_paths",
     "init_paths",
+    "is_ascii_path",
+    "native_path",
+    "native_path_problem",
     "read_configured_root",
     "reset_paths",
     "resolve_root",
     "resolve_root_with_source",
+    "short_path",
     "write_configured_root",
 ]
 
@@ -90,6 +94,9 @@ PORTABLE_MARKERS: Final = ("ayris.portable", "portable.txt")
 POINTER_FILE_NAME: Final = "profile_path.txt"
 
 PORTABLE_DIR_NAME: Final = "profile"
+
+#: ``MAX_PATH`` is 260, but a long path can be up to 32767 wide characters.
+_SHORT_PATH_LIMIT: Final = 32768
 
 _TRUTHY: Final = frozenset({"1", "true", "yes", "on", "да"})
 
@@ -439,3 +446,78 @@ def reset_paths() -> None:
     """Drop the cached paths. Test helper."""
     global _paths
     _paths = None
+
+
+# ----------------------------------------------- paths for native libraries
+
+
+def is_ascii_path(path: Path | str) -> bool:
+    """Whether *path* means the same thing in every 8-bit encoding.
+
+    A path of Latin letters, digits and punctuation is identical in UTF-8 and
+    in any Windows ANSI code page.  Anything else is not, and libraries that
+    take narrow strings will look for the wrong file.
+    """
+    return str(path).isascii()
+
+
+def short_path(path: Path | str) -> str | None:
+    """The DOS 8.3 spelling of an existing *path*, or ``None`` if there is none.
+
+    Windows keeps a short name for every file it creates unless 8.3 generation
+    is switched off for the volume - which it is by default on non-system
+    disks since Windows 8.  So this works for ``C:\\Users\\Пользователь`` and
+    usually does not for a project folder on ``D:``.
+    """
+    if sys.platform != "win32":
+        # Non-Windows is only used for the test suite and the linters; mypy runs
+        # with platform = "win32" and skips this block rather than calling it
+        # unreachable.
+        return None
+    import ctypes
+
+    text = str(path)
+    buffer = ctypes.create_unicode_buffer(_SHORT_PATH_LIMIT)
+    length = ctypes.windll.kernel32.GetShortPathNameW(text, buffer, _SHORT_PATH_LIMIT)
+    if not length or length >= _SHORT_PATH_LIMIT:
+        return None
+    return buffer.value
+
+
+def native_path(path: Path | str) -> str | None:
+    """*path* spelled so a library taking narrow strings can open it.
+
+    Several of the engines Ayris drives are C libraries reached through a thin
+    Python wrapper that hands the path over as bytes: Vosk encodes it as UTF-8,
+    espeak-ng inside Piper does the same.  On Windows the C side then reads
+    those bytes back through the ANSI code page, so every non-Latin character
+    turns into something else and the file is not found.  The user sees
+    "Failed to create a model" and there is nothing in it about the real cause,
+    which is that Ayris lives in a folder called ``Мои программы``.
+
+    Returns the path itself when it is already safe, its 8.3 spelling when
+    Windows has one, and ``None`` when neither is true - the caller then reports
+    :func:`native_path_problem` instead of letting the library fail obscurely.
+    """
+    text = str(path)
+    if is_ascii_path(text):
+        return text
+    short = short_path(text)
+    if short is not None and is_ascii_path(short):
+        return short
+    return None
+
+
+def native_path_problem(path: Path | str, *, what: str) -> str:
+    """Russian explanation of why a native library cannot open *path*.
+
+    Args:
+        path: The path that has no ASCII spelling.
+        what: What lives there, in the accusative case - "модель распознавания",
+            "данные espeak" - so the sentence reads as one.
+    """
+    return (
+        f"Не удалось загрузить {what}: в пути есть буквы не из латиницы, "
+        f"а библиотека их не понимает.\n{path}\n"
+        "Перенесите папку туда, где в пути только латинские буквы и цифры."
+    )

@@ -85,9 +85,13 @@ from ayris.workers.registry import WorkerKind, event_translator, worker_type
 from ayris.workers.stt_worker import SttWorker, translate_stt_event
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
     from ayris.core.models import JsonObject
+
+    #: The ``ascii_weights`` fixture: a model directory in, a path a native
+    #: library can actually open out.
+    _Weights = Callable[[Path], Path]
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "audio"
 
@@ -115,6 +119,22 @@ _VOSK_FINAL = (
 def wav(name: str) -> AudioBuffer:
     """Load a fixture as an :class:`AudioBuffer`."""
     return AudioBuffer.from_wav(FIXTURES / name)
+
+
+def _downloaded(variable: str) -> Path:
+    """The model directory named by an ``AYRIS_TEST_*`` variable.
+
+    Skips rather than fails when the variable is unset or points nowhere: the
+    ``hardware`` tests are for a machine that has the weights, and on every
+    other one their absence is the expected state, not a broken run.
+    """
+    location = os.environ.get(variable, "")
+    if not location:
+        pytest.skip(f"{variable} не задан")
+    path = Path(location)
+    if not path.exists():
+        pytest.skip(f"модели нет: {path}")
+    return path
 
 
 def tone(ms: int, amplitude: int = 9000, *, rate: int = STT_SAMPLE_RATE) -> AudioBuffer:
@@ -768,6 +788,36 @@ def vosk_ready(final: str = _VOSK_FINAL, **options: object) -> VoskSttEngine:
 
 class TestVoskEngine:
     """Vosk's own logic: where its model lives, and what its JSON means."""
+
+    def test_load_refuses_a_path_the_library_cannot_open(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A Cyrillic model folder is rejected before Kaldi is handed the bytes.
+
+        Vosk encodes the path as UTF-8 and Kaldi reads it back through the ANSI
+        code page, so what actually happens is "Failed to create a model" - a
+        message that sends the user looking for a corrupt download.  When Windows
+        has no 8.3 spelling to offer, the engine has to say what is really wrong,
+        and it has to say it without calling in.
+        """
+        model = tmp_path / "модель"
+        (model / "am").mkdir(parents=True)
+
+        def refuse(_path: object) -> None:
+            raise AssertionError("Model must not be constructed with an unopenable path")
+
+        def stub_import(_self: object, _name: str | None = None) -> types.SimpleNamespace:
+            return types.SimpleNamespace(Model=refuse)
+
+        monkeypatch.setattr(VoskSttEngine, "_import", stub_import)
+        monkeypatch.setattr("ayris.audio.stt.vosk_engine.native_path", lambda _path: None)
+
+        engine = VoskSttEngine()
+        with pytest.raises(SttError) as caught:
+            engine.load(model, SttOptions(language="ru"))
+
+        assert "модель" in caught.value.user_message
+        assert "латинские" in caught.value.user_message
 
     def test_model_dir_finds_a_model_one_level_down(self, tmp_path: Path):
         """An archive unpacked with its folder kept must still work."""
@@ -1634,24 +1684,32 @@ class TestRealEngines:
     """
 
     @staticmethod
-    def _model(variable: str = "AYRIS_TEST_STT_MODEL") -> Path:
-        location = os.environ.get(variable, "")
-        if not location:
-            pytest.skip(f"{variable} не задан")
-        path = Path(location)
-        if not path.exists():
-            pytest.skip(f"модели нет: {path}")
-        return path
+    def _model(weights: _Weights, variable: str = "AYRIS_TEST_STT_MODEL") -> Path:
+        """The Vosk model named by *variable*, spelled so Kaldi can open it.
 
-    @classmethod
-    def _whisper_model(cls) -> Path:
-        return cls._model("AYRIS_TEST_WHISPER_MODEL")
+        Vosk hands the path to a C++ library as UTF-8 bytes that Windows reads
+        back through the ANSI code page, so a checkout under a Cyrillic folder
+        needs the ``ascii_weights`` copy - see that fixture for why production
+        answers the same problem differently.
+        """
+        return weights(_downloaded(variable))
 
-    def test_vosk_transcribes_a_command(self) -> None:
+    @staticmethod
+    def _whisper_model() -> Path:
+        """The Whisper model, straight from where it was downloaded.
+
+        No ``ascii_weights`` here on purpose: CTranslate2 converts the path to
+        wide characters itself, so it opens ``E:\\мистер бит ест рис`` fine, and
+        loading from the real location is the stricter test - it would notice if
+        that ever stopped being true.
+        """
+        return _downloaded("AYRIS_TEST_WHISPER_MODEL")
+
+    def test_vosk_transcribes_a_command(self, ascii_weights: _Weights) -> None:
         if not VoskSttEngine.available():
             pytest.skip("vosk не установлен")
         engine = VoskSttEngine()
-        engine.load(self._model(), SttOptions(language="ru"))
+        engine.load(self._model(ascii_weights), SttOptions(language="ru"))
         try:
             result = engine.transcribe(wav("stt_command.wav"))
             assert result.engine == "vosk"
@@ -1660,7 +1718,7 @@ class TestRealEngines:
         finally:
             engine.unload()
 
-    def test_vosk_answers_silence_with_nothing(self) -> None:
+    def test_vosk_answers_silence_with_nothing(self, ascii_weights: _Weights) -> None:
         """The synthetic fixture is not words, so the text is not asserted.
 
         What is asserted is that a silent buffer produces an empty result and
@@ -1669,7 +1727,7 @@ class TestRealEngines:
         if not VoskSttEngine.available():
             pytest.skip("vosk не установлен")
         engine = VoskSttEngine()
-        engine.load(self._model(), SttOptions(language="ru"))
+        engine.load(self._model(ascii_weights), SttOptions(language="ru"))
         try:
             assert engine.transcribe(wav("stt_silence.wav")).is_empty
         finally:
@@ -1698,12 +1756,12 @@ class TestRealEngines:
         finally:
             engine.unload()
 
-    def test_recognition_keeps_up_with_the_speaker(self) -> None:
+    def test_recognition_keeps_up_with_the_speaker(self, ascii_weights: _Weights) -> None:
         """A real-time factor over 1.0 means the assistant falls behind."""
         if not VoskSttEngine.available():
             pytest.skip("vosk не установлен")
         engine = VoskSttEngine()
-        engine.load(self._model(), SttOptions(language="ru"))
+        engine.load(self._model(ascii_weights), SttOptions(language="ru"))
         try:
             result = engine.transcribe(wav("stt_phrase.wav"))
             assert result.real_time_factor < 1.0

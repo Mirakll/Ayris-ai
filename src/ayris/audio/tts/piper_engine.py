@@ -41,6 +41,10 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
+import tempfile
+from contextlib import suppress
+from inspect import signature
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
@@ -52,7 +56,7 @@ from ayris.audio.tts.base import (
     concat_chunks,
 )
 from ayris.core.errors import TtsError
-from ayris.core.paths import get_paths
+from ayris.core.paths import get_paths, is_ascii_path, native_path, native_path_problem
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -73,6 +77,13 @@ _MODEL_SUFFIX: Final = ".onnx"
 #: voice config with an odd base scale, not a user mistake.
 _MIN_LENGTH_SCALE: Final = 0.25
 _MAX_LENGTH_SCALE: Final = 4.0
+
+#: Where the ``piper`` package keeps the espeak-ng data it ships with.
+_ESPEAK_DATA_DIR_NAME: Final = "espeak-ng-data"
+
+#: Present in every espeak data folder; used to tell a finished copy from a
+#: half-written one.
+_ESPEAK_MARKER: Final = "phontab"
 
 
 def find_voice_files(model: Path) -> tuple[Path, Path]:
@@ -212,6 +223,7 @@ class PiperTtsEngine(TtsEngine):
                 str(model_path),
                 config_path=str(config_path),
                 use_cuda=use_cuda,
+                **_espeak_argument(piper),
             )
         except Exception as exc:  # onnxruntime raises its own exception types
             raise TtsError(
@@ -299,16 +311,41 @@ class PiperTtsEngine(TtsEngine):
         self._warn_about_pitch(pitch)
         rate = self.sample_rate
         try:
-            for pcm in loaded.synthesize_stream_raw(
-                text,
-                length_scale=self._length_scale(speed),
-            ):
-                yield AudioChunk(pcm=bytes(pcm), sample_rate=rate, channels=1)
+            for pcm in self._vendor_stream(loaded, text, self._length_scale(speed)):
+                yield AudioChunk(pcm=pcm, sample_rate=rate, channels=1)
         except Exception as exc:  # onnxruntime and piper-phonemize both raise
             raise TtsError(
                 f"piper: synthesis failed: {exc}",
                 user_message="Не удалось озвучить ответ: движок Piper вернул ошибку.",
             ) from exc
+
+    def _vendor_stream(self, loaded: Any, text: str, length_scale: float) -> Iterator[bytes]:
+        """Yield raw PCM from whichever synthesis API this Piper offers.
+
+        Piper 1.3 replaced ``synthesize_stream_raw(text, length_scale=...)``,
+        which yielded plain PCM, with ``synthesize(text, syn_config=...)``,
+        which yields ``AudioChunk`` objects carrying their own sample rate.  We
+        speak both: the old one is what ships in Debian and in the frozen
+        builds people already have, the new one is what ``pip install
+        piper-tts`` gives today.
+        """
+        legacy = getattr(loaded, "synthesize_stream_raw", None)
+        if legacy is not None:
+            for pcm in legacy(text, length_scale=length_scale):
+                yield bytes(pcm)
+            return
+        piper = self._import()
+        config_type = getattr(piper, "SynthesisConfig", None)
+        if config_type is None:  # pragma: no cover - no such Piper release
+            raise TtsError(
+                "piper: neither synthesize_stream_raw nor SynthesisConfig is available",
+                user_message=(
+                    "Установленная версия Piper не поддерживается. "
+                    "Обновите пакет piper-tts или выберите другой движок в настройках."
+                ),
+            )
+        for chunk in loaded.synthesize(text, syn_config=config_type(length_scale=length_scale)):
+            yield bytes(chunk.audio_int16_bytes)
 
     def _length_scale(self, speed: float) -> float:
         """Convert the speed multiplier to Piper's duration stretch."""
@@ -325,6 +362,91 @@ class PiperTtsEngine(TtsEngine):
             "для изменения тона выберите движок Silero",
             pitch,
         )
+
+
+# --------------------------------------------------------------- espeak data
+
+
+def _espeak_argument(piper: Any) -> dict[str, str]:
+    """``espeak_data_dir`` for :meth:`PiperVoice.load`, when it needs fixing.
+
+    Piper phonemizes Russian through espeak-ng, and espeak-ng takes the path to
+    its data as a narrow string: a folder whose name is not Latin never opens.
+    That folder ships inside the ``piper`` package, so whether it opens has
+    nothing to do with the user's profile and everything to do with where Python
+    is installed - and when it fails, espeak calls ``exit()`` from C and takes
+    the process with it, after printing the path of the machine it was built on.
+
+    So hand Piper an ASCII spelling of its own data folder when the plain one is
+    unsafe.  Older Piper releases have no such parameter; there we stay silent
+    rather than raise, because the same release also has the old synthesis API
+    and it is not our business to demand an upgrade.
+    """
+    data_dir = Path(piper.__file__).parent / _ESPEAK_DATA_DIR_NAME
+    if not data_dir.is_dir() or is_ascii_path(data_dir):
+        return {}
+    if "espeak_data_dir" not in signature(piper.PiperVoice.load).parameters:
+        return {}
+    safe = native_path(data_dir) or _ascii_espeak_copy(data_dir)
+    if safe is None:
+        raise TtsError(
+            f"piper: espeak data at {data_dir} has no ASCII spelling",
+            user_message=native_path_problem(data_dir, what="данные espeak для Piper"),
+        )
+    return {"espeak_data_dir": safe}
+
+
+def _ascii_espeak_copy(data_dir: Path) -> str | None:
+    """Copy espeak's data somewhere with an ASCII name, and say where.
+
+    Nineteen megabytes, once, and only for an installation Python cannot even
+    name in ASCII - which is a Python unpacked into a folder like
+    ``D:\\Программы`` on a disk with 8.3 names switched off.  Copying beats
+    refusing: without this, Russian synthesis is simply unavailable.
+    """
+    for parent in _copy_destinations():
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+        except OSError:  # pragma: no cover - an unwritable cache is the next case
+            continue
+        # Asked after mkdir on purpose: Windows has no short name for a
+        # directory that does not exist yet.
+        target = native_path(parent)
+        if target is None:
+            continue
+        destination = Path(target) / _ESPEAK_DATA_DIR_NAME
+        if (destination / _ESPEAK_MARKER).is_file():
+            return str(destination)
+        staging = destination.with_name(f"{_ESPEAK_DATA_DIR_NAME}.partial")
+        shutil.rmtree(staging, ignore_errors=True)
+        shutil.rmtree(destination, ignore_errors=True)
+        try:
+            shutil.copytree(data_dir, staging)
+            staging.rename(destination)
+        except OSError as exc:
+            shutil.rmtree(staging, ignore_errors=True)
+            _log.warning("piper: не удалось скопировать данные espeak в %s: %s", parent, exc)
+            continue
+        _log.info(
+            "piper: данные espeak скопированы в %s (в пути установки есть не-латиница)",
+            destination,
+        )
+        return str(destination)
+    return None
+
+
+def _copy_destinations() -> Iterator[Path]:
+    """Where a copy of espeak's data may live, best first.
+
+    The profile cache is the right home for a derived copy of somebody else's
+    data.  But a profile can itself be unnameable - a portable build on a stick
+    called ``Флешка`` - and that install still needs Russian speech, so the
+    temporary directory follows: it is on the system disk, where Windows leaves
+    8.3 names on by default.
+    """
+    with suppress(Exception):  # paths refuse only if the profile is broken
+        yield get_paths().cache_dir
+    yield Path(tempfile.gettempdir())
 
 
 # ------------------------------------------------------------- config reading

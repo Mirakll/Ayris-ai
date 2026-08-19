@@ -7,6 +7,7 @@ splits a user's settings across two folders.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -23,9 +24,13 @@ from ayris.core.paths import (
     clear_configured_root,
     default_root,
     init_paths,
+    is_ascii_path,
+    native_path,
+    native_path_problem,
     read_configured_root,
     resolve_root,
     resolve_root_with_source,
+    short_path,
     write_configured_root,
 )
 
@@ -261,3 +266,64 @@ class TestFailures:
 
         assert caught.value.recoverable is False
         assert str(paths.root) in caught.value.user_message
+
+
+class TestNativePaths:
+    """Spelling a path so a library that takes narrow strings can open it.
+
+    Not a hypothetical: Vosk hands its model path to Kaldi as UTF-8 bytes that
+    Windows then reads through the ANSI code page, and espeak-ng inside Piper
+    does the same with its data directory.  A checkout in a folder whose name is
+    Cyrillic therefore fails to load either one, and the failure looks like a
+    corrupt model rather than a path problem.
+    """
+
+    def test_ascii_path_is_returned_unchanged(self) -> None:
+        """No filesystem call and no rewriting when the path is already safe.
+
+        Spelled out rather than built from ``tmp_path``, which is itself under a
+        Cyrillic folder on the machine this was written on.
+        """
+        assert native_path("C:/models/vosk") == "C:/models/vosk"
+        assert native_path(Path("C:/models/vosk")) == str(Path("C:/models/vosk"))
+
+    def test_ascii_check_sees_cyrillic(self) -> None:
+        assert is_ascii_path("C:/models/vosk") is True
+        assert is_ascii_path("C:/модели/vosk") is False
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="8.3 spelling is a Windows thing")
+    def test_a_cyrillic_directory_gets_a_short_name_or_none(self, tmp_path: Path) -> None:
+        """Whichever way it goes, the answer is usable.
+
+        8.3 name generation is per-volume and can be switched off, so this
+        cannot assert a name exists - only that when one comes back it is ASCII
+        and names the same directory, and that ``native_path`` says ``None``
+        rather than handing out an unopenable path when it does not.
+        """
+        target = tmp_path / "модели"
+        target.mkdir()
+        (target / "marker").write_text("x", encoding="utf-8")
+
+        short = short_path(target)
+        if short is not None:
+            # A volume with 8.3 names off returns the long path unchanged rather
+            # than failing, which is exactly the case native_path has to catch.
+            assert (Path(short) / "marker").is_file()
+
+        opened = native_path(target)
+        if opened is None:
+            assert short is None or not is_ascii_path(short)
+            return
+        assert is_ascii_path(opened)
+        assert (Path(opened) / "marker").is_file()
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="8.3 spelling is a Windows thing")
+    def test_no_short_name_for_a_path_that_does_not_exist(self, tmp_path: Path) -> None:
+        assert short_path(tmp_path / "нет такой папки") is None
+
+    def test_the_problem_message_names_the_path_and_what_failed(self, tmp_path: Path) -> None:
+        message = native_path_problem(tmp_path / "модели", what="модель Vosk")
+        assert "модель Vosk" in message
+        assert "модели" in message
+        # A user has to be told what to *do*, not only that something broke.
+        assert "латинские" in message

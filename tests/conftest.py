@@ -9,7 +9,9 @@ reach the real Windows Credential Manager.
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+import shutil
+import tempfile
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -58,3 +60,45 @@ def _isolated_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
 def profile_paths(tmp_path: Path) -> paths_module.AppPaths:
     """An initialised profile root inside ``tmp_path``."""
     return paths_module.init_paths(profile=tmp_path / "profile")
+
+
+@pytest.fixture(scope="session")
+def ascii_weights() -> Iterator[Callable[[Path], Path]]:
+    """Give a native library an ASCII path to model weights it must open.
+
+    Vosk and CTranslate2 hand the path to a C++ library as UTF-8 bytes, which
+    Windows then reads back through the ANSI code page - so a checkout in a
+    folder like ``E:\\мистер бит ест рис`` is unopenable, and the ``hardware``
+    tests that use real weights could only ever be skipped here.  Production
+    handles this by asking Windows for the 8.3 spelling (see
+    :func:`ayris.core.paths.native_path`) and refusing with a clear message when
+    there is none; a test harness cannot refuse, so it copies instead.
+
+    The copy lands once per session under the temporary directory, which has a
+    short name on the system disk, and is removed afterwards.  Weights whose own
+    path is already safe are handed back untouched, so nothing is copied on a
+    machine where the checkout has a Latin path - CI included.
+    """
+    root: Path | None = None
+
+    def prepared(source: Path) -> Path:
+        nonlocal root
+        safe = paths_module.native_path(source)
+        if safe is not None:
+            return Path(safe)
+        if root is None:
+            base = paths_module.native_path(tempfile.gettempdir())
+            if base is None:  # pragma: no cover - a temp dir without a short name
+                pytest.skip(f"нет ASCII-пути ни для {source}, ни для временной папки")
+            root = Path(tempfile.mkdtemp(prefix="ayris-weights-", dir=base))
+        destination = root / source.name
+        if not destination.exists():
+            if source.is_dir():
+                shutil.copytree(source, destination)
+            else:
+                shutil.copy2(source, destination)
+        return destination
+
+    yield prepared
+    if root is not None:
+        shutil.rmtree(root, ignore_errors=True)

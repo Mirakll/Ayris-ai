@@ -44,6 +44,7 @@ from ayris.audio.stt.base import (
     TranscriptSegment,
 )
 from ayris.core.errors import SttError
+from ayris.core.paths import native_path, native_path_problem
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -124,8 +125,16 @@ class VoskSttEngine(SttEngine):
             set_log_level(-1)
 
         started = perf_counter()
+        # Vosk encodes the path as UTF-8 and Kaldi reads it back through the ANSI
+        # code page, so a Cyrillic folder never opens - see native_path.
+        opened = native_path(directory)
+        if opened is None:
+            raise SttError(
+                f"vosk: cannot open a non-ASCII model path {directory}",
+                user_message=native_path_problem(directory, what="модель распознавания Vosk"),
+            )
         try:
-            self._model = module.Model(str(directory))
+            self._model = module.Model(opened)
         except Exception as exc:
             self._model = None
             raise SttError(
