@@ -40,7 +40,25 @@ if TYPE_CHECKING:
 
 __all__ = [
     "GW_OWNER",
+    "KEYEVENTF_EXTENDEDKEY",
+    "KEYEVENTF_KEYUP",
+    "KEYEVENTF_SCANCODE",
+    "KEYEVENTF_UNICODE",
+    "MAPVK_VK_TO_VSC_EX",
     "MONITOR_DEFAULTTONEAREST",
+    "MOUSEEVENTF_ABSOLUTE",
+    "MOUSEEVENTF_HWHEEL",
+    "MOUSEEVENTF_LEFTDOWN",
+    "MOUSEEVENTF_LEFTUP",
+    "MOUSEEVENTF_MIDDLEDOWN",
+    "MOUSEEVENTF_MIDDLEUP",
+    "MOUSEEVENTF_MOVE",
+    "MOUSEEVENTF_RIGHTDOWN",
+    "MOUSEEVENTF_RIGHTUP",
+    "MOUSEEVENTF_VIRTUALDESK",
+    "MOUSEEVENTF_WHEEL",
+    "MOUSEEVENTF_XDOWN",
+    "MOUSEEVENTF_XUP",
     "SW_MAXIMIZE",
     "SW_MINIMIZE",
     "SW_RESTORE",
@@ -52,6 +70,7 @@ __all__ = [
     "VK_LWIN",
     "VK_MENU",
     "VK_RIGHT",
+    "WHEEL_DELTA",
     "WS_EX_APPWINDOW",
     "WS_EX_NOACTIVATE",
     "WS_EX_TOOLWINDOW",
@@ -62,6 +81,8 @@ __all__ = [
     "available",
     "bring_window_to_top",
     "current_thread_id",
+    "cursor_position",
+    "dpi_for_monitor",
     "enum_display_monitors",
     "enum_windows",
     "foreground_window",
@@ -70,6 +91,8 @@ __all__ = [
     "is_window",
     "is_window_visible",
     "is_zoomed",
+    "map_virtual_key",
+    "monitor_from_point",
     "monitor_from_window",
     "monitor_info",
     "post_close",
@@ -77,12 +100,17 @@ __all__ = [
     "process_image_name",
     "process_running",
     "send_close",
+    "send_key_events",
+    "send_mouse_event",
+    "send_unicode_text",
     "set_foreground_window",
     "set_window_position",
     "shell_execute",
     "show_window",
     "switch_to_this_window",
     "terminate_process",
+    "virtual_screen_rect",
+    "vk_key_scan",
     "window_class_name",
     "window_ex_style",
     "window_owner",
@@ -144,6 +172,53 @@ VK_MENU: Final = 0x12
 VK_LEFT: Final = 0x25
 VK_RIGHT: Final = 0x27
 KEYEVENTF_KEYUP: Final = 0x0002
+
+# --- SendInput: the flags of one synthesised keystroke. ---
+#: Send the scan code and ignore the virtual key. What games read.
+KEYEVENTF_SCANCODE: Final = 0x0008
+#: ``wScan`` holds a UTF-16 code unit, not a scan code. Layout-independent.
+KEYEVENTF_UNICODE: Final = 0x0004
+#: Prefix the scan code with ``E0`` — the right Alt/Ctrl, the arrows, Insert.
+KEYEVENTF_EXTENDEDKEY: Final = 0x0001
+
+#: ``MapVirtualKeyW``: virtual key to scan code, with the extended prefix kept.
+MAPVK_VK_TO_VSC_EX: Final = 4
+
+# --- SendInput: the flags of one synthesised mouse event. ---
+MOUSEEVENTF_MOVE: Final = 0x0001
+MOUSEEVENTF_LEFTDOWN: Final = 0x0002
+MOUSEEVENTF_LEFTUP: Final = 0x0004
+MOUSEEVENTF_RIGHTDOWN: Final = 0x0008
+MOUSEEVENTF_RIGHTUP: Final = 0x0010
+MOUSEEVENTF_MIDDLEDOWN: Final = 0x0020
+MOUSEEVENTF_MIDDLEUP: Final = 0x0040
+MOUSEEVENTF_XDOWN: Final = 0x0080
+MOUSEEVENTF_XUP: Final = 0x0100
+MOUSEEVENTF_WHEEL: Final = 0x0800
+MOUSEEVENTF_HWHEEL: Final = 0x1000
+#: ``dx``/``dy`` are normalised absolute coordinates, not a delta.
+MOUSEEVENTF_ABSOLUTE: Final = 0x8000
+#: Normalise against the whole virtual desktop instead of the primary display.
+#: Without it a click meant for the second monitor lands on the first one.
+MOUSEEVENTF_VIRTUALDESK: Final = 0x4000
+
+#: One notch of the wheel, as ``WM_MOUSEWHEEL`` counts them.
+WHEEL_DELTA: Final = 120
+
+#: ``INPUT.type`` discriminators. Only the two kinds Ayris injects.
+_INPUT_MOUSE: Final = 0
+_INPUT_KEYBOARD: Final = 1
+
+#: ``GetSystemMetrics`` indices of the virtual desktop's bounding box.
+SM_XVIRTUALSCREEN: Final = 76
+SM_YVIRTUALSCREEN: Final = 77
+SM_CXVIRTUALSCREEN: Final = 78
+SM_CYVIRTUALSCREEN: Final = 79
+
+#: ``MONITOR_DPI_TYPE.MDT_EFFECTIVE_DPI`` — the scale the user actually set.
+_MDT_EFFECTIVE_DPI: Final = 0
+#: DPI of an unscaled display. Everything else is a multiple of it.
+_DEFAULT_DPI: Final = 96
 
 #: Pause between the key-down and key-up halves of an emulated chord. Without it
 #: the shell occasionally sees the modifier as still held and swallows the arrow.
@@ -217,6 +292,15 @@ class _RECT(ctypes.Structure):
     )
 
 
+class _POINT(ctypes.Structure):
+    """``POINT``: a single screen coordinate pair."""
+
+    _fields_ = (
+        ("x", ctypes.c_long),
+        ("y", ctypes.c_long),
+    )
+
+
 class _MONITORINFOEXW(ctypes.Structure):
     """``MONITORINFOEXW``: the plain struct plus the device name."""
 
@@ -248,6 +332,62 @@ class _SHELLEXECUTEINFOW(ctypes.Structure):
         ("dwHotKey", ctypes.c_ulong),
         ("hIcon", ctypes.c_void_p),
         ("hProcess", ctypes.c_void_p),
+    )
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    """``MOUSEINPUT``: one synthesised move, click or wheel notch."""
+
+    _fields_ = (
+        ("dx", ctypes.c_long),
+        ("dy", ctypes.c_long),
+        ("mouseData", ctypes.c_ulong),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.c_void_p),
+    )
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    """``KEYBDINPUT``: one synthesised half of a keystroke."""
+
+    _fields_ = (
+        ("wVk", ctypes.c_ushort),
+        ("wScan", ctypes.c_ushort),
+        ("dwFlags", ctypes.c_ulong),
+        ("time", ctypes.c_ulong),
+        ("dwExtraInfo", ctypes.c_void_p),
+    )
+
+
+class _HARDWAREINPUT(ctypes.Structure):
+    """``HARDWAREINPUT``. Never sent — it exists to size the union correctly."""
+
+    _fields_ = (
+        ("uMsg", ctypes.c_ulong),
+        ("wParamL", ctypes.c_ushort),
+        ("wParamH", ctypes.c_ushort),
+    )
+
+
+class _INPUTUNION(ctypes.Union):
+    _fields_ = (
+        ("mi", _MOUSEINPUT),
+        ("ki", _KEYBDINPUT),
+        ("hi", _HARDWAREINPUT),
+    )
+
+
+class _INPUT(ctypes.Structure):
+    """``INPUT``: the tagged union ``SendInput`` takes an array of.
+
+    ``_anonymous_`` is deliberately not used — naming the union member keeps the
+    assignment visible at the call site, and that is the part that goes wrong.
+    """
+
+    _fields_ = (
+        ("type", ctypes.c_ulong),
+        ("union", _INPUTUNION),
     )
 
 
@@ -815,3 +955,190 @@ def windows_build() -> int:
         return 0
     version = sys.getwindowsversion()
     return int(version.build)
+
+
+def virtual_screen_rect() -> Rect:
+    """Bounding box of every display together, in physical pixels.
+
+    This is the coordinate space ``SendInput`` normalises absolute mouse moves
+    against, and its origin is not ``(0, 0)``: a second monitor placed to the
+    left of the primary one gives the virtual desktop a negative ``left``. That
+    offset is the whole reason a click aimed at the second screen lands wrong
+    when the normalisation forgets it.
+    """
+    metrics = _require("user32", "GetSystemMetrics")
+    metrics.restype = ctypes.c_int
+    metrics.argtypes = [ctypes.c_int]
+    left = int(metrics(SM_XVIRTUALSCREEN))
+    top = int(metrics(SM_YVIRTUALSCREEN))
+    width = int(metrics(SM_CXVIRTUALSCREEN))
+    height = int(metrics(SM_CYVIRTUALSCREEN))
+    return Rect(left, top, left + width, top + height)
+
+
+def cursor_position() -> tuple[int, int]:
+    """Where the mouse pointer is now, in virtual-desktop coordinates."""
+    get_pos = _require("user32", "GetCursorPos")
+    point = _POINT()
+    get_pos.restype = ctypes.c_bool
+    get_pos.argtypes = [ctypes.POINTER(_POINT)]
+    if not get_pos(ctypes.byref(point)):
+        raise _last_error("GetCursorPos")
+    return int(point.x), int(point.y)
+
+
+def monitor_from_point(x: int, y: int, flags: int = MONITOR_DEFAULTTONEAREST) -> int:
+    """Handle of the display a point falls on, or the nearest one."""
+    from_point = _require("user32", "MonitorFromPoint")
+    from_point.restype = ctypes.c_void_p
+    from_point.argtypes = [_POINT, ctypes.c_ulong]
+    return int(from_point(_POINT(x, y), flags) or 0)
+
+
+def dpi_for_monitor(handle: int) -> int:
+    """Effective DPI of one display, or ``96`` when it cannot be asked.
+
+    ``GetDpiForMonitor`` lives in shcore and arrived in Windows 8.1; on an older
+    build, or in a process that is not per-monitor DPI aware, the answer is the
+    unscaled 96 and callers treat that as "no scaling to undo" rather than as an
+    error. A wrong DPI moves the cursor to the wrong place, so this never raises
+    for the sake of the caller's arithmetic.
+    """
+    get_dpi = _win_function("shcore", "GetDpiForMonitor")
+    if get_dpi is None:
+        return _DEFAULT_DPI
+    horizontal = ctypes.c_uint(0)
+    vertical = ctypes.c_uint(0)
+    get_dpi.restype = ctypes.c_long
+    get_dpi.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.POINTER(ctypes.c_uint),
+        ctypes.POINTER(ctypes.c_uint),
+    ]
+    status = int(
+        get_dpi(
+            ctypes.c_void_p(handle),
+            _MDT_EFFECTIVE_DPI,
+            ctypes.byref(horizontal),
+            ctypes.byref(vertical),
+        )
+    )
+    if status != 0 or not horizontal.value:
+        return _DEFAULT_DPI
+    return int(horizontal.value)
+
+
+# --------------------------------------------------------------------------- #
+# Synthesised input
+# --------------------------------------------------------------------------- #
+
+
+def map_virtual_key(vk: int) -> int:
+    """Scan code of a virtual key, or ``0`` when the key has none.
+
+    ``MAPVK_VK_TO_VSC_EX`` rather than the plain form: it keeps the ``E0`` prefix
+    of the extended keys, which is what tells the right Ctrl from the left one.
+    Only the low byte is the scan code; the prefix is reported separately through
+    :data:`KEYEVENTF_EXTENDEDKEY`.
+    """
+    mapper = _require("user32", "MapVirtualKeyW")
+    mapper.restype = ctypes.c_uint
+    mapper.argtypes = [ctypes.c_uint, ctypes.c_uint]
+    return int(mapper(vk, MAPVK_VK_TO_VSC_EX)) & 0xFF
+
+
+def vk_key_scan(char: str) -> int:
+    """``VkKeyScanW``: which key and modifiers type ``char`` on the current layout.
+
+    Returns ``-1`` when the active layout cannot produce the character at all —
+    a Cyrillic letter under a US layout, which is precisely the case that forces
+    :data:`KEYEVENTF_UNICODE` instead of scan codes.
+    """
+    scan = _require("user32", "VkKeyScanW")
+    scan.restype = ctypes.c_short
+    scan.argtypes = [ctypes.c_ushort]
+    return int(scan(ord(char[0])))
+
+
+def _send_input(events: Sequence[_INPUT], *, call: str) -> int:
+    """Hand an array of ``INPUT`` to ``SendInput`` and return what it accepted.
+
+    A return below ``len(events)`` means the injection was blocked, and the usual
+    reason is UIPI: a process at medium integrity cannot send input to a window
+    of an elevated one. The code is reported as-is — the input actions turn it
+    into the sentence about administrator rights.
+    """
+    if not events:
+        return 0
+    send = _require("user32", "SendInput")
+    send.restype = ctypes.c_uint
+    send.argtypes = [ctypes.c_uint, ctypes.c_void_p, ctypes.c_int]
+    array = (_INPUT * len(events))(*events)
+    sent = int(send(len(events), ctypes.byref(array), ctypes.sizeof(_INPUT)))
+    if sent == 0:
+        raise _last_error(call)
+    return sent
+
+
+def _key_event(*, vk: int, scan: int, flags: int) -> _INPUT:
+    """One ``INPUT`` holding half a keystroke."""
+    event = _INPUT()
+    event.type = _INPUT_KEYBOARD
+    event.union.ki = _KEYBDINPUT(
+        wVk=vk,
+        wScan=scan,
+        dwFlags=flags,
+        time=0,
+        dwExtraInfo=None,
+    )
+    return event
+
+
+def send_key_events(events: Sequence[tuple[int, int, int]]) -> int:
+    """Inject keystrokes as ``(virtual key, scan code, flags)`` triples.
+
+    Sent as one array rather than one call per event: ``SendInput`` guarantees
+    that a batch is not interleaved with real typing, which is what keeps a
+    modifier from being reported as released in the middle of a chord.
+    """
+    batch = [_key_event(vk=vk, scan=scan, flags=flags) for vk, scan, flags in events]
+    return _send_input(batch, call="SendInput(keyboard)")
+
+
+def send_unicode_text(text: str) -> int:
+    """Type ``text`` character by character through :data:`KEYEVENTF_UNICODE`.
+
+    Layout-independent by construction — the character travels as a UTF-16 code
+    unit, so Cyrillic arrives with a US layout active. Characters outside the
+    BMP (emoji) are two surrogates, and both halves are sent, which is what the
+    documentation requires and what makes them arrive as one glyph.
+    """
+    encoded = text.encode("utf-16-le")
+    events: list[tuple[int, int, int]] = []
+    for offset in range(0, len(encoded), 2):
+        unit = int.from_bytes(encoded[offset : offset + 2], "little")
+        events.append((0, unit, KEYEVENTF_UNICODE))
+        events.append((0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP))
+    return send_key_events(events)
+
+
+def send_mouse_event(
+    *,
+    flags: int,
+    dx: int = 0,
+    dy: int = 0,
+    data: int = 0,
+) -> int:
+    """Inject one mouse event: a move, a button change or a wheel notch."""
+    event = _INPUT()
+    event.type = _INPUT_MOUSE
+    event.union.mi = _MOUSEINPUT(
+        dx=dx,
+        dy=dy,
+        mouseData=ctypes.c_ulong(data & 0xFFFFFFFF).value,
+        dwFlags=flags,
+        time=0,
+        dwExtraInfo=None,
+    )
+    return _send_input([event], call="SendInput(mouse)")

@@ -81,6 +81,8 @@ if TYPE_CHECKING:
     from ayris.core.repositories import AuditRepository
 
 __all__ = [
+    "ACTION_PACKAGES",
+    "INPUT_PACKAGE",
     "SYSTEM_PACKAGE",
     "ActionRegistry",
     "AuditSink",
@@ -94,6 +96,14 @@ _log = get_logger(__name__)
 #: Package autodiscovery walks. Every module under it is imported for its side
 #: effect of declaring actions.
 SYSTEM_PACKAGE: Final = "ayris.actions.system"
+
+#: Keyboard and mouse, in a package of their own: they share a backend seam and a
+#: pile of coordinate arithmetic that nothing in ``system`` needs.
+INPUT_PACKAGE: Final = "ayris.actions.input"
+
+#: Everything :meth:`ActionRegistry.discover` walks when asked for no package in
+#: particular. Order is the order actions appear in a fresh registry.
+ACTION_PACKAGES: Final = (SYSTEM_PACKAGE, INPUT_PACKAGE)
 
 #: How many synchronous actions may run at once. Section 12 lets the user size the
 #: macro thread pool; this is the floor the registry keeps for itself.
@@ -329,21 +339,36 @@ class ActionRegistry:
             added += 1
         return added
 
-    def discover(self, package: str = SYSTEM_PACKAGE, *, reload: bool = False) -> int:
+    def discover(self, package: str | None = None, *, reload: bool = False) -> int:
         """Import every module under ``package`` and adopt what it declared.
+
+        ``None`` means all of :data:`ACTION_PACKAGES`, which is what the
+        application wants; a single package is for tests and for plugins.
 
         A module that cannot be imported here — WinAPI on Linux, a missing
         optional dependency — is logged and skipped. Returns the number of actions
-        the registry gained.
+        the registry gained; a package that could not be imported at all gains
+        nothing, even though other tests in the same process may have filled the
+        module-level table by importing actions directly.
         """
-        if package in self._discovered and not reload:
-            return self.add_all(registered_actions())
-        self._discovered.add(package)
+        packages = ACTION_PACKAGES if package is None else (package,)
+        found = False
+        for name in packages:
+            if name in self._discovered and not reload:
+                found = True
+                continue
+            self._discovered.add(name)
+            found = self._import_package(name) or found
+        return self.add_all(registered_actions()) if found else 0
+
+    def _import_package(self, package: str) -> bool:
+        """Import a package and every module under it. ``False`` if there is no such
+        package; a single module failing to import is tolerated and logged."""
         try:
             root = importlib.import_module(package)
         except ImportError:
             _log.exception("action package %s is not importable", package)
-            return 0
+            return False
         for module in _walk_modules(root):
             try:
                 importlib.import_module(module)
@@ -354,7 +379,7 @@ class ActionRegistry:
                 _log.warning("skipped action module %s: %s", module, exc)
             except Exception:
                 _log.exception("action module %s failed to import", module)
-        return self.add_all(registered_actions())
+        return True
 
     # -- lookup ------------------------------------------------------------ #
 

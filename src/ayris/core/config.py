@@ -80,6 +80,7 @@ __all__ = [
     "DevtoolsConfig",
     "GeneralConfig",
     "HotkeysConfig",
+    "InputActionsConfig",
     "OverlayConfig",
     "PerformanceConfig",
     "PluginsConfig",
@@ -795,12 +796,84 @@ class AudioActionsConfig(ConfigSection):
     )
 
 
+class InputActionsConfig(ConfigSection):
+    """Sub-section ``[actions.input]`` — the pacing of synthesised input.
+
+    Every number here is a delay, and each of them exists because zero does not
+    work. Applications read the input queue on their own schedule: a chord sent
+    with no gap between the modifier and the key arrives as two unrelated
+    presses in some, and a text of two hundred characters typed with no pause
+    loses the middle of itself in others. The defaults are the smallest values
+    that survived a browser, a terminal and Notepad; a macro that needs to be
+    slower says so in its own block.
+
+    ``backend`` picks how the events are injected. ``sendinput`` is the Windows
+    API and works everywhere except against a window of an elevated process;
+    ``interception`` is a kernel driver that also reaches full-screen games, and
+    Ayris falls back to ``sendinput`` with a line in the log when it is not
+    installed — it is never installed silently, that needs administrator rights
+    and a reboot.
+    """
+
+    backend: Literal["sendinput", "interception"] = Field(
+        default="sendinput",
+        description="Чем отправлять ввод: SendInput или драйвер Interception для игр",
+        json_schema_extra=_restart(RestartScope.APP),
+    )
+    key_delay_ms: int = Field(
+        default=12,
+        ge=0,
+        le=2000,
+        description="Пауза между нажатиями клавиш",
+    )
+    key_hold_ms: int = Field(
+        default=30,
+        ge=0,
+        le=5000,
+        description="Сколько держать клавишу нажатой",
+    )
+    char_delay_ms: int = Field(
+        default=6,
+        ge=0,
+        le=1000,
+        description="Пауза между символами при наборе текста",
+    )
+    clipboard_threshold: int = Field(
+        default=200,
+        ge=0,
+        le=100_000,
+        description="С какой длины текст вставлять через буфер обмена; 0 — никогда",
+    )
+    drag_step_px: int = Field(
+        default=24,
+        ge=1,
+        le=500,
+        description="Длина одного шага при перетаскивании мышью, в пикселях",
+    )
+    drag_step_delay_ms: int = Field(
+        default=8,
+        ge=0,
+        le=1000,
+        description="Пауза между шагами перетаскивания",
+    )
+    mouse_settle_ms: int = Field(
+        default=16,
+        ge=0,
+        le=1000,
+        description="Пауза после перемещения курсора перед нажатием кнопки",
+    )
+
+
 class ActionsConfig(ConfigSection):
     """Tab «Действия» — what the action library reads out of the settings."""
 
     audio: AudioActionsConfig = Field(
         default_factory=AudioActionsConfig,
         description="Громкость и звуковые устройства",
+    )
+    input: InputActionsConfig = Field(
+        default_factory=InputActionsConfig,
+        description="Клавиатура и мышь",
     )
 
 

@@ -98,9 +98,11 @@ ocr = [
     "pytesseract==0.3.13",
     "paddleocr==2.9.1",
 ]
-# Хоткеи в полноэкранных играх (задача 37). Требует установки драйвера Interception.
+# Ввод и хоткеи в полноэкранных играх (задачи 23, 37). Требует установки драйвера
+# Interception: права администратора и перезагрузка, поэтому это extra, а не
+# зависимость, и в requirements-ci.txt его нет — на раннере драйвера не будет.
 games = [
-    "interception-python==1.2.0",
+    "interception-python==1.13.6",
 ]
 # Браузерная автоматизация для Яндекс Музыки (задача 29).
 web = [
@@ -193,9 +195,11 @@ ignore = [
 # имеет, так что тип ошибки на месте вызова всё равно очевиден.
 "src/ayris/core/errors.py" = ["N818"]
 # Ошибки действий продолжают тот же ряд: AppNotFound рядом с ActionNotFound,
-# DesktopUnavailable рядом с ActionUnavailable. Дать им суффикс Error значило бы
-# завести два стиля имён в одной иерархии — все они наследуют ActionError.
+# DesktopUnavailable рядом с ActionUnavailable, InputBlocked рядом с UnknownKey.
+# Дать им суффикс Error значило бы завести два стиля имён в одной иерархии — все
+# они наследуют ActionError.
 "src/ayris/actions/system/*.py" = ["N818"]
+"src/ayris/actions/input/*.py" = ["N818"]
 
 [tool.ruff.lint.flake8-builtins]
 # ayris/core/secrets.py, ayris/core/profile.py и ayris/nlu/numbers.py
@@ -245,6 +249,7 @@ module = [
     "comtypes.*",
     "ctranslate2.*",
     "faster_whisper.*",
+    "interception.*",
     "keyboard.*",
     "keyring.*",
     "monitorcontrol.*",
