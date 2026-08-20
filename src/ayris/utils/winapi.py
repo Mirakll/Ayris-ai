@@ -39,7 +39,21 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 __all__ = [
+    "ELEVATION_TYPE_DEFAULT",
+    "ELEVATION_TYPE_FULL",
+    "ELEVATION_TYPE_LIMITED",
+    "ERROR_CANCELLED",
+    "EWX_FORCEIFHUNG",
+    "EWX_LOGOFF",
+    "EWX_POWEROFF",
+    "EWX_REBOOT",
+    "EWX_SHUTDOWN",
     "GW_OWNER",
+    "INTEGRITY_HIGH",
+    "INTEGRITY_LOW",
+    "INTEGRITY_MEDIUM",
+    "INTEGRITY_SYSTEM",
+    "INTEGRITY_UNTRUSTED",
     "KEYEVENTF_EXTENDEDKEY",
     "KEYEVENTF_KEYUP",
     "KEYEVENTF_SCANCODE",
@@ -59,6 +73,8 @@ __all__ = [
     "MOUSEEVENTF_WHEEL",
     "MOUSEEVENTF_XDOWN",
     "MOUSEEVENTF_XUP",
+    "SE_SHUTDOWN_NAME",
+    "SHUTDOWN_REASON_PLANNED",
     "SW_MAXIMIZE",
     "SW_MINIMIZE",
     "SW_RESTORE",
@@ -74,29 +90,39 @@ __all__ = [
     "WS_EX_APPWINDOW",
     "WS_EX_NOACTIVATE",
     "WS_EX_TOOLWINDOW",
+    "ElevationInfo",
     "MonitorInfo",
+    "ProcessRun",
     "Rect",
     "WinApiError",
+    "abort_shutdown",
     "attach_thread_input",
     "available",
     "bring_window_to_top",
+    "console_output_codepage",
     "current_thread_id",
     "cursor_position",
     "dpi_for_monitor",
+    "enable_privilege",
     "enum_display_monitors",
     "enum_windows",
+    "exit_windows",
     "foreground_window",
+    "initiate_shutdown",
     "is_cloaked",
     "is_iconic",
     "is_window",
     "is_window_visible",
     "is_zoomed",
+    "lock_workstation",
     "map_virtual_key",
     "monitor_from_point",
     "monitor_from_window",
     "monitor_info",
+    "oem_codepage",
     "post_close",
     "press_chord",
+    "process_elevation",
     "process_image_name",
     "process_running",
     "send_close",
@@ -104,8 +130,10 @@ __all__ = [
     "send_mouse_event",
     "send_unicode_text",
     "set_foreground_window",
+    "set_suspend_state",
     "set_window_position",
     "shell_execute",
+    "shell_execute_ex",
     "show_window",
     "switch_to_this_window",
     "terminate_process",
@@ -164,6 +192,62 @@ PROCESS_QUERY_LIMITED_INFORMATION: Final = 0x1000
 PROCESS_TERMINATE: Final = 0x0001
 SYNCHRONIZE: Final = 0x00100000
 STILL_ACTIVE: Final = 259
+
+#: The user clicked «Нет» in the UAC prompt. Not a failure of the call.
+ERROR_CANCELLED: Final = 1223
+
+#: ``WaitForSingleObject`` gave up before the process ended.
+WAIT_TIMEOUT: Final = 0x00000102
+_INFINITE: Final = 0xFFFFFFFF
+
+#: Access rights for the process token: reading the elevation flag needs
+#: ``TOKEN_QUERY``, enabling ``SE_SHUTDOWN_NAME`` also needs ``ADJUST_PRIVILEGES``.
+TOKEN_QUERY: Final = 0x0008
+TOKEN_ADJUST_PRIVILEGES: Final = 0x0020
+
+#: ``TOKEN_INFORMATION_CLASS`` members this module reads.
+_TOKEN_ELEVATION_TYPE: Final = 18
+_TOKEN_ELEVATION: Final = 20
+_TOKEN_INTEGRITY_LEVEL: Final = 25
+
+#: Integrity levels, as the RID of the label SID. A process below ``HIGH`` cannot
+#: shut the machine down however many privileges it asks for.
+INTEGRITY_UNTRUSTED: Final = 0x0000
+INTEGRITY_LOW: Final = 0x1000
+INTEGRITY_MEDIUM: Final = 0x2000
+INTEGRITY_HIGH: Final = 0x3000
+INTEGRITY_SYSTEM: Final = 0x4000
+
+#: ``TOKEN_ELEVATION_TYPE``: default (UAC off, or a plain user), full (elevated),
+#: limited (an administrator running without elevation — a prompt would work).
+ELEVATION_TYPE_DEFAULT: Final = 1
+ELEVATION_TYPE_FULL: Final = 2
+ELEVATION_TYPE_LIMITED: Final = 3
+
+SE_PRIVILEGE_ENABLED: Final = 0x00000002
+
+#: The privilege ``ExitWindowsEx`` and ``InitiateSystemShutdownExW`` demand. Held
+#: by administrators but disabled in the token until asked for, which is why
+#: shutdown fails with «access denied» in code that never calls
+#: :func:`enable_privilege`.
+SE_SHUTDOWN_NAME: Final = "SeShutdownPrivilege"
+
+#: ``ExitWindowsEx`` flags. ``EWX_FORCEIFHUNG`` is deliberately the only forcing
+#: variant offered: ``EWX_FORCE`` skips the «сохранить изменения?» prompts of every
+#: running program, which loses work.
+EWX_LOGOFF: Final = 0x00000000
+EWX_SHUTDOWN: Final = 0x00000001
+EWX_REBOOT: Final = 0x00000002
+EWX_POWEROFF: Final = 0x00000008
+EWX_FORCEIFHUNG: Final = 0x00000010
+
+#: ``SHTDN_REASON_*``: a planned change made by software at the user's request.
+SHTDN_REASON_MAJOR_OTHER: Final = 0x00000000
+SHTDN_REASON_MINOR_OTHER: Final = 0x00000000
+SHTDN_REASON_FLAG_PLANNED: Final = 0x80000000
+SHUTDOWN_REASON_PLANNED: Final = (
+    SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED
+)
 
 # --- Virtual key codes for the chords the desktop switcher emulates. ---
 VK_LWIN: Final = 0x5B
@@ -233,7 +317,16 @@ class WinApiError(RuntimeError):
 
     Carries the English text for the log. The action layer catches it and raises
     an :class:`ayris.core.errors.ActionError` with something a user can act on.
+
+    ``code`` is the Windows error code when there was one, ``0`` otherwise. It
+    exists because a few codes mean something a caller must act on rather than
+    just report: :data:`ERROR_CANCELLED` from an elevation request is the user
+    clicking «Нет» in the UAC prompt, not a broken call.
     """
+
+    def __init__(self, message: str, *, code: int = 0) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,6 +484,84 @@ class _INPUT(ctypes.Structure):
     )
 
 
+class _LUID(ctypes.Structure):
+    """``LUID``: the machine-local id a privilege name resolves to."""
+
+    _fields_ = (
+        ("LowPart", ctypes.c_ulong),
+        ("HighPart", ctypes.c_long),
+    )
+
+
+class _LuidAndAttributes(ctypes.Structure):
+    _fields_ = (
+        ("Luid", _LUID),
+        ("Attributes", ctypes.c_ulong),
+    )
+
+
+class _TokenPrivileges(ctypes.Structure):
+    """``TOKEN_PRIVILEGES`` sized for exactly one privilege.
+
+    The real structure ends in a variable-length array; one entry is all
+    :func:`enable_privilege` ever adjusts, and a fixed-size declaration keeps the
+    ``byref`` call honest about how many bytes Windows may read.
+    """
+
+    _fields_ = (
+        ("PrivilegeCount", ctypes.c_ulong),
+        ("Privileges", _LuidAndAttributes * 1),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ElevationInfo:
+    """What the process token says about this process's rights.
+
+    Args:
+        elevated: ``TokenElevation`` — the flag that decides whether a privileged
+            call will go through at all.
+        elevation_type: ``TokenElevationType``. ``ELEVATION_TYPE_LIMITED`` is the
+            interesting one: an administrator who is not elevated *yet*, so a UAC
+            prompt would succeed.
+        integrity_level: RID of the token's integrity label,
+            ``INTEGRITY_MEDIUM`` for a normal process.
+    """
+
+    elevated: bool = False
+    elevation_type: int = ELEVATION_TYPE_DEFAULT
+    integrity_level: int = INTEGRITY_MEDIUM
+
+    @property
+    def can_elevate(self) -> bool:
+        """Whether asking for elevation could plausibly succeed."""
+        return self.elevation_type == ELEVATION_TYPE_LIMITED
+
+    @property
+    def high_integrity(self) -> bool:
+        """Whether the token runs at high integrity or above."""
+        return self.integrity_level >= INTEGRITY_HIGH
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessRun:
+    """A process the shell started for us.
+
+    ``exit_code`` is ``None`` while the process is still running, and also when it
+    ended before we could ask — the shell hands back a handle, not a promise that
+    the process outlives the next statement.
+    """
+
+    pid: int = 0
+    exit_code: int | None = None
+    timed_out: bool = False
+
+    @property
+    def finished(self) -> bool:
+        """Whether the process is known to have ended."""
+        return not self.timed_out and self.exit_code is not None
+
+
 def available() -> bool:
     """Whether WinAPI can be called at all in this process."""
     return sys.platform == "win32" and getattr(ctypes, "windll", None) is not None
@@ -424,7 +595,7 @@ def _last_error(call: str) -> WinApiError:
     code = int(ctypes.GetLastError())
     if not code:
         return WinApiError(f"{call} failed with no error code")
-    return WinApiError(f"{call} failed: [{code}] {ctypes.FormatError(code).strip()}")
+    return WinApiError(f"{call} failed: [{code}] {ctypes.FormatError(code).strip()}", code=code)
 
 
 def _handle(hwnd: int) -> Any:
@@ -776,9 +947,36 @@ def shell_execute(
     should close. Returns ``0`` when the shell handled the request without
     starting a process — opening a document in a running editor, for one.
     """
+    return shell_execute_ex(
+        file,
+        arguments=arguments,
+        directory=directory,
+        verb=verb,
+        show=show,
+    ).pid
+
+
+def shell_execute_ex(
+    file: str,
+    *,
+    arguments: str = "",
+    directory: str = "",
+    verb: str = "",
+    show: int = SW_SHOWNORMAL,
+    wait_ms: int = 0,
+) -> ProcessRun:
+    """Launch through the shell and optionally wait for the result.
+
+    The waiting form exists for the elevation helper: a process started with
+    ``verb="runas"`` runs in its own security context, so the only thing the
+    unelevated caller learns about it is its exit code. ``wait_ms`` of ``0`` does
+    not wait at all; a negative value waits without a deadline.
+
+    Raises:
+        WinApiError: The shell refused. ``code`` is :data:`ERROR_CANCELLED` when
+            the user dismissed the UAC prompt.
+    """
     execute = _require("shell32", "ShellExecuteExW")
-    get_pid = _require("kernel32", "GetProcessId")
-    close_handle = _require("kernel32", "CloseHandle")
 
     info = _SHELLEXECUTEINFOW()
     info.cbSize = ctypes.sizeof(_SHELLEXECUTEINFOW)
@@ -796,14 +994,36 @@ def shell_execute(
 
     handle = info.hProcess
     if not handle:
-        return 0
+        return ProcessRun()
+    try:
+        return _process_run(handle, wait_ms)
+    finally:
+        _close_handle(handle)
+
+
+def _process_run(handle: Any, wait_ms: int) -> ProcessRun:
+    """Pid, and the exit code once the process ended, for an open handle."""
+    get_pid = _require("kernel32", "GetProcessId")
     get_pid.restype = ctypes.c_ulong
     get_pid.argtypes = [ctypes.c_void_p]
     pid = int(get_pid(handle))
-    close_handle.restype = ctypes.c_bool
-    close_handle.argtypes = [ctypes.c_void_p]
-    close_handle(handle)
-    return pid
+    if wait_ms == 0:
+        return ProcessRun(pid=pid)
+
+    wait = _require("kernel32", "WaitForSingleObject")
+    wait.restype = ctypes.c_ulong
+    wait.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    timeout = _INFINITE if wait_ms < 0 else ctypes.c_ulong(wait_ms).value
+    if int(wait(handle, timeout)) == WAIT_TIMEOUT:
+        return ProcessRun(pid=pid, timed_out=True)
+
+    get_code = _require("kernel32", "GetExitCodeProcess")
+    code = ctypes.c_ulong(0)
+    get_code.restype = ctypes.c_bool
+    get_code.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    if not get_code(handle, ctypes.byref(code)):
+        return ProcessRun(pid=pid)
+    return ProcessRun(pid=pid, exit_code=int(code.value))
 
 
 def _open_process(pid: int, access: int) -> Any | None:
@@ -889,6 +1109,254 @@ def terminate_process(pid: int) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Process token: rights and privileges
+# --------------------------------------------------------------------------- #
+
+
+def _current_process_token(access: int) -> Any:
+    """Open this process's token.
+
+    Raises:
+        WinApiError: Not Windows, or the token could not be opened.
+    """
+    open_token = _require("advapi32", "OpenProcessToken")
+    current = _require("kernel32", "GetCurrentProcess")
+    current.restype = ctypes.c_void_p
+    current.argtypes = []
+    token = ctypes.c_void_p()
+    open_token.restype = ctypes.c_bool
+    open_token.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.POINTER(ctypes.c_void_p)]
+    if not open_token(current(), access, ctypes.byref(token)):
+        raise _last_error("OpenProcessToken")
+    return token
+
+
+def _token_information(token: Any, info_class: int, size: int) -> bytes:
+    """Raw ``GetTokenInformation`` bytes, the buffer grown once if too small."""
+    query = _require("advapi32", "GetTokenInformation")
+    query.restype = ctypes.c_bool
+    query.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_ulong,
+        ctypes.POINTER(ctypes.c_ulong),
+    ]
+    buffer = ctypes.create_string_buffer(size)
+    needed = ctypes.c_ulong(0)
+    if query(token, info_class, buffer, len(buffer), ctypes.byref(needed)):
+        return bytes(buffer.raw[: needed.value or size])
+    wanted = int(needed.value)
+    if wanted <= size:
+        raise _last_error(f"GetTokenInformation({info_class})")
+    buffer = ctypes.create_string_buffer(wanted)
+    if not query(token, info_class, buffer, len(buffer), ctypes.byref(needed)):
+        raise _last_error(f"GetTokenInformation({info_class})")
+    return bytes(buffer.raw[: needed.value or wanted])
+
+
+def _token_dword(token: Any, info_class: int) -> int:
+    """One ``DWORD`` out of the token."""
+    raw = _token_information(token, info_class, ctypes.sizeof(ctypes.c_ulong))
+    return int.from_bytes(raw[:4], "little")
+
+
+def _token_integrity_level(token: Any) -> int:
+    """RID of the token's integrity label.
+
+    ``TokenIntegrityLevel`` answers with a ``TOKEN_MANDATORY_LABEL``: a pointer to
+    a SID whose last sub-authority is the level. The pointer is read out of the
+    buffer rather than described with a structure, because the SID itself lives at
+    the far end of it and its length is not known in advance.
+    """
+    raw = _token_information(token, _TOKEN_INTEGRITY_LEVEL, 64)
+    pointer_size = ctypes.sizeof(ctypes.c_void_p)
+    if len(raw) < pointer_size:
+        raise WinApiError("TokenIntegrityLevel returned a short buffer")
+    address = int.from_bytes(raw[:pointer_size], "little")
+    if not address:
+        raise WinApiError("TokenIntegrityLevel returned a null SID")
+    count_of = _require("advapi32", "GetSidSubAuthorityCount")
+    authority_of = _require("advapi32", "GetSidSubAuthority")
+    count_of.restype = ctypes.POINTER(ctypes.c_ubyte)
+    count_of.argtypes = [ctypes.c_void_p]
+    authority_of.restype = ctypes.POINTER(ctypes.c_ulong)
+    authority_of.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+    sid = ctypes.c_void_p(address)
+    count = int(count_of(sid).contents.value)
+    if count <= 0:
+        raise WinApiError("integrity SID has no sub-authorities")
+    return int(authority_of(sid, count - 1).contents.value)
+
+
+def process_elevation() -> ElevationInfo:
+    """What this process's token says about its rights.
+
+    Raises:
+        WinApiError: Not Windows, or the token refused to answer.
+    """
+    token = _current_process_token(TOKEN_QUERY)
+    try:
+        elevated = bool(_token_dword(token, _TOKEN_ELEVATION))
+        kind = _token_dword(token, _TOKEN_ELEVATION_TYPE)
+        try:
+            integrity = _token_integrity_level(token)
+        except WinApiError as exc:
+            # An unreadable label is not worth failing the whole check over: the
+            # elevation flag above already decided the question.
+            _log.debug("integrity level unavailable: %s", exc)
+            integrity = INTEGRITY_HIGH if elevated else INTEGRITY_MEDIUM
+    finally:
+        _close_handle(token)
+    return ElevationInfo(elevated=elevated, elevation_type=kind, integrity_level=integrity)
+
+
+def enable_privilege(name: str) -> bool:
+    """Enable one privilege in this process's token, returning whether it stuck.
+
+    Administrators hold ``SeShutdownPrivilege`` but Windows keeps it *disabled* in
+    the token, so ``ExitWindowsEx`` in a process that never asked for it fails with
+    «access denied» — the single most common way shutdown code goes wrong.
+    ``AdjustTokenPrivileges`` also reports success when it enabled only some of
+    what was asked for, so the last error is checked even on a true return.
+
+    Raises:
+        WinApiError: Not Windows, or the token could not be opened or adjusted.
+    """
+    lookup = _require("advapi32", "LookupPrivilegeValueW")
+    adjust = _require("advapi32", "AdjustTokenPrivileges")
+    luid = _LUID()
+    lookup.restype = ctypes.c_bool
+    lookup.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.POINTER(_LUID)]
+    if not lookup(None, name, ctypes.byref(luid)):
+        raise _last_error(f"LookupPrivilegeValueW({name})")
+
+    token = _current_process_token(TOKEN_QUERY | TOKEN_ADJUST_PRIVILEGES)
+    try:
+        privileges = _TokenPrivileges()
+        privileges.PrivilegeCount = 1
+        privileges.Privileges[0].Luid = luid
+        privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED
+        adjust.restype = ctypes.c_bool
+        adjust.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_bool,
+            ctypes.POINTER(_TokenPrivileges),
+            ctypes.c_ulong,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        ctypes.set_last_error(0)
+        if not adjust(token, False, ctypes.byref(privileges), 0, None, None):
+            raise _last_error(f"AdjustTokenPrivileges({name})")
+        return int(ctypes.GetLastError()) == 0
+    finally:
+        _close_handle(token)
+
+
+# --------------------------------------------------------------------------- #
+# Power: suspend, shut down, lock
+# --------------------------------------------------------------------------- #
+
+
+def set_suspend_state(*, hibernate: bool, force: bool = False, wake_events: bool = False) -> None:
+    """Put the machine to sleep or into hibernation.
+
+    ``force`` is passed through as Windows documents it — ignored on anything
+    modern — and left at ``False`` so applications still get their
+    ``WM_POWERBROADCAST`` and can save what they were doing.
+
+    Raises:
+        WinApiError: Not Windows, or the request was refused. Hibernation refused
+            here usually means it is turned off in the system, which
+            ``powercfg /a`` explains and the action layer checks first.
+    """
+    suspend = _require("powrprof", "SetSuspendState")
+    suspend.restype = ctypes.c_bool
+    suspend.argtypes = [ctypes.c_bool, ctypes.c_bool, ctypes.c_bool]
+    ctypes.set_last_error(0)
+    if not suspend(hibernate, force, not wake_events):
+        raise _last_error(f"SetSuspendState(hibernate={hibernate})")
+
+
+def exit_windows(flags: int, *, reason: int = SHUTDOWN_REASON_PLANNED) -> None:
+    """``ExitWindowsEx``: log off, shut down or reboot, right now.
+
+    The privilege must already be enabled for anything but a log-off; see
+    :func:`enable_privilege`.
+
+    Raises:
+        WinApiError: Not Windows, or Windows refused — a program vetoing the
+            shutdown, or the missing privilege.
+    """
+    exit_ex = _require("user32", "ExitWindowsEx")
+    exit_ex.restype = ctypes.c_bool
+    exit_ex.argtypes = [ctypes.c_uint, ctypes.c_ulong]
+    if not exit_ex(flags, reason):
+        raise _last_error(f"ExitWindowsEx({flags:#x})")
+
+
+def initiate_shutdown(
+    *,
+    delay_s: int,
+    reboot: bool,
+    message: str = "",
+    force_apps: bool = False,
+    reason: int = SHUTDOWN_REASON_PLANNED,
+) -> None:
+    """``InitiateSystemShutdownExW``: schedule a shutdown or reboot.
+
+    The scheduled form, unlike :func:`exit_windows`, is the one that can be taken
+    back — see :func:`abort_shutdown`. It also shows Windows' own countdown
+    dialog, which is a better warning than anything a voice assistant could say.
+
+    Raises:
+        WinApiError: Not Windows, or Windows refused.
+    """
+    initiate = _require("advapi32", "InitiateSystemShutdownExW")
+    initiate.restype = ctypes.c_bool
+    initiate.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_wchar_p,
+        ctypes.c_ulong,
+        ctypes.c_bool,
+        ctypes.c_bool,
+        ctypes.c_ulong,
+    ]
+    if not initiate(None, message or None, max(0, delay_s), force_apps, reboot, reason):
+        raise _last_error(f"InitiateSystemShutdownExW(delay={delay_s}, reboot={reboot})")
+
+
+def abort_shutdown() -> None:
+    """``AbortSystemShutdownW``: cancel a shutdown scheduled on this machine.
+
+    Raises:
+        WinApiError: Not Windows, or there was nothing to cancel.
+    """
+    abort = _require("advapi32", "AbortSystemShutdownW")
+    abort.restype = ctypes.c_bool
+    abort.argtypes = [ctypes.c_wchar_p]
+    if not abort(None):
+        raise _last_error("AbortSystemShutdownW")
+
+
+def lock_workstation() -> None:
+    """``LockWorkStation``: the Win+L screen.
+
+    Returns as soon as the request is queued, not once the screen is locked.
+
+    Raises:
+        WinApiError: Not Windows, or the session cannot be locked — a Remote
+            Desktop session, for one.
+    """
+    lock = _require("user32", "LockWorkStation")
+    lock.restype = ctypes.c_bool
+    lock.argtypes = []
+    if not lock():
+        raise _last_error("LockWorkStation")
+
+
+# --------------------------------------------------------------------------- #
 # Monitors
 # --------------------------------------------------------------------------- #
 
@@ -955,6 +1423,43 @@ def windows_build() -> int:
         return 0
     version = sys.getwindowsversion()
     return int(version.build)
+
+
+def console_output_codepage() -> int:
+    """Code page a console program writes its output in, or ``0`` elsewhere.
+
+    Needed because the console keeps the OEM code page — 866 on a Russian
+    Windows — while :mod:`locale` reports the ANSI one, 1251. Decoding ``netsh``
+    output with the wrong one of those turns every SSID with a Cyrillic letter
+    into mojibake, and the user cannot connect to a network they cannot name.
+
+    Returns ``0`` rather than raising when there is no console attached: a
+    windowed build has none, and the caller falls back to :func:`oem_codepage`.
+    """
+    entry = _win_function("kernel32", "GetConsoleOutputCP")
+    if entry is None:
+        return 0
+    entry.restype = ctypes.c_uint
+    entry.argtypes = []
+    return int(entry())
+
+
+def oem_codepage() -> int:
+    """The system OEM code page, or ``0`` off Windows.
+
+    What :func:`console_output_codepage` falls back to. A windowed build has no
+    console of its own, so ``GetConsoleOutputCP`` answers nothing — but a console
+    child it starts still gets a console, and that console gets this code page. The
+    ANSI one that :mod:`locale` reports is a different number on the same machine
+    (1251 against 866 in Russian), so guessing from the locale is exactly the
+    mojibake this avoids.
+    """
+    entry = _win_function("kernel32", "GetOEMCP")
+    if entry is None:
+        return 0
+    entry.restype = ctypes.c_uint
+    entry.argtypes = []
+    return int(entry())
 
 
 def virtual_screen_rect() -> Rect:

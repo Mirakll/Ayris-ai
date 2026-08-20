@@ -387,6 +387,17 @@ _APP_INDEX: Final = (
 )
 
 
+# Section 11 wants the audit trail to say whether a dangerous action was
+# confirmed, and task 24 brought the first actions where the answer matters: a
+# reboot the user agreed to and a reboot that skipped the question look identical
+# in a journal that only records rights. Rows written before this migration
+# default to 0 — not «отказано», just «не спрашивали», which is what was true.
+_AUDIT_CONFIRMED: Final = (
+    "ALTER TABLE audit ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0 "
+    "CHECK (confirmed IN (0, 1))",
+)
+
+
 #: Every migration ever released, in order. Append only.
 MIGRATIONS: Final[tuple[Migration, ...]] = (
     Migration(
@@ -408,6 +419,11 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
         version=4,
         description="кэш установленных программ и пользовательские названия",
         statements=_APP_INDEX,
+    ),
+    Migration(
+        version=5,
+        description="отметка подтверждения в журнале аудита",
+        statements=_AUDIT_CONFIRMED,
     ),
 )
 

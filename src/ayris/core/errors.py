@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ActionError",
+    "ActionNotConfirmed",
     "ActionNotFound",
     "ActionParamsInvalid",
     "ActionRequiresAdmin",
@@ -237,6 +238,18 @@ class ActionUnavailable(ActionError):
     """The action cannot run here: wrong OS, missing dependency, no hardware."""
 
     default_user_message = "Это действие сейчас недоступно."
+
+
+class ActionNotConfirmed(ActionError):
+    """A dangerous action was not confirmed, so it did not run.
+
+    Covers every way a confirmation can fail to arrive: the user said «нет», the
+    prompt timed out, or there was no way to ask in the first place. The action
+    itself was never called — that is the whole point of the type, and the reason
+    the registry raises it before touching the backend.
+    """
+
+    default_user_message = "Не выполняю без подтверждения."
 
 
 class MacroError(AyrisError):

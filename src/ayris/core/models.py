@@ -423,6 +423,9 @@ class AuditEntry:
     result: ExecutionResult = ExecutionResult.OK
     require_admin: bool = False
     elevated: bool = False
+    #: Whether a dangerous action was explicitly confirmed before it ran. False on
+    #: a row that was never dangerous — «не спрашивали», not «отказано».
+    confirmed: bool = False
 
     @classmethod
     def from_row(cls, row: Row) -> Self:
@@ -434,6 +437,7 @@ class AuditEntry:
             result=_enum_or(row["result"], ExecutionResult.OK),
             require_admin=bool(row["require_admin"]),
             elevated=bool(row["elevated"]),
+            confirmed=bool(row["confirmed"]),
         )
 
 

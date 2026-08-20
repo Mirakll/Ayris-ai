@@ -24,9 +24,15 @@ instead of taking the whole registry down with it.
 
 **Nothing bare escapes.** :meth:`ActionRegistry.execute` converts every failure
 into a subclass of :class:`~ayris.core.errors.ActionError`: a missing name, a
-rejected parameter, a refused elevation, an expired timeout, or whatever the
-action itself raised. The pipeline already relies on that (task 18) and catches
-nothing else.
+rejected parameter, a refused elevation, a confirmation that never came, an
+expired timeout, or whatever the action itself raised. The pipeline already relies
+on that (task 18) and catches nothing else.
+
+**A dangerous action is confirmed before the backend, never after.** Actions
+marked ``is_dangerous`` go through :class:`ConfirmationRequest` first, and a
+refusal raises :class:`~ayris.core.errors.ActionNotConfirmed` with the action
+untouched. The order is the whole point: asking afterwards would mean the machine
+is already rebooting while the question is still on screen.
 
 **A timed-out synchronous action is not forgotten.** ``asyncio.wait_for`` and
 ``Future.result(timeout=...)`` both give up waiting without stopping the work: a
@@ -43,9 +49,10 @@ from __future__ import annotations
 import importlib
 import pkgutil
 import time
+from collections.abc import Callable, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Final, TypeVar
 
@@ -61,6 +68,7 @@ from ayris.actions.base import (
 from ayris.actions.result import ActionResult
 from ayris.core.errors import (
     ActionError,
+    ActionNotConfirmed,
     ActionNotFound,
     ActionParamsInvalid,
     ActionRequiresAdmin,
@@ -74,7 +82,7 @@ from ayris.core.models import AuditEntry, ExecutionResult
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+    from collections.abc import Iterable, Iterator, Sequence
 
     from ayris.actions.base import ActionParams
     from ayris.core.events import EventBus
@@ -86,6 +94,8 @@ __all__ = [
     "SYSTEM_PACKAGE",
     "ActionRegistry",
     "AuditSink",
+    "ConfirmationRequest",
+    "ConfirmationVerdict",
     "RegisteredAction",
     "register",
     "registered_actions",
@@ -135,6 +145,60 @@ class RegisteredAction:
     def name(self) -> str:
         """Registered name, plugin prefix included."""
         return self.action_class.meta.with_prefix(self.plugin).name
+
+
+# --------------------------------------------------------------------------- #
+# Confirming a dangerous action
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmationRequest:
+    """The question a dangerous action needs answered before it runs.
+
+    ``params`` arrives already masked, because whoever answers this will show it
+    to the user or read it aloud, and a Wi-Fi password does not belong in either.
+    """
+
+    action: str
+    title_ru: str
+    params: Mapping[str, Any] = field(default_factory=dict)
+    request_id: str = ""
+
+    @property
+    def question_ru(self) -> str:
+        """The question as a person would hear it."""
+        return f"Подтвердите: «{self.title_ru}»."
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmationVerdict:
+    """The answer. ``confirmed`` decides; ``reason`` explains a refusal.
+
+    A dataclass and not a bool because «пользователь сказал нет», «никто не
+    ответил» and «спросить было нечем» need different words from the assistant,
+    and the registry has no business inventing them. Task 40 returns richer
+    values; this is the part the registry acts on.
+    """
+
+    confirmed: bool
+    reason: str = ""
+    user_message: str = ""
+
+    @classmethod
+    def yes(cls) -> ConfirmationVerdict:
+        """Go ahead."""
+        return cls(confirmed=True)
+
+    @classmethod
+    def no(cls, reason: str = "rejected", *, user_message: str = "") -> ConfirmationVerdict:
+        """Do not run it."""
+        return cls(confirmed=False, reason=reason, user_message=user_message)
+
+
+#: What the registry asks before a dangerous action. Task 40 installs the real
+#: one (voice, PIN, Windows Hello); a test installs a lambda.
+ConfirmationCheck = Callable[[ConfirmationRequest], "ConfirmationVerdict | bool"]
 
 
 _MARKED: dict[str, RegisteredAction] = {}
@@ -274,8 +338,13 @@ class ActionRegistry:
         audit_enabled: Whether to write audit rows at all. Defaults to the
             ``privacy.audit_commands`` setting, read per call because the user can
             switch it off while Ayris is running.
-        is_elevated: Whether the process holds administrator rights. The seam
-            task 39 replaces with the real check and the UAC prompt.
+        is_elevated: Whether the process holds administrator rights. Defaults to
+            the real token check in :mod:`ayris.utils.admin`.
+        confirm: Asked before every ``is_dangerous`` action, and only those.
+            Defaults to refusing while ``privacy.require_confirmation`` is on and
+            nothing has been installed — a machine must not reboot because the
+            component that would have asked is not wired up yet. Task 40 installs
+            the real voice/PIN/Hello mechanism here.
         max_workers: Synchronous actions running at once.
         clock: Monotonic clock, replaceable in tests.
     """
@@ -287,6 +356,7 @@ class ActionRegistry:
         audit: AuditSink | AuditRepository | None = None,
         audit_enabled: Callable[[], bool] | None = None,
         is_elevated: Callable[[], bool] | None = None,
+        confirm: ConfirmationCheck | None = None,
         max_workers: int = DEFAULT_MAX_WORKERS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -295,10 +365,20 @@ class ActionRegistry:
         self._audit = audit
         self._audit_enabled = audit_enabled if audit_enabled is not None else _audit_from_settings
         self._is_elevated = is_elevated if is_elevated is not None else _process_is_elevated
+        self._confirm = confirm
         self._pool = _WorkerPool(max_workers)
         self._clock = clock
         self._discovered: set[str] = set()
         self._lock = Lock()
+
+    def set_confirmation(self, confirm: ConfirmationCheck | None) -> None:
+        """Install the mechanism that confirms dangerous actions, or remove it.
+
+        A setter and not just a constructor argument because the application
+        builds the registry before it builds the confirmation UI, and the settings
+        dialog can switch the method while Ayris runs.
+        """
+        self._confirm = confirm
 
     # -- population -------------------------------------------------------- #
 
@@ -475,18 +555,23 @@ class ActionRegistry:
             ActionNotFound: No such action.
             ActionParamsInvalid: ``params`` do not fit the schema.
             ActionRequiresAdmin: Needs elevation Ayris does not have.
+            ActionNotConfirmed: Dangerous, and the confirmation did not arrive.
             ActionTimeout: Ran past ``meta.timeout_ms``.
             ActionError: Anything the action itself raised, wrapped.
         """
-        action, validated = self._prepare(name, params, request_id=request_id)
+        action, validated, confirmed = self._prepare(name, params, request_id=request_id)
         meta = action.meta
         started = self._clock()
         self._announce(action, validated, request_id=request_id, command_id=command_id)
         try:
             result = self._pool.run(lambda: action.run(validated), meta.timeout_s)
         except BaseException as exc:
-            raise self._fail(action, validated, exc, request_id=request_id) from exc
-        return self._settle(action, validated, result, started, request_id=request_id)
+            raise self._fail(
+                action, validated, exc, request_id=request_id, confirmed=confirmed
+            ) from exc
+        return self._settle(
+            action, validated, result, started, request_id=request_id, confirmed=confirmed
+        )
 
     async def aexecute(
         self,
@@ -499,7 +584,7 @@ class ActionRegistry:
         """Await one action. Same contract as :meth:`execute`."""
         import asyncio
 
-        action, validated = self._prepare(name, params, request_id=request_id)
+        action, validated, confirmed = self._prepare(name, params, request_id=request_id)
         meta = action.meta
         started = self._clock()
         self._announce(action, validated, request_id=request_id, command_id=command_id)
@@ -507,10 +592,16 @@ class ActionRegistry:
             result = await asyncio.wait_for(action.arun(validated), meta.timeout_s)
         except TimeoutError as exc:
             error = ActionTimeout("action exceeded its timeout")
-            raise self._fail(action, validated, error, request_id=request_id) from exc
+            raise self._fail(
+                action, validated, error, request_id=request_id, confirmed=confirmed
+            ) from exc
         except BaseException as exc:
-            raise self._fail(action, validated, exc, request_id=request_id) from exc
-        return self._settle(action, validated, result, started, request_id=request_id)
+            raise self._fail(
+                action, validated, exc, request_id=request_id, confirmed=confirmed
+            ) from exc
+        return self._settle(
+            action, validated, result, started, request_id=request_id, confirmed=confirmed
+        )
 
     def undo(self, name: str, token: str, *, request_id: str = "") -> ActionResult[Any]:
         """Reverse an earlier call of ``name`` using the token it returned.
@@ -549,28 +640,97 @@ class ActionRegistry:
 
     def _prepare(
         self, name: str, params: Mapping[str, Any] | None, *, request_id: str
-    ) -> tuple[Action, ActionParams]:
-        """Resolve the action, validate parameters, check rights."""
+    ) -> tuple[Action, ActionParams, bool]:
+        """Resolve the action, validate parameters, check rights, ask permission.
+
+        Returns the action, its validated parameters, and whether a confirmation
+        was actually given — which the audit row records.
+        """
         action = self.get(name)
         validated = self._validate(action, params or {})
         if action.meta.require_admin and not self._elevated():
-            error = ActionRequiresAdmin(
-                f"{name} requires elevation",
-                user_message=(f"«{action.meta.title_ru}» требует прав администратора."),
+            raise self._refuse(
+                action,
+                validated,
+                ActionRequiresAdmin(
+                    f"{name} requires elevation",
+                    user_message=(f"«{action.meta.title_ru}» требует прав администратора."),
+                ),
+                request_id=request_id,
+                log="action %s denied: not elevated",
             )
-            self._record(action, validated, ExecutionResult.DENIED)
-            self._publish(
-                ActionFailed(
-                    action=name,
-                    error=error.technical,
-                    user_message=error.user_message,
+        confirmed = False
+        if action.meta.is_dangerous:
+            verdict = self._ask(action, validated, request_id=request_id)
+            if not verdict.confirmed:
+                raise self._refuse(
+                    action,
+                    validated,
+                    ActionNotConfirmed(
+                        f"{name} was not confirmed ({verdict.reason or 'rejected'})",
+                        user_message=(
+                            verdict.user_message
+                            or f"Не выполняю «{action.meta.title_ru}» без подтверждения."
+                        ),
+                    ),
                     request_id=request_id,
-                    reason="denied",
+                    outcome=ExecutionResult.CANCELLED,
+                    log="action %s not confirmed",
                 )
+            confirmed = True
+        return action, validated, confirmed
+
+    def _refuse(
+        self,
+        action: Action,
+        params: ActionParams,
+        error: ActionError,
+        *,
+        request_id: str,
+        outcome: ExecutionResult = ExecutionResult.DENIED,
+        log: str,
+    ) -> ActionError:
+        """Journal, publish and log a refusal made before the action ran."""
+        self._record(action, params, outcome)
+        self._publish(
+            ActionFailed(
+                action=action.meta.name,
+                error=error.technical,
+                user_message=error.user_message,
+                request_id=request_id,
+                reason=outcome.value,
             )
-            _log.warning("action %s denied: not elevated", name)
-            raise error
-        return action, validated
+        )
+        _log.warning(log, action.meta.name)
+        return error
+
+    def _ask(self, action: Action, params: ActionParams, *, request_id: str) -> ConfirmationVerdict:
+        """Put the question to whoever is answering it, and never trust the answer.
+
+        A confirmation mechanism that raises is a refusal, not a pass: an
+        exception on the way to asking means nobody was asked, and «сомневаюсь —
+        выключаю компьютер» is not a defensible default.
+        """
+        request = ConfirmationRequest(
+            action=action.meta.name,
+            title_ru=action.meta.title_ru,
+            params=mask_params(params),
+            request_id=request_id,
+        )
+        confirm = self._confirm
+        if confirm is None:
+            return _confirmation_from_settings(request)
+        try:
+            answer = confirm(request)
+        except AyrisError as exc:
+            _log.exception("confirmation for %s failed", action.meta.name)
+            return ConfirmationVerdict.no(
+                f"confirmation raised: {exc.technical}",
+                user_message=exc.user_message,
+            )
+        if isinstance(answer, ConfirmationVerdict):
+            return answer
+        return ConfirmationVerdict(confirmed=bool(answer))
 
     def _validate(self, action: Action, params: Mapping[str, Any]) -> ActionParams:
         model = type(action).params_model()
@@ -624,10 +784,11 @@ class ActionRegistry:
         *,
         request_id: str,
         undo: bool = False,
+        confirmed: bool = False,
     ) -> ActionResult[Any]:
         """Stamp the duration, publish, journal, log. One exit for every success."""
         stamped = result.with_duration(int((self._clock() - started) * 1000))
-        self._record(action, params, stamped.execution)
+        self._record(action, params, stamped.execution, confirmed=confirmed)
         self._publish(
             ActionFinished(
                 action=action.meta.name,
@@ -654,6 +815,7 @@ class ActionRegistry:
         *,
         request_id: str,
         undo: bool = False,
+        confirmed: bool = False,
     ) -> ActionError:
         """Turn whatever went wrong into one typed error. One exit for failure."""
         error = _as_action_error(action, exc, undo=undo)
@@ -663,10 +825,14 @@ class ActionRegistry:
             else (
                 ExecutionResult.DENIED
                 if isinstance(error, ActionRequiresAdmin)
-                else ExecutionResult.ERROR
+                else (
+                    ExecutionResult.CANCELLED
+                    if isinstance(error, ActionNotConfirmed)
+                    else ExecutionResult.ERROR
+                )
             )
         )
-        self._record(action, params, outcome)
+        self._record(action, params, outcome, confirmed=confirmed)
         self._publish(
             ActionFailed(
                 action=action.meta.name,
@@ -683,7 +849,12 @@ class ActionRegistry:
         return error
 
     def _record(
-        self, action: Action, params: ActionParams | None, outcome: ExecutionResult
+        self,
+        action: Action,
+        params: ActionParams | None,
+        outcome: ExecutionResult,
+        *,
+        confirmed: bool = False,
     ) -> None:
         """Write one row to the audit trail, secrets masked, failures swallowed."""
         if self._audit is None or not self._audit_allowed():
@@ -694,6 +865,7 @@ class ActionRegistry:
             result=outcome,
             require_admin=action.meta.require_admin,
             elevated=self._elevated(),
+            confirmed=confirmed,
         )
         try:
             self._audit.add(entry)
@@ -819,21 +991,38 @@ def _audit_from_settings() -> bool:
         return True
 
 
+def _confirmation_from_settings(request: ConfirmationRequest) -> ConfirmationVerdict:
+    """What to do about a dangerous action when nothing was installed to ask.
+
+    With ``privacy.require_confirmation`` off, the user has said in the settings
+    that they do not want to be asked, and that answer is as good as any prompt.
+    With it on there is nobody to ask, and the only safe reading of «спросить не
+    получилось» is «не делать» — the alternative is a reboot no human agreed to
+    because a UI component was not wired up.
+    """
+    from ayris.core.config import get_settings
+
+    try:
+        required = bool(get_settings().privacy.require_confirmation)
+    except AyrisError:
+        _log.exception("could not read the confirmation setting; requiring confirmation")
+        required = True
+    if not required:
+        return ConfirmationVerdict(confirmed=True, reason="confirmation disabled in settings")
+    _log.warning("no confirmation mechanism installed; refusing %s", request.action)
+    return ConfirmationVerdict.no(
+        "no confirmation mechanism is installed",
+        user_message=f"Не могу спросить подтверждение, поэтому не выполняю «{request.title_ru}».",
+    )
+
+
 def _process_is_elevated() -> bool:
     """Whether this process runs with administrator rights.
 
-    The honest answer until task 39 brings the real elevation handling: on Windows
-    ``IsUserAnAdmin`` is authoritative enough to gate an action, and anywhere else
-    there is no such thing, so the answer is no and ``require_admin`` actions
-    refuse instead of half-running.
+    Delegates to :mod:`ayris.utils.admin`, which reads the process token once and
+    remembers the answer: the elevation flag cannot change while a process lives,
+    and this is called on every audit row.
     """
-    import ctypes
-    import sys
+    from ayris.utils.admin import is_elevated
 
-    if sys.platform != "win32":
-        return False
-    try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except (AttributeError, OSError):
-        _log.warning("IsUserAnAdmin is unavailable; treating the process as unprivileged")
-        return False
+    return is_elevated()

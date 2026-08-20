@@ -892,14 +892,17 @@ class HistoryRepository(_Repository):
 class AuditRepository(_Repository):
     """Security journal: what ran, with which rights."""
 
-    _COLUMNS: Final = "id, ts, command_name, params_json, result, require_admin, elevated"
+    _COLUMNS: Final = (
+        "id, ts, command_name, params_json, result, require_admin, elevated, confirmed"
+    )
 
     def add(self, entry: AuditEntry) -> AuditEntry:
         ts = entry.ts if entry.ts is not None else utc_now()
         entry_id = self._db.insert(
             """
-            INSERT INTO audit (ts, command_name, params_json, result, require_admin, elevated)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO audit
+                (ts, command_name, params_json, result, require_admin, elevated, confirmed)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 to_db_timestamp(ts),
@@ -908,6 +911,7 @@ class AuditRepository(_Repository):
                 str(entry.result),
                 int(entry.require_admin),
                 int(entry.elevated),
+                int(entry.confirmed),
             ),
         )
         return replace(entry, id=entry_id, ts=ts)

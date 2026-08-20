@@ -738,7 +738,12 @@ class TestElevation:
         assert recorder.of(ActionFailed)[0].reason == "denied"
 
     def test_admin_action_runs_when_elevated(self, bus: EventBus) -> None:
-        instance = ActionRegistry(bus=bus, audit_enabled=lambda: False, is_elevated=lambda: True)
+        instance = ActionRegistry(
+            bus=bus,
+            audit_enabled=lambda: False,
+            is_elevated=lambda: True,
+            confirm=lambda _request: True,
+        )
         instance.add(Elevated)
         try:
             assert instance.execute("Elevated").ok
@@ -987,7 +992,10 @@ class TestAudit:
 
     def test_admin_flag_is_recorded(self, repos: Repositories) -> None:
         instance = ActionRegistry(
-            audit=repos.audit, audit_enabled=lambda: True, is_elevated=lambda: True
+            audit=repos.audit,
+            audit_enabled=lambda: True,
+            is_elevated=lambda: True,
+            confirm=lambda _request: True,
         )
         instance.add(Elevated)
         try:
@@ -997,6 +1005,7 @@ class TestAudit:
         entry = repos.audit.recent(1)[0]
         assert entry.require_admin is True
         assert entry.elevated is True
+        assert entry.confirmed is True
 
     def test_disabled_audit_writes_nothing(self, repos: Repositories) -> None:
         instance = ActionRegistry(audit=repos.audit, audit_enabled=lambda: False)
