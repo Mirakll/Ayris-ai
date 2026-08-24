@@ -64,6 +64,7 @@ from ayris.core.paths import get_paths
 from ayris.utils.logger import LogLevel, get_logger
 
 __all__ = [
+    "DEFAULT_SEARCH_PROVIDERS",
     "ENV_PREFIX",
     "RAM_LIMIT_CHOICES",
     "SCHEMA_VERSION",
@@ -71,6 +72,7 @@ __all__ = [
     "AiConfig",
     "AudioActionsConfig",
     "AudioInputConfig",
+    "BrowserActionsConfig",
     "CommandsConfig",
     "ConfigChange",
     "ConfigChanged",
@@ -81,6 +83,7 @@ __all__ = [
     "GeneralConfig",
     "HotkeysConfig",
     "InputActionsConfig",
+    "InstantActionsConfig",
     "OverlayConfig",
     "PerformanceConfig",
     "PluginsConfig",
@@ -864,6 +867,122 @@ class InputActionsConfig(ConfigSection):
     )
 
 
+#: Search providers shipped with Ayris, as ``{query}`` templates.
+#:
+#: The templates live in the settings rather than in the code because a search
+#: engine is a matter of taste and because the list is never complete: a user
+#: who searches a wiki, a torrent tracker or an internal help desk adds a line
+#: here and says «найди в <имя>» without touching Python. The placeholder is
+#: filled with the percent-encoded query, so a template may put it in the path
+#: as well as in the query string.
+DEFAULT_SEARCH_PROVIDERS: Final[Mapping[str, str]] = {
+    "google": "https://www.google.com/search?q={query}",
+    "yandex": "https://yandex.ru/search/?text={query}",
+    "youtube": "https://www.youtube.com/results?search_query={query}",
+    "duckduckgo": "https://duckduckgo.com/?q={query}",
+    "wikipedia": "https://ru.wikipedia.org/w/index.php?search={query}",
+}
+
+
+class BrowserActionsConfig(ConfigSection):
+    """Sub-section ``[actions.browser]`` — where links and searches go.
+
+    ``default_provider`` is the engine used when the phrase names none, and
+    ``providers`` is the whole table of them: five come with Ayris, and anything
+    a user adds is merged on top, so a template can be both added and
+    overridden. Yandex is the default because the assistant answers in Russian
+    and a Russian query returns better results there; every field here is a
+    matter of preference, not of correctness.
+
+    ``browser`` names the browser to open links in — empty means the one Windows
+    considers default, and anything else is resolved through the application
+    index by the same name the user would say out loud («хром», «фаерфокс»).
+    """
+
+    default_provider: str = Field(
+        default="yandex",
+        min_length=1,
+        max_length=64,
+        description="Поисковик по умолчанию, если во фразе он не назван",
+    )
+    providers: dict[str, str] = Field(
+        default_factory=lambda: dict(DEFAULT_SEARCH_PROVIDERS),
+        description="Шаблоны поиска: имя = URL с {query}; свой добавляется строкой",
+    )
+    browser: str = Field(
+        default="",
+        max_length=200,
+        description="В каком браузере открывать ссылки; пусто — браузер по умолчанию",
+    )
+    private_by_default: bool = Field(
+        default=False,
+        description="Всегда открывать в приватном окне",
+    )
+
+
+class InstantActionsConfig(ConfigSection):
+    """Sub-section ``[actions.instant]`` — the short spoken answers.
+
+    Every number here exists to keep Ayris inside the limits of free public
+    APIs. The three time-to-live values are the rates at which the data itself
+    changes: a forecast is recomputed about every ten minutes, the Central Bank
+    publishes rates once a business day, and an encyclopedia article does not
+    move at all — an hour and a day of caching cost nothing and turn a repeated
+    question into zero requests.
+
+    ``city`` answers «какая погода» with no city named. It is a plain string and
+    not a coordinate pair on purpose: the user types the name they would say,
+    and the geocoder resolves it once and keeps the answer in the same cache.
+
+    ``stale_hours`` is how old a cached answer may be before Ayris refuses to
+    read it out at all when the network is gone. Yesterday's weather with the
+    date said out loud is useful; a forecast from last week is not.
+    """
+
+    city: str = Field(
+        default="Москва",
+        min_length=1,
+        max_length=120,
+        description="Город по умолчанию для погоды и времени",
+    )
+    weather_ttl_min: int = Field(
+        default=10,
+        ge=1,
+        le=1440,
+        description="Сколько минут держать прогноз в кэше",
+    )
+    rates_ttl_min: int = Field(
+        default=60,
+        ge=1,
+        le=1440,
+        description="Сколько минут держать курс валют в кэше",
+    )
+    facts_ttl_min: int = Field(
+        default=1440,
+        ge=1,
+        le=20_160,
+        description="Сколько минут держать справки и определения в кэше",
+    )
+    timeout_s: float = Field(
+        default=6.0,
+        ge=0.5,
+        le=60.0,
+        description="Сколько ждать ответа от сервиса",
+    )
+    retries: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Сколько раз повторить запрос при сетевой ошибке",
+    )
+    stale_hours: int = Field(
+        default=24,
+        ge=1,
+        le=720,
+        description="До какого возраста озвучивать устаревший кэш офлайн",
+    )
+
+
 class ActionsConfig(ConfigSection):
     """Tab «Действия» — what the action library reads out of the settings."""
 
@@ -874,6 +993,14 @@ class ActionsConfig(ConfigSection):
     input: InputActionsConfig = Field(
         default_factory=InputActionsConfig,
         description="Клавиатура и мышь",
+    )
+    browser: BrowserActionsConfig = Field(
+        default_factory=BrowserActionsConfig,
+        description="Браузер и поисковые провайдеры",
+    )
+    instant: InstantActionsConfig = Field(
+        default_factory=InstantActionsConfig,
+        description="Мгновенные ответы: погода, курс, время, справки",
     )
 
 

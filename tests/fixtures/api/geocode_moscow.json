@@ -1,0 +1,20 @@
+{
+  "results": [
+    {
+      "id": 524901,
+      "name": "Москва",
+      "latitude": 55.75222,
+      "longitude": 37.61556,
+      "elevation": 144.0,
+      "feature_code": "PPLC",
+      "country_code": "RU",
+      "admin1_id": 524894,
+      "timezone": "Europe/Moscow",
+      "population": 10381222,
+      "country_id": 2017370,
+      "country": "Россия",
+      "admin1": "Москва"
+    }
+  ],
+  "generationtime_ms": 0.9350777
+}

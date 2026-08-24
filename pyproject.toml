@@ -73,6 +73,12 @@ dependencies = [
     "keyboard==0.13.5",
     # --- Web ---
     "requests==2.32.3",
+    # Windows не носит с собой базу таймзон IANA, поэтому `zoneinfo` там
+    # падает на любом `ZoneInfo("Asia/Tokyo")` с ZoneInfoNotFoundError и пустым
+    # TZPATH. Мгновенные ответы («сколько времени в Токио») получают имя зоны от
+    # геокодера Open-Meteo и разворачивают его локально — без этого пакета не в
+    # чем.
+    "tzdata==2026.3",
     # --- Plugins ---
     "pluggy==1.5.0",
 ]

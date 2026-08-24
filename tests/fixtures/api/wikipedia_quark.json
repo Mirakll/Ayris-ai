@@ -1,0 +1,26 @@
+{
+  "type": "standard",
+  "title": "Кварк",
+  "displaytitle": "<span class=\"mw-page-title-main\">Кварк</span>",
+  "namespace": {"id": 0, "text": ""},
+  "titles": {"canonical": "Кварк", "normalized": "Кварк", "display": "Кварк"},
+  "pageid": 12345,
+  "lang": "ru",
+  "dir": "ltr",
+  "revision": "138712345",
+  "tid": "b1c2d3e4-0000-11f0-9c3a-0242ac130002",
+  "timestamp": "2026-07-14T08:21:33Z",
+  "description": "фундаментальная частица",
+  "description_source": "local",
+  "content_urls": {
+    "desktop": {
+      "page": "https://ru.wikipedia.org/wiki/%D0%9A%D0%B2%D0%B0%D1%80%D0%BA",
+      "revisions": "https://ru.wikipedia.org/wiki/%D0%9A%D0%B2%D0%B0%D1%80%D0%BA?action=history"
+    },
+    "mobile": {
+      "page": "https://ru.m.wikipedia.org/wiki/%D0%9A%D0%B2%D0%B0%D1%80%D0%BA"
+    }
+  },
+  "extract": "Кварк — фундаментальная частица, из которой состоят адроны: протоны, нейтроны и другие. Кварки не наблюдаются в свободном виде из‑за конфайнмента. Всего известно шесть типов кварков, которые физики называют ароматами.",
+  "extract_html": "<p><b>Кварк</b> — фундаментальная частица, из которой состоят адроны.</p>"
+}

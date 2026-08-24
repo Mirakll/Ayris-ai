@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="windows-1251"?>
+<ValCurs Date="21.08.2026" name="Foreign Currency Market">
+  <Valute ID="R01010">
+    <NumCode>036</NumCode>
+    <CharCode>AUD</CharCode>
+    <Nominal>1</Nominal>
+    <Name>Австралийский доллар</Name>
+    <Value>58,9412</Value>
+    <VunitRate>58,9412</VunitRate>
+  </Valute>
+  <Valute ID="R01235">
+    <NumCode>840</NumCode>
+    <CharCode>USD</CharCode>
+    <Nominal>1</Nominal>
+    <Name>Доллар США</Name>
+    <Value>91,5043</Value>
+    <VunitRate>91,5043</VunitRate>
+  </Valute>
+  <Valute ID="R01239">
+    <NumCode>978</NumCode>
+    <CharCode>EUR</CharCode>
+    <Nominal>1</Nominal>
+    <Name>Евро</Name>
+    <Value>99,1274</Value>
+    <VunitRate>99,1274</VunitRate>
+  </Valute>
+  <Valute ID="R01375">
+    <NumCode>156</NumCode>
+    <CharCode>CNY</CharCode>
+    <Nominal>1</Nominal>
+    <Name>Китайский юань</Name>
+    <Value>12,7318</Value>
+    <VunitRate>12,7318</VunitRate>
+  </Valute>
+  <Valute ID="R01820">
+    <NumCode>392</NumCode>
+    <CharCode>JPY</CharCode>
+    <Nominal>100</Nominal>
+    <Name>Японских иен</Name>
+    <Value>62,4130</Value>
+    <VunitRate>0,624130</VunitRate>
+  </Valute>
+  <Valute ID="R01335">
+    <NumCode>398</NumCode>
+    <CharCode>KZT</CharCode>
+    <Nominal>100</Nominal>
+    <Name>Казахстанских тенге</Name>
+    <Value>19,0455</Value>
+    <VunitRate>0,190455</VunitRate>
+  </Valute>
+</ValCurs>

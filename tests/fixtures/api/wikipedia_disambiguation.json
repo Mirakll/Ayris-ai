@@ -1,0 +1,14 @@
+{
+  "type": "disambiguation",
+  "title": "Ключ",
+  "titles": {"canonical": "Ключ", "normalized": "Ключ", "display": "Ключ"},
+  "pageid": 54321,
+  "lang": "ru",
+  "dir": "ltr",
+  "timestamp": "2026-05-02T11:04:19Z",
+  "description": "страница значений",
+  "content_urls": {
+    "desktop": {"page": "https://ru.wikipedia.org/wiki/%D0%9A%D0%BB%D1%8E%D1%87"}
+  },
+  "extract": "Ключ — многозначный термин."
+}
