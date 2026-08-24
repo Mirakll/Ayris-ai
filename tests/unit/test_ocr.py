@@ -303,19 +303,21 @@ class TestEngineChoice:
             select_engine("missing", ("ru",))
         assert "установщиком" in caught.value.user_message
 
-    def test_nothing_at_all_points_at_windows_settings(
+    def test_nothing_at_all_points_at_windows(
         self,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """При `auto` без единого движка говорим про Windows.
+        """При `auto` без единого движка говорим про Windows OCR.
 
-        Это единственное, что пользователь может починить сам и без установок:
-        языковой пакет распознавания включается в «Параметрах».
+        Он первый по предпочтению и единственный, который пользователь может
+        включить сам, ничего не устанавливая. Сравнение идёт с самим
+        `describe_missing`, а не с куском фразы: у него две ветки — «нет пакетов
+        winrt» и «нет языкового пакета», и на linux-джобе CI верна первая.
         """
         use(monkeypatch, MissingEngine)
         with pytest.raises(OcrEngineError) as caught:
             select_engine("auto", ("ru",))
-        assert "Параметры" in caught.value.user_message
+        assert caught.value.user_message == WindowsOcr.describe_missing()
 
     def test_an_unknown_preference_is_treated_as_auto(
         self,
