@@ -84,11 +84,13 @@ __all__ = [
     "HotkeysConfig",
     "InputActionsConfig",
     "InstantActionsConfig",
+    "OcrActionsConfig",
     "OverlayConfig",
     "PerformanceConfig",
     "PluginsConfig",
     "PrivacyConfig",
     "RestartScope",
+    "ScreenshotActionsConfig",
     "Settings",
     "SttConfig",
     "TtsConfig",
@@ -992,6 +994,138 @@ class InstantActionsConfig(ConfigSection):
     )
 
 
+class ScreenshotActionsConfig(ConfigSection):
+    """Sub-section ``[actions.screenshot]`` — where a capture goes and under what name.
+
+    ``output`` is the whole difference between the two ways people use
+    screenshots: ``file`` for the ones that are kept, ``clipboard`` for the ones
+    that are pasted into a chat and never wanted on disk, ``both`` when it is not
+    known in advance. Nothing else in the section changes behaviour that much.
+
+    ``directory`` empty means :attr:`ayris.core.paths.AppPaths.screenshots_dir` —
+    a folder inside the profile, created on first use. A custom path is taken as
+    given, and it is the one place a screenshot can end up outside the profile.
+
+    ``filename`` is a template rather than a fixed pattern because the useful
+    name depends on the habit: ``{date}_{time}`` sorts chronologically in any file
+    manager, ``{window}_{n}`` groups a series taken from one program. The
+    placeholders are ``{date}``, ``{time}``, ``{monitor}``, ``{window}`` and
+    ``{n}``; an unknown one is left alone rather than raising, because a typo in
+    the settings must not break the action.
+
+    ``jpeg_quality`` only matters when ``format`` is ``jpeg``. PNG is the default:
+    a screenshot is mostly flat colour and sharp text, which is what PNG is good
+    at and JPEG is worst at — the ringing around letters is visible at any
+    quality below about 90.
+    """
+
+    output: Literal["file", "clipboard", "both"] = Field(
+        default="both",
+        description="Куда девать снимок: файл, буфер обмена или и то и другое",
+    )
+    directory: str = Field(
+        default="",
+        max_length=400,
+        description="Папка для снимков; пусто — папка «Скриншоты» в профиле",
+    )
+    filename: str = Field(
+        default="ayris_{date}_{time}",
+        min_length=1,
+        max_length=200,
+        description="Шаблон имени файла: {date}, {time}, {monitor}, {window}, {n}",
+    )
+    format: Literal["png", "jpeg"] = Field(
+        default="png",
+        description="Формат файла: png (без потерь) или jpeg",
+    )
+    jpeg_quality: int = Field(
+        default=92,
+        ge=40,
+        le=100,
+        description="Качество JPEG, если формат jpeg",
+    )
+    dim_opacity: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=0.9,
+        description="Насколько затемнять экран при выделении области",
+    )
+    selection_timeout_s: float = Field(
+        default=60.0,
+        ge=2.0,
+        le=600.0,
+        description="Сколько ждать выделения области, прежде чем отменить",
+    )
+
+
+class OcrActionsConfig(ConfigSection):
+    """Sub-section ``[actions.ocr]`` — reading text off the screen.
+
+    ``engine`` is a preference, not a promise: ``auto`` takes the first available
+    of Windows OCR, Tesseract and PaddleOCR, and naming one explicitly still falls
+    back if it turns out not to be installed. Windows OCR comes first because it
+    is the only one already present on every Windows 10/11 — offline, with Russian
+    and English in the box and nothing to install.
+
+    ``languages`` is what the engine is told to expect, best first. Order matters
+    more than it looks: Windows OCR picks one language and one only, and asking it
+    for English on Russian text returns confident-looking garbage rather than
+    nothing.
+
+    ``upscale_to_dpi`` is the one preprocessing knob that reliably changes the
+    result. Screen text is 12–14 px tall at 96 DPI and every engine is trained on
+    scans around 300; scaling the crop up before recognition is what turns
+    «Настройки» from unreadable into read. ``binarize`` is off by default because
+    it helps a photographed page and hurts anti-aliased screen text.
+
+    ``speak_limit`` caps how much of a recognised wall of text is read out. The
+    whole of it still goes to the clipboard; only the spoken part is cut, at a
+    sentence boundary where there is one.
+    """
+
+    engine: Literal["auto", "windows", "tesseract", "paddle"] = Field(
+        default="auto",
+        description="Движок распознавания; auto — первый доступный",
+    )
+    languages: list[str] = Field(
+        default_factory=lambda: ["ru", "en"],
+        min_length=1,
+        max_length=8,
+        description="Языки распознавания, важнейший первым",
+    )
+    output: Literal["clipboard", "speak", "both"] = Field(
+        default="both",
+        description="Куда девать распознанный текст",
+    )
+    speak_limit: int = Field(
+        default=400,
+        ge=40,
+        le=4000,
+        description="Сколько символов озвучивать; остальное только в буфер",
+    )
+    upscale_to_dpi: int = Field(
+        default=300,
+        ge=96,
+        le=600,
+        description="До какого DPI увеличивать снимок перед распознаванием",
+    )
+    binarize: bool = Field(
+        default=False,
+        description="Приводить снимок к чёрно-белому перед распознаванием",
+    )
+    min_confidence: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Отбрасывать блоки с уверенностью ниже (0 — не отбрасывать)",
+    )
+    tesseract_path: str = Field(
+        default="",
+        max_length=400,
+        description="Путь к tesseract.exe, если он не в PATH",
+    )
+
+
 class ActionsConfig(ConfigSection):
     """Tab «Действия» — what the action library reads out of the settings."""
 
@@ -1010,6 +1144,14 @@ class ActionsConfig(ConfigSection):
     instant: InstantActionsConfig = Field(
         default_factory=InstantActionsConfig,
         description="Мгновенные ответы: погода, курс, время, справки",
+    )
+    screenshot: ScreenshotActionsConfig = Field(
+        default_factory=ScreenshotActionsConfig,
+        description="Снимки экрана: куда сохранять, формат, имя файла",
+    )
+    ocr: OcrActionsConfig = Field(
+        default_factory=OcrActionsConfig,
+        description="Распознавание текста с экрана",
     )
 
 

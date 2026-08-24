@@ -224,6 +224,8 @@ def test_runtime_imports_are_covered_by_ci_requirements() -> None:
         "numpy": "numpy",
         "sounddevice": "sounddevice",
         "webrtcvad": "webrtcvad-wheels",
+        "mss": "mss",
+        "PIL": "pillow",
     }
     sources = (PROJECT_ROOT / "src" / "ayris").rglob("*.py")
     pattern = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)", re.MULTILINE)

@@ -40,6 +40,11 @@ numpy==1.26.4
 sounddevice==0.5.1
 webrtcvad-wheels==2.0.14
 httpx==0.28.1
+# Снимки экрана и их кодирование (задача 26). mss на linux-раннере нужен только
+# для импорта: `mss.mss()` без X11 не открывается, и тесты захвата там идут через
+# подставной бэкенд, зато расчёт областей и шаблоны имён проверяются на всех трёх.
+mss==9.0.2
+pillow==12.3.0
 # База таймзон IANA. На windows-раннере её в системе нет — `zoneinfo` там
 # отдаёт ZoneInfoNotFoundError на первом же городе, и тесты мгновенных ответов
 # краснеют именно на той платформе, для которой всё написано.
@@ -51,6 +56,17 @@ tzdata==2026.3
 # comtypes к ней — пара сотен килобайт, и на linux-джобе маркер их отсекает.
 pycaw==20240210; sys_platform == 'win32'
 comtypes==1.4.9; sys_platform == 'win32'
+# Windows.Media.Ocr — движок распознавания по умолчанию (задача 26). На
+# windows-джобах языковой пакет OCR уже стоит в системе, поэтому на раннере
+# проверяется настоящее распознавание, а не только фоллбек на моках. Пакеты
+# модульные и win32-only: на linux-джобе маркер их отсекает целиком.
+winrt-runtime==3.2.1; sys_platform == 'win32'
+winrt-Windows.Foundation==3.2.1; sys_platform == 'win32'
+winrt-Windows.Foundation.Collections==3.2.1; sys_platform == 'win32'
+winrt-Windows.Globalization==3.2.1; sys_platform == 'win32'
+winrt-Windows.Graphics.Imaging==3.2.1; sys_platform == 'win32'
+winrt-Windows.Media.Ocr==3.2.1; sys_platform == 'win32'
+winrt-Windows.Storage.Streams==3.2.1; sys_platform == 'win32'
 
 # --- Инструменты проверок ---
 ruff==0.9.6

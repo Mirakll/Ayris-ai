@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 __all__ = [
+    "CF_DIB",
+    "DWMWA_EXTENDED_FRAME_BOUNDS",
     "ELEVATION_TYPE_DEFAULT",
     "ELEVATION_TYPE_FULL",
     "ELEVATION_TYPE_LIMITED",
@@ -99,14 +101,17 @@ __all__ = [
     "attach_thread_input",
     "available",
     "bring_window_to_top",
+    "clipboard_set_binary",
     "console_output_codepage",
     "current_thread_id",
     "cursor_position",
+    "display_device",
     "dpi_for_monitor",
     "enable_privilege",
     "enum_display_monitors",
     "enum_windows",
     "exit_windows",
+    "extended_frame_bounds",
     "foreground_window",
     "initiate_shutdown",
     "is_cloaked",
@@ -125,6 +130,7 @@ __all__ = [
     "process_elevation",
     "process_image_name",
     "process_running",
+    "register_clipboard_format",
     "send_close",
     "send_key_events",
     "send_mouse_event",
@@ -184,6 +190,20 @@ SWP_NOACTIVATE: Final = 0x0010
 # DWMWA_CLOAKED: set for windows the compositor hides — minimised Store apps and
 # everything that lives on another virtual desktop.
 DWMWA_CLOAKED: Final = 14
+#: DWMWA_EXTENDED_FRAME_BOUNDS: what the window actually covers on screen.
+#: ``GetWindowRect`` adds the invisible resize margins the compositor draws the
+#: drop shadow into — around 7 px per side on Windows 11 — so a screenshot cropped
+#: to it carries a border of whatever was behind the window.
+DWMWA_EXTENDED_FRAME_BOUNDS: Final = 9
+
+#: Clipboard formats a screenshot is offered in. ``CF_DIB`` is what every program
+#: back to Paint understands; the registered ``"PNG"`` format keeps the alpha
+#: channel for the ones that prefer it (browsers, Office, Telegram).
+CF_DIB: Final = 8
+
+#: ``GlobalAlloc`` flags: moveable memory, which is the only kind the clipboard
+#: accepts ownership of.
+GMEM_MOVEABLE: Final = 0x0002
 
 SEE_MASK_NOCLOSEPROCESS: Final = 0x00000040
 SEE_MASK_FLAG_NO_UI: Final = 0x00000400
@@ -307,6 +327,10 @@ _DEFAULT_DPI: Final = 96
 #: Pause between the key-down and key-up halves of an emulated chord. Without it
 #: the shell occasionally sees the modifier as still held and swallows the arrow.
 _CHORD_HOLD_S: Final = 0.02
+#: ``OpenClipboard`` fails outright while another process holds the clipboard, and
+#: something always does right after a Ctrl+C. Retry a few times over ~0.15 s.
+_CLIPBOARD_TRIES: Final = 6
+_CLIPBOARD_RETRY_S: Final = 0.03
 #: Longest title Windows will hand back. Titles are short; the cap only exists so
 #: a hostile window cannot make us allocate megabytes.
 _MAX_TEXT: Final = 1024
@@ -403,6 +427,19 @@ class _MONITORINFOEXW(ctypes.Structure):
         ("rcWork", _RECT),
         ("dwFlags", ctypes.c_ulong),
         ("szDevice", ctypes.c_wchar * 32),
+    )
+
+
+class _DISPLAYDEVICEW(ctypes.Structure):
+    """``DISPLAY_DEVICEW``: the adapter or the panel behind one display name."""
+
+    _fields_ = (
+        ("cb", ctypes.c_ulong),
+        ("DeviceName", ctypes.c_wchar * 32),
+        ("DeviceString", ctypes.c_wchar * 128),
+        ("StateFlags", ctypes.c_ulong),
+        ("DeviceID", ctypes.c_wchar * 128),
+        ("DeviceKey", ctypes.c_wchar * 128),
     )
 
 
@@ -760,6 +797,44 @@ def window_rect(hwnd: int) -> Rect:
     if not get_rect(_handle(hwnd), ctypes.byref(box)):
         raise _last_error("GetWindowRect")
     return Rect(int(box.left), int(box.top), int(box.right), int(box.bottom))
+
+
+def extended_frame_bounds(hwnd: int) -> Rect:
+    """What the window visibly covers, without the shadow margins.
+
+    The rectangle to crop a screenshot to. :func:`window_rect` answers something
+    larger: since Aero the resize border is drawn outside the visible frame and
+    is transparent, so on Windows 11 ``GetWindowRect`` overshoots by roughly
+    7 px on the left, right and bottom, and a capture of that region has a strip
+    of the desktop — or of the window behind — along three of its edges.
+
+    Falls back to :func:`window_rect` when the compositor refuses to answer:
+    dwmapi is missing, composition is off, or the handle is already gone. A
+    slightly too large screenshot beats no screenshot.
+    """
+    get_attribute = _win_function("dwmapi", "DwmGetWindowAttribute")
+    if get_attribute is not None:
+        box = _RECT()
+        get_attribute.restype = ctypes.c_long
+        get_attribute.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+            ctypes.c_void_p,
+            ctypes.c_ulong,
+        ]
+        hresult = int(
+            get_attribute(
+                _handle(hwnd),
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                ctypes.byref(box),
+                ctypes.sizeof(box),
+            )
+        )
+        bounds = Rect(int(box.left), int(box.top), int(box.right), int(box.bottom))
+        if hresult == 0 and not bounds.is_empty:
+            return bounds
+        _log.debug("EXTENDED_FRAME_BOUNDS refused: hresult=0x%08x", hresult & 0xFFFFFFFF)
+    return window_rect(hwnd)
 
 
 def foreground_window() -> int:
@@ -1413,6 +1488,32 @@ def monitor_from_window(hwnd: int, flags: int = MONITOR_DEFAULTTONEAREST) -> int
     return int(from_window(_handle(hwnd), flags) or 0)
 
 
+def display_device(device: str, index: int = 0) -> tuple[str, str]:
+    """Model name and device id of the panel plugged into a display adapter.
+
+    ``device`` is what :func:`monitor_info` reports — ``\\\\.\\DISPLAY1``. The
+    answer is ``(name, id)``, for instance ``("LG ULTRAGEAR",
+    "MONITOR\\GSM5B09\\{4d36e96e-...}\\0002")``, or two empty strings when
+    Windows has nothing to say. Both halves are best-effort: the point is a
+    string the user might actually say out loud, since ``DISPLAY1`` is not one.
+    """
+    enum_devices = _win_function("user32", "EnumDisplayDevicesW")
+    if enum_devices is None:
+        return ("", "")
+    info = _DISPLAYDEVICEW()
+    info.cb = ctypes.sizeof(_DISPLAYDEVICEW)
+    enum_devices.restype = ctypes.c_bool
+    enum_devices.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_ulong,
+        ctypes.POINTER(_DISPLAYDEVICEW),
+        ctypes.c_ulong,
+    ]
+    if not enum_devices(device or None, index, ctypes.byref(info), 0):
+        return ("", "")
+    return (str(info.DeviceString).strip(), str(info.DeviceID).strip())
+
+
 def windows_build() -> int:
     """Build number of the running Windows, or ``0`` elsewhere.
 
@@ -1532,6 +1633,100 @@ def dpi_for_monitor(handle: int) -> int:
     if status != 0 or not horizontal.value:
         return _DEFAULT_DPI
     return int(horizontal.value)
+
+
+# --------------------------------------------------------------------------- #
+# Clipboard
+# --------------------------------------------------------------------------- #
+
+
+def register_clipboard_format(name: str) -> int:
+    """Numeric id of a named clipboard format, or ``0`` when it cannot be had.
+
+    Registering an already registered name returns the same id, so every process
+    that asks for ``"PNG"`` agrees on the number without anyone owning it.
+    """
+    register = _win_function("user32", "RegisterClipboardFormatW")
+    if register is None:
+        return 0
+    register.restype = ctypes.c_uint
+    register.argtypes = [ctypes.c_wchar_p]
+    return int(register(name))
+
+
+def clipboard_set_binary(payloads: Sequence[tuple[int, bytes]]) -> None:
+    """Put the same picture on the clipboard in several formats at once.
+
+    ``payloads`` is ``(format, bytes)`` pairs, best format first — Windows keeps
+    the order and a pasting program takes the first one it understands. Offering
+    both :data:`CF_DIB` and the registered ``"PNG"`` is the difference between a
+    screenshot that pastes into Paint and one that keeps its alpha channel in a
+    browser; neither format alone covers both.
+
+    The clipboard is a single global lock, and whatever holds it usually lets go
+    within a frame, so a refusal is retried briefly before it becomes an error.
+    Memory handed to ``SetClipboardData`` belongs to the system afterwards and
+    must not be freed; memory it rejected still belongs to us and must be.
+    """
+    if not payloads:
+        return
+
+    open_clipboard = _require("user32", "OpenClipboard")
+    empty_clipboard = _require("user32", "EmptyClipboard")
+    set_data = _require("user32", "SetClipboardData")
+    close_clipboard = _require("user32", "CloseClipboard")
+    global_alloc = _require("kernel32", "GlobalAlloc")
+    global_lock = _require("kernel32", "GlobalLock")
+    global_unlock = _require("kernel32", "GlobalUnlock")
+    global_free = _require("kernel32", "GlobalFree")
+
+    open_clipboard.restype = ctypes.c_bool
+    open_clipboard.argtypes = [ctypes.c_void_p]
+    empty_clipboard.restype = ctypes.c_bool
+    empty_clipboard.argtypes = []
+    set_data.restype = ctypes.c_void_p
+    set_data.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+    close_clipboard.restype = ctypes.c_bool
+    close_clipboard.argtypes = []
+    global_alloc.restype = ctypes.c_void_p
+    global_alloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    global_lock.restype = ctypes.c_void_p
+    global_lock.argtypes = [ctypes.c_void_p]
+    global_unlock.restype = ctypes.c_bool
+    global_unlock.argtypes = [ctypes.c_void_p]
+    global_free.restype = ctypes.c_void_p
+    global_free.argtypes = [ctypes.c_void_p]
+
+    for attempt in range(_CLIPBOARD_TRIES):
+        if open_clipboard(None):
+            break
+        if attempt == _CLIPBOARD_TRIES - 1:
+            raise _last_error("OpenClipboard")
+        time.sleep(_CLIPBOARD_RETRY_S)
+
+    try:
+        if not empty_clipboard():
+            raise _last_error("EmptyClipboard")
+        for fmt, blob in payloads:
+            if not fmt or not blob:
+                continue
+            block = global_alloc(GMEM_MOVEABLE, len(blob))
+            if not block:
+                raise _last_error("GlobalAlloc")
+            address = global_lock(block)
+            if not address:
+                global_free(block)
+                raise _last_error("GlobalLock")
+            try:
+                ctypes.memmove(address, blob, len(blob))
+            finally:
+                global_unlock(block)
+            if not set_data(fmt, block):
+                error = _last_error("SetClipboardData")
+                global_free(block)
+                raise error
+    finally:
+        close_clipboard()
 
 
 # --------------------------------------------------------------------------- #
