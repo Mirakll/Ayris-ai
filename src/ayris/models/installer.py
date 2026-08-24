@@ -37,6 +37,15 @@ extraction the archive's own checksum can no longer be recomputed from what is o
 disk — and without it "проверить целостность" could only ever compare sizes. A
 single-file install needs no manifest: the catalog's ``sha256`` is the hash of
 the file itself.
+
+**A record may ask for a subdirectory even without an archive.** Some models are
+several loose files with names their loader globs for — a GigaAM export is
+weights plus a vocabulary, found by ``v?_ctc*.onnx`` and ``v?_vocab.txt`` — so
+flat in ``models/stt`` a second variant would collide with the first on the same
+glob. :attr:`~ayris.models.catalog.ModelEntry.directory` names the folder, and
+then those files are staged, described and swapped exactly like an archive's,
+manifest included. Everything downstream sees a directory install and needs no
+special case.
 """
 
 from __future__ import annotations
@@ -168,7 +177,7 @@ class Installer:
 
     def destination(self, entry: ModelEntry) -> Path:
         """Where this model will live once installed."""
-        return self._root / entry.kind / entry.target
+        return self._root / entry.kind / entry.install_name
 
     def is_installed(self, entry: ModelEntry) -> bool:
         return self.destination(entry).exists()
@@ -255,6 +264,8 @@ class Installer:
         ``.onnx.json`` did not is not a voice, it is a file that makes the engine
         raise on first use.
         """
+        if entry.directory:
+            return self._install_directory(entry, downloads, kind_dir)
         moved: list[Path] = []
         try:
             for download in downloads:
@@ -283,6 +294,50 @@ class Installer:
             name=entry.target,
             size_bytes=size,
             files=tuple(moved),
+        )
+
+    def _install_directory(
+        self,
+        entry: ModelEntry,
+        downloads: Sequence[DownloadResult],
+        kind_dir: Path,
+    ) -> InstallResult:
+        """Move bare files into a subdirectory of their own, staged like an archive.
+
+        A model that arrives as several loose files — a GigaAM export is weights
+        plus a vocabulary — has to keep the names its loader globs for, so two
+        variants of it cannot share ``models/<kind>``. Staged and swapped for the
+        same reason an archive is: a half-moved set of files would look installed
+        and then fail on load.
+        """
+        destination = kind_dir / entry.directory
+        staging = kind_dir / f"{entry.directory}{STAGING_SUFFIX}"
+        _remove(staging)
+        try:
+            staging.mkdir(parents=True)
+            for download in downloads:
+                download.path.replace(staging / download.target)
+            manifest = _describe(staging, catalog_id=entry.id, archive_sha256=downloads[0].sha256)
+            (staging / MANIFEST_NAME).write_text(manifest.to_json(), encoding="utf-8")
+            _swap(staging, destination)
+        except OSError as exc:
+            _remove(staging)
+            raise InstallError(
+                f"cannot install {entry.id} into {destination}: {exc}",
+                user_message=(
+                    f"Не удалось установить «{entry.name}».\n"
+                    "Проверьте, что файлы модели не открыты другой программой."
+                ),
+            ) from exc
+
+        size = _directory_size(destination)
+        _log.info("модель %s установлена в %s (%s)", entry.id, destination, human_size(size))
+        return InstallResult(
+            catalog_id=entry.id,
+            path=destination,
+            name=entry.directory,
+            size_bytes=size,
+            files=tuple(sorted(path for path in destination.rglob("*") if path.is_file())),
         )
 
     # ------------------------------------------------------------------

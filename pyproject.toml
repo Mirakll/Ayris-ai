@@ -46,6 +46,16 @@ dependencies = [
     # --- Wake word ---
     "openwakeword==0.6.0",
     # --- STT ---
+    # GigaAM v3 через onnx-asr — движок распознавания по умолчанию: на живой
+    # русской речи 3.7 % WER и 24x realtime на одном ядре против 26 % и 1.4x у
+    # faster-whisper small. Своего кода у пакета мало, зависимостей — numpy и
+    # onnxruntime, и оба уже здесь.
+    "onnx-asr==0.12.0",
+    # Отдельной строкой, потому что onnx-asr требует его только через extra `cpu`,
+    # а без пина версию выбирают piper-tts и faster-whisper (у обоих `<2,>=1`) —
+    # то есть она менялась бы от прогона к прогону. 1.29 — первая, где Ayris
+    # проверен целиком; 1.24.1, 1.25.* и 1.26.0 onnx-asr прямо запрещает.
+    "onnxruntime==1.29.0",
     "vosk==0.3.45",
     # 1.2 сменила API стрима: было `synthesize_stream_raw`, стало
     # `synthesize` с чанками. Движок умеет оба (`_vendor_stream`), но пин
@@ -69,8 +79,24 @@ dependencies = [
     "screeninfo==0.8.1",
     "monitorcontrol==3.1.0",
     "mss==9.0.2",
+    # Кодирование снимков (PNG/JPEG с качеством), масштабирование и бинаризация
+    # перед OCR. mss отдаёт сырой BGRA, сам ничего не кодирует.
+    "pillow==12.3.0",
     "pyperclip==1.9.0",
     "keyboard==0.13.5",
+    # --- Windows.Media.Ocr (задача 26) ---
+    # Модульные пакеты pywinrt вместо монолитного winsdk: тот тянет проекции всего
+    # SDK (сотни мегабайт), а нужны шесть пространств имён. Windows OCR — движок по
+    # умолчанию: он уже есть в каждой Windows 10/11, офлайн, с русским из коробки.
+    # Без пакетов распознавание уходит в Tesseract, поэтому это зависимость, а не
+    # extra: иначе «прочитай что на экране» из коробки не работает.
+    "winrt-runtime==3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Foundation==3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Foundation.Collections==3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Globalization==3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Graphics.Imaging==3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Media.Ocr==3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Storage.Streams==3.2.1; sys_platform == 'win32'",
     # --- Web ---
     "requests==2.32.3",
     # Windows не носит с собой базу таймзон IANA, поэтому `zoneinfo` там
@@ -260,6 +286,8 @@ module = [
     "keyring.*",
     "monitorcontrol.*",
     "mss.*",
+    "onnx_asr.*",
+    "onnxruntime.*",
     "openwakeword.*",
     "paddleocr.*",
     "piper.*",
@@ -274,6 +302,7 @@ module = [
     "uiautomation.*",
     "vosk.*",
     "webrtcvad.*",
+    "winrt.*",
 ]
 ignore_missing_imports = true
 

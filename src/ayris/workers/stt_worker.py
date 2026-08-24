@@ -571,7 +571,13 @@ class SttWorker(Worker):
         return SttOptions.from_params(self.params)
 
     def _configured_engine(self) -> str:
-        """The engine the settings picked, defaulting to Vosk."""
+        """The engine the settings picked, defaulting to Vosk.
+
+        Deliberately not the settings' own default of GigaAM: this fallback only
+        fires when the worker was started without params at all, and then the
+        streaming engine that needs 46 MB is a better guess than the one that needs
+        215 MB and may not be downloaded yet.
+        """
         return str(self.params.get("offline_engine", "")) or "vosk"
 
     def _configured_model(self) -> str:

@@ -27,8 +27,12 @@ Groups:
 * :class:`TestEngineRegistry` — names, lazy resolution, the optional engine.
 * :class:`TestModelSize` — measuring a directory on disk, recursively.
 * :class:`TestEngineContract` — what :class:`SttEngine` guarantees a subclass.
-* :class:`TestVoskEngine` / :class:`TestWhisperEngine` — the parts of the two
+* :class:`TestVoskEngine` / :class:`TestWhisperEngine` — the parts of those two
   real engines that are pure functions of their inputs, not needing a model.
+* :class:`TestGigaAmVariants` — which export the folder holds, decided by looking.
+* :class:`TestGigaAmChunking` — where a long buffer is cut, and that it tiles.
+* :class:`TestGigaAmWords` — per-character tokens regrouped into words.
+* :class:`TestGigaAmEngine` — the default engine, on a fake onnx-asr model.
 * :class:`TestWorkerAudio` — shared memory in, resampled mono out.
 * :class:`TestWorkerLifecycle` — lazy load, idle unload, reload, RAM cap.
 * :class:`TestIdleTimeout` — the timeout itself, without sleeping through it.
@@ -47,9 +51,10 @@ import sys
 import types
 import wave
 from array import array
+from itertools import pairwise
 from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, Self
 
 import pytest
 
@@ -76,6 +81,16 @@ from ayris.audio.stt.faster_whisper_engine import (
     _logprob_to_confidence,
     _mean_confidence,
     cuda_available,
+)
+from ayris.audio.stt.gigaam_engine import (
+    _ASSUMED_CONFIDENCE,
+    GIGAAM_VARIANTS,
+    GigaAmEngine,
+    _confidence,
+    _cut_points,
+    _detect_variant,
+    _quantization,
+    _words,
 )
 from ayris.audio.stt.vosk_engine import VoskSttEngine
 from ayris.core.config import Settings
@@ -1213,6 +1228,396 @@ class TestWhisperEngine:
 
 
 # ----------------------------------------------------------------------
+# GigaAM, without onnx-asr
+# ----------------------------------------------------------------------
+#
+# Same trick as the two above - a fake in place of the loaded model - but here it
+# buys more, because the engine does real work either side of the vendor call:
+# it decides which export it was handed by looking at the folder, cuts a long
+# buffer at its quiet points, and rebuilds words out of per-character tokens.  All
+# three are pure functions of their inputs, and all three are where a mistake
+# would be silent: a wrong variant transcribes into Latin, a bad cut eats a word,
+# a mis-grouped token stream produces a plausible sentence with the spaces in the
+# wrong places.
+
+
+class FakeGigaAmResult:
+    """What ``recognize`` returns from a model built by ``with_timestamps()``.
+
+    One entry per output cell, and for every GigaAM CTC export a cell is a
+    character.  Read with :func:`getattr` by the engine, so a plain object with
+    the right attribute names is indistinguishable from the vendor's dataclass.
+    """
+
+    __slots__ = ("logprobs", "text", "timestamps", "tokens")
+
+    def __init__(
+        self,
+        text: str,
+        tokens: list[str] | None = None,
+        timestamps: list[float] | None = None,
+        logprobs: list[float] | None = None,
+    ) -> None:
+        self.text = text
+        self.tokens = tokens
+        self.timestamps = timestamps
+        self.logprobs = logprobs
+
+    @classmethod
+    def spelled(cls, text: str, *, start: float = 0.0, logprob: float = -0.05) -> Self:
+        """A result for *text*, one 40 ms cell per character.
+
+        The vendor's own shape: spaces are cells too, which is what makes
+        ``_words`` a grouping problem rather than a split.
+        """
+        return cls(
+            text=text,
+            tokens=list(text),
+            timestamps=[start + index * 0.04 for index in range(len(text))],
+            logprobs=[logprob] * len(text),
+        )
+
+
+class FakeGigaAmModel:
+    """A loaded onnx-asr model: records what it was asked, returns fixed results.
+
+    One result per call, in order, and silence once the list runs out - so a test
+    that hands it two results is describing the first two pieces of a cut-up
+    buffer and saying nothing about how many pieces there turned out to be.
+    """
+
+    def __init__(self, results: list[FakeGigaAmResult]) -> None:
+        self.results = results
+        self.calls: list[int] = []
+        self.rates: list[int] = []
+
+    def recognize(self, waveform: Any, *, sample_rate: int) -> FakeGigaAmResult:
+        self.calls.append(int(waveform.size))
+        self.rates.append(sample_rate)
+        index = len(self.calls) - 1
+        if index >= len(self.results):
+            return FakeGigaAmResult.spelled("")
+        return self.results[index]
+
+
+def gigaam_ready(
+    results: list[FakeGigaAmResult] | None = None,
+    *,
+    variant: str = "gigaam-v3-ctc",
+    **options: object,
+) -> GigaAmEngine:
+    """A GigaAM engine with a fake model in place of a loaded one."""
+    engine = GigaAmEngine()
+    engine._options = SttOptions(**options)  # type: ignore[arg-type]
+    engine._language = "ru"
+    engine._variant = variant
+    engine._numpy = importlib.import_module("numpy")
+    engine._model = FakeGigaAmModel(results or [FakeGigaAmResult.spelled("привет")])
+    return engine
+
+
+def gigaam_folder(root: Path, *names: str) -> Path:
+    """A directory holding empty files with the vendor's names."""
+    root.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        (root / name).write_bytes(b"")
+    return root
+
+
+def speech(ms: int, *, rate: int = STT_SAMPLE_RATE) -> array[int]:
+    """``ms`` of loud noise as ``int16`` samples, for a cut-point search."""
+    samples = array("h")
+    for index in range(int(ms * rate / 1000)):
+        samples.append(9000 if index % 7 < 4 else -9000)
+    return samples
+
+
+class TestGigaAmVariants:
+    """Which export is in the folder, decided by looking rather than by trusting."""
+
+    def test_the_plain_ctc_export_is_recognised(self, tmp_path: Path):
+        folder = gigaam_folder(tmp_path / "m", "v3_ctc.int8.onnx", "v3_vocab.txt")
+        assert _detect_variant(folder, engine="gigaam") == ("gigaam-v3-ctc", "int8")
+
+    def test_the_end_to_end_export_wins_over_the_plain_pattern(self, tmp_path: Path):
+        """``v3_e2e_ctc.int8.onnx`` matches ``v3_ctc*`` too, so order decides.
+
+        Getting this backwards is the one mistake that produces no error at all:
+        the folder loads, recognition works, and the punctuation the user asked
+        for silently never appears.
+        """
+        folder = gigaam_folder(tmp_path / "m", "v3_e2e_ctc.int8.onnx", "v3_e2e_ctc_vocab.txt")
+        assert _detect_variant(folder, engine="gigaam") == ("gigaam-v3-e2e-ctc", "int8")
+
+    def test_an_rnnt_export_is_named_by_its_encoder(self, tmp_path: Path):
+        folder = gigaam_folder(
+            tmp_path / "m",
+            "v3_rnnt_encoder.fp16.onnx",
+            "v3_rnnt_decoder.fp16.onnx",
+            "v3_rnnt_joint.fp16.onnx",
+            "v3_vocab.txt",
+        )
+        assert _detect_variant(folder, engine="gigaam") == ("gigaam-v3-rnnt", "fp16")
+
+    def test_an_unquantised_export_asks_for_no_quantisation(self, tmp_path: Path):
+        folder = gigaam_folder(tmp_path / "m", "v2_ctc.onnx", "v2_vocab.txt")
+        assert _detect_variant(folder, engine="gigaam") == ("gigaam-v2-ctc", None)
+
+    def test_the_manifest_beside_the_weights_is_ignored(self, tmp_path: Path):
+        """The installer writes ``.ayris-model.json`` into the same folder."""
+        folder = gigaam_folder(
+            tmp_path / "m", "v3_ctc.int8.onnx", "v3_vocab.txt", ".ayris-model.json"
+        )
+        assert _detect_variant(folder, engine="gigaam")[0] == "gigaam-v3-ctc"
+
+    def test_a_folder_of_something_else_names_what_it_found(self, tmp_path: Path):
+        """The usual cause is a Vosk model left in the setting, so say so."""
+        folder = gigaam_folder(tmp_path / "vosk-model-small-ru-0.22", "final.mdl", "mfcc.conf")
+        with pytest.raises(SttError) as excinfo:
+            _detect_variant(folder, engine="gigaam")
+        assert "final.mdl" in str(excinfo.value)
+        assert "vosk-model-small-ru-0.22" in (excinfo.value.user_message or "")
+
+    def test_an_empty_folder_still_produces_a_readable_message(self, tmp_path: Path):
+        folder = gigaam_folder(tmp_path / "m")
+        with pytest.raises(SttError, match="пусто"):
+            _detect_variant(folder, engine="gigaam")
+
+    def test_a_file_is_refused_as_a_model_folder(self, tmp_path: Path):
+        """onnx-asr takes a directory; handed a file it raises from inside a glob."""
+        path = tmp_path / "v3_ctc.int8.onnx"
+        path.write_bytes(b"")
+        with pytest.raises(SttError, match="not a directory"):
+            _detect_variant(path, engine="gigaam")
+
+    @pytest.mark.parametrize(
+        ("file_name", "expected"),
+        [
+            ("v3_ctc.int8.onnx", "int8"),
+            ("v3_ctc.fp16.onnx", "fp16"),
+            ("v3_ctc.onnx", None),
+            ("v3_int8_ctc.onnx", None),
+        ],
+    )
+    def test_the_quantisation_comes_from_a_dotted_part_only(
+        self, file_name: str, expected: str | None
+    ):
+        """``v3_int8_ctc.onnx`` is not a thing, and guessing at it would mis-glob."""
+        assert _quantization(file_name) == expected
+
+
+class TestGigaAmChunking:
+    """Cutting a long buffer, and where the cuts land."""
+
+    @staticmethod
+    def _cuts(samples: array[int]) -> tuple[tuple[int, int], ...]:
+        numpy = importlib.import_module("numpy")
+        waveform = numpy.array(samples, dtype=numpy.float32) / 32768.0
+        return _cut_points(waveform, STT_SAMPLE_RATE, numpy=numpy)
+
+    def test_a_short_buffer_is_one_piece(self):
+        assert self._cuts(speech(5_000)) == ((0, 5_000 * 16),)
+
+    def test_a_buffer_at_the_limit_is_still_one_piece(self):
+        """Thirty seconds is the boundary, and the boundary belongs to one pass."""
+        assert len(self._cuts(speech(30_000))) == 1
+
+    def test_a_long_buffer_is_cut_into_pieces(self):
+        cuts = self._cuts(speech(50_000))
+        assert len(cuts) > 1
+
+    def test_the_pieces_tile_the_buffer_exactly(self):
+        """No gap loses audio and no overlap doubles a word."""
+        samples = speech(70_000)
+        cuts = self._cuts(samples)
+        assert cuts[0][0] == 0
+        assert cuts[-1][1] == len(samples)
+        for before, after in pairwise(cuts):
+            assert before[1] == after[0]
+
+    def test_no_piece_exceeds_what_the_export_can_take(self):
+        """Past 200 s onnxruntime does not degrade, it raises."""
+        cuts = self._cuts(speech(120_000))
+        for start, end in cuts:
+            assert (end - start) / STT_SAMPLE_RATE <= 200.0
+
+    def test_the_cut_lands_in_the_pause_and_not_at_the_target(self):
+        """The whole point: cutting blind costs 1.6 % WER, cutting here costs none."""
+        samples = speech(18_500)
+        samples.extend(array("h", [0]) * (1_000 * 16))  # пауза на 18.5-19.5 с
+        samples.extend(speech(15_000))
+        cuts = self._cuts(samples)
+        pause = range(18_500 * 16, 19_500 * 16)
+        assert cuts[0][1] in pause, f"разрез на {cuts[0][1] / 16} мс, а тишина 18500-19500"
+
+
+class TestGigaAmWords:
+    """Per-character tokens in, one segment per word out."""
+
+    def test_characters_are_grouped_into_words(self):
+        segments = _words(FakeGigaAmResult.spelled("привет мир"), 0.0)
+        assert [segment.text for segment in segments] == ["привет", "мир"]
+
+    def test_the_offset_of_the_piece_is_added_to_every_timestamp(self):
+        """Without this, everything in the second piece is timed from zero again."""
+        segments = _words(FakeGigaAmResult.spelled("привет", start=0.1), 20_000.0)
+        assert segments[0].start_ms == pytest.approx(20_100.0)
+
+    def test_a_word_ends_one_cell_after_its_last_character(self):
+        segments = _words(FakeGigaAmResult.spelled("да"), 0.0)
+        assert segments[0].start_ms == pytest.approx(0.0)
+        assert segments[0].end_ms == pytest.approx(80.0)
+
+    def test_confidence_is_the_geometric_mean_of_the_characters(self):
+        segments = _words(FakeGigaAmResult.spelled("да", logprob=math.log(0.5)), 0.0)
+        assert segments[0].confidence == pytest.approx(0.5)
+
+    def test_a_subword_marker_starts_a_word_without_being_part_of_it(self):
+        """Sentencepiece exports mark the word start on the token itself."""
+        result = FakeGigaAmResult(
+            text="привет мир",
+            tokens=["▁привет", "▁мир"],
+            timestamps=[0.0, 0.5],
+            logprobs=[-0.05, -0.05],
+        )
+        assert [segment.text for segment in _words(result, 0.0)] == ["привет", "мир"]
+
+    def test_text_without_timestamps_becomes_one_honest_segment(self):
+        """An RNN-T export can do this; inventing per-word times would be worse."""
+        segments = _words(FakeGigaAmResult("привет мир"), 0.0)
+        assert len(segments) == 1
+        assert segments[0].text == "привет мир"
+        assert segments[0].confidence == pytest.approx(_ASSUMED_CONFIDENCE)
+
+    def test_timestamps_that_do_not_match_the_tokens_are_not_trusted(self):
+        result = FakeGigaAmResult("привет", tokens=list("привет"), timestamps=[0.0])
+        assert len(_words(result, 0.0)) == 1
+
+    def test_missing_logprobs_leave_the_words_but_drop_the_measured_confidence(self):
+        result = FakeGigaAmResult(
+            text="привет мир",
+            tokens=list("привет мир"),
+            timestamps=[index * 0.04 for index in range(10)],
+        )
+        segments = _words(result, 0.0)
+        assert [segment.text for segment in segments] == ["привет", "мир"]
+        assert all(segment.confidence == _ASSUMED_CONFIDENCE for segment in segments)
+
+    def test_an_empty_transcript_produces_no_segments(self):
+        assert _words(FakeGigaAmResult.spelled(""), 0.0) == ()
+
+    def test_confidence_is_weighted_by_how_much_was_said(self):
+        """A one-letter interjection must not outvote a sentence."""
+        long = TranscriptSegment(text="здравствуйте", confidence=0.9)
+        short = TranscriptSegment(text="э", confidence=0.1)
+        assert _confidence([long, short]) > 0.8
+
+    def test_confidence_without_segments_is_zero_and_not_an_error(self):
+        assert _confidence([]) == 0.0
+
+
+class TestGigaAmEngine:
+    """The engine's own behaviour, on a fake model."""
+
+    def test_it_is_registered_under_the_name_the_settings_use(self):
+        assert engine_class("gigaam") is GigaAmEngine
+
+    def test_it_is_the_default_the_settings_ship_with(self):
+        """A default naming an engine that does not exist would fail at first use."""
+        stt = Settings().voice.stt
+        assert stt.offline_engine in engine_names()
+        assert stt.offline_engine == "gigaam"
+
+    def test_it_speaks_russian_and_does_not_claim_otherwise(self):
+        """The multilingual checkpoints exist; Ayris deliberately ships neither."""
+        assert GigaAmEngine().supported_languages == ("ru",)
+
+    def test_it_does_not_pretend_to_stream(self):
+        """Vosk stays in the tree for exactly this reason."""
+        assert not GigaAmEngine.supports_streaming
+        with pytest.raises(SttError, match="streaming"):
+            gigaam_ready().start_stream()
+
+    def test_transcribing_before_loading_is_a_typed_error(self):
+        with pytest.raises(SttError, match="no model is loaded"):
+            GigaAmEngine().transcribe(tone(500))
+
+    def test_a_phrase_comes_back_as_words_with_the_engine_named(self):
+        engine = gigaam_ready()
+        result = engine.transcribe(tone(2_000))
+        assert result.text == "привет"
+        assert result.engine == "gigaam"
+        assert result.device == "cpu"
+        assert 0.0 < result.confidence <= 1.0
+        assert [segment.text for segment in result.segments] == ["привет"]
+
+    def test_the_model_is_handed_floats_in_the_range_it_wants(self):
+        """onnx-asr refuses an ``array('f')`` and an ``int16`` array alike."""
+        engine = gigaam_ready()
+        engine.transcribe(tone(1_000))
+        assert engine._model.rates == [STT_SAMPLE_RATE]
+        assert engine._model.calls == [16_000]
+
+    def test_silence_comes_back_empty_without_reaching_the_model(self):
+        engine = gigaam_ready()
+        assert engine.transcribe(wav("stt_silence.wav")).is_empty
+        assert engine._model.calls == []
+
+    def test_a_buffer_below_the_minimum_is_not_recognised(self):
+        engine = gigaam_ready(min_speech_ms=500)
+        assert engine.transcribe(tone(200)).is_empty
+        assert engine._model.calls == []
+
+    def test_a_buffer_too_short_for_the_front_end_is_refused_anyway(self):
+        """``min_speech_ms`` is a setting and can be turned down to zero; 10 ms of
+        audio is shorter than one mel window and crashes inside numpy."""
+        engine = gigaam_ready(min_speech_ms=0)
+        assert engine.transcribe(tone(10)).is_empty
+        assert engine._model.calls == []
+
+    def test_an_empty_transcript_from_the_model_is_an_empty_result(self):
+        engine = gigaam_ready([FakeGigaAmResult.spelled("")])
+        result = engine.transcribe(tone(2_000))
+        assert result.is_empty
+        assert result.inference_ms > 0.0
+
+    def test_a_long_buffer_reaches_the_model_more_than_once(self):
+        engine = gigaam_ready([FakeGigaAmResult.spelled("привет")])
+        engine.transcribe(tone(45_000))
+        assert len(engine._model.calls) > 1
+        assert sum(engine._model.calls) == 45_000 * 16
+
+    def test_the_pieces_are_joined_in_order(self):
+        engine = gigaam_ready([FakeGigaAmResult.spelled("привет"), FakeGigaAmResult.spelled("мир")])
+        assert engine.transcribe(tone(45_000)).text == "привет мир"
+
+    def test_a_vendor_failure_becomes_a_typed_error_with_a_russian_message(self):
+        engine = gigaam_ready()
+
+        def explode(waveform: Any, *, sample_rate: int) -> FakeGigaAmResult:
+            raise RuntimeError("BroadcastIterator::Append axis == 1")
+
+        engine._model.recognize = explode  # type: ignore[method-assign]
+        with pytest.raises(SttError) as excinfo:
+            engine.transcribe(tone(2_000))
+        assert excinfo.value.user_message == "Ошибка распознавания речи."
+        assert "gigaam-v3-ctc" in str(excinfo.value)
+
+    def test_it_needs_less_memory_than_whisper_and_more_than_vosk(self):
+        """The RAM check is wrong for one of the three with a shared factor."""
+        assert VoskSttEngine.memory_factor <= GigaAmEngine.memory_factor
+        assert GigaAmEngine.memory_factor < FasterWhisperEngine.memory_factor
+
+    def test_unloading_twice_is_safe(self):
+        engine = gigaam_ready()
+        engine.unload()
+        engine.unload()
+        assert not engine.loaded
+        assert engine._model is None
+        assert engine.variant == ""
+
+
+# ----------------------------------------------------------------------
 # the worker
 # ----------------------------------------------------------------------
 
@@ -1680,9 +2085,9 @@ class TestRealEngines:
 
     Two variables, not one: a Vosk model is a directory with ``am`` inside and a
     faster-whisper one is a CTranslate2 export with ``model.bin``, so a single
-    path cannot enable both.  Point ``AYRIS_TEST_STT_MODEL`` at the Vosk model
-    and ``AYRIS_TEST_WHISPER_MODEL`` at the Whisper one; each engine's tests
-    skip on their own.
+    path cannot enable both.  Point ``AYRIS_TEST_STT_MODEL`` at the Vosk model,
+    ``AYRIS_TEST_WHISPER_MODEL`` at the Whisper one and ``AYRIS_TEST_GIGAAM_MODEL``
+    at the GigaAM folder; each engine's tests skip on their own.
     """
 
     @staticmethod
@@ -1706,6 +2111,65 @@ class TestRealEngines:
         that ever stopped being true.
         """
         return _downloaded("AYRIS_TEST_WHISPER_MODEL")
+
+    @staticmethod
+    def _gigaam_model() -> Path:
+        """The GigaAM folder, straight from where it was downloaded.
+
+        Also without ``ascii_weights``: onnxruntime opens the Cyrillic path, and
+        it is the engine Ayris starts with, so the stricter version of this test
+        is the one that would notice if that changed.
+        """
+        return _downloaded("AYRIS_TEST_GIGAAM_MODEL")
+
+    def test_gigaam_transcribes_a_command(self) -> None:
+        if not GigaAmEngine.available():
+            pytest.skip("onnx-asr не установлен")
+        engine = GigaAmEngine()
+        engine.load(self._gigaam_model(), SttOptions(language="ru", threads=1))
+        try:
+            result = engine.transcribe(wav("stt_command.wav"))
+            assert result.engine == "gigaam"
+            assert result.device == "cpu"
+            assert result.duration_ms == pytest.approx(1020.0, abs=1.0)
+            assert 0.0 <= result.confidence <= 1.0
+        finally:
+            engine.unload()
+
+    def test_gigaam_names_the_variant_it_found_in_the_folder(self) -> None:
+        """The glob order is only checkable against a real export's file names."""
+        if not GigaAmEngine.available():
+            pytest.skip("onnx-asr не установлен")
+        engine = GigaAmEngine()
+        engine.load(self._gigaam_model(), SttOptions(language="ru", threads=1))
+        try:
+            assert engine.variant in {variant for _, variant in GIGAAM_VARIANTS}
+        finally:
+            engine.unload()
+
+    def test_gigaam_answers_silence_with_nothing(self) -> None:
+        if not GigaAmEngine.available():
+            pytest.skip("onnx-asr не установлен")
+        engine = GigaAmEngine()
+        engine.load(self._gigaam_model(), SttOptions(language="ru", threads=1))
+        try:
+            assert engine.transcribe(wav("stt_silence.wav")).is_empty
+        finally:
+            engine.unload()
+
+    def test_gigaam_survives_a_buffer_that_has_to_be_cut(self) -> None:
+        """Past 200 s the export raises instead of degrading, so this is the one
+        test that proves the chunking is not merely a nice idea."""
+        if not GigaAmEngine.available():
+            pytest.skip("onnx-asr не установлен")
+        engine = GigaAmEngine()
+        engine.load(self._gigaam_model(), SttOptions(language="ru", threads=1))
+        try:
+            result = engine.transcribe(tone(35_000))
+            assert result.duration_ms == pytest.approx(35_000.0, abs=1.0)
+            assert result.real_time_factor < 1.0
+        finally:
+            engine.unload()
 
     def test_vosk_transcribes_a_command(self, ascii_weights: _Weights) -> None:
         if not VoskSttEngine.available():

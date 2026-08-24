@@ -27,6 +27,7 @@ Groups:
 * :class:`TestCancel` — cancellation keeps the partial file.
 * :class:`TestSpace` — the free-space check happens before the first byte.
 * :class:`TestArchives` — unpacking, single-root stripping, traversal attempts.
+* :class:`TestSubdirectory` — ``directory``: loose files staged into their own folder.
 * :class:`TestRegistry` — registration, activation events, deletion, accounting.
 * :class:`TestIntegrityChecks` — OK, повреждена, and rows whose files are gone.
 """
@@ -81,6 +82,7 @@ from ayris.models.installer import (
     MANIFEST_NAME,
     ArchiveError,
     Installer,
+    InstallError,
     read_manifest,
 )
 from ayris.models.registry import (
@@ -101,6 +103,11 @@ if TYPE_CHECKING:
 #: read that either works or does not.
 PAYLOAD = bytes(range(256)) * 1024  # 256 KiB
 PAYLOAD_SHA = hashlib.sha256(PAYLOAD).hexdigest()
+
+#: Companion of a directory model — the vocabulary beside the weights. Tiny on
+#: purpose: what it is here for is the file *name*, not its size.
+VOCAB = "а б в\nг д е\n".encode()
+VOCAB_SHA = hashlib.sha256(VOCAB).hexdigest()
 
 URL = "https://models.test/ayris/model.bin"
 
@@ -361,6 +368,21 @@ class TestCatalog:
                 ],
             )
 
+    def test_a_subdirectory_with_a_path_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="путь"):
+            entry(directory="../escape")
+
+    def test_a_subdirectory_on_an_archive_is_rejected(self) -> None:
+        """An archive brings its own top-level folder; naming a second one is a
+        catalog mistake, not a layout to guess at."""
+        with pytest.raises(ValueError, match="directory"):
+            entry(archive="zip", directory="somewhere")
+
+    def test_install_name_is_the_subdirectory_when_there_is_one(self) -> None:
+        """The name the settings hold: ``offline_model`` is this string verbatim."""
+        assert entry().install_name == "model.bin"
+        assert entry(directory="gigaam-v3-ctc").install_name == "gigaam-v3-ctc"
+
     def test_broken_json_names_the_file(self, tmp_path: Path) -> None:
         path = tmp_path / "stt.json"
         path.write_text("{не json", encoding="utf-8")
@@ -560,14 +582,19 @@ class TestShippedCatalog:
         )
 
     def test_the_default_stt_model_is_offered(self) -> None:
-        """The settings default has to be installable, or a fresh profile is stuck."""
+        """The settings default has to be installable, or a fresh profile is stuck.
+
+        Compared against ``install_name`` and not ``target``: the default is a
+        GigaAM export, which is several files in a folder of their own, and the
+        name the setting holds is that folder's.
+        """
         directory = catalog_dir()
         if not directory.is_dir():  # pragma: no cover - only in a stripped checkout
             pytest.skip("resources/models отсутствует")
 
-        targets = {item.target for item in load_catalog(directory).for_kind("stt")}
+        names = {item.install_name for item in load_catalog(directory).for_kind("stt")}
 
-        assert SttConfig().offline_model in targets
+        assert SttConfig().offline_model in names
 
 
 # ----------------------------------------------------------------------
@@ -1109,6 +1136,169 @@ class TestArchives:
             Installer(models_root).install(model, downloads)
 
         assert not downloads[0].path.exists()
+
+
+# ----------------------------------------------------------------------
+# subdirectories without an archive
+# ----------------------------------------------------------------------
+
+
+class TestSubdirectory:
+    """``directory``: several loose files that need a folder of their own.
+
+    A GigaAM export is weights plus a vocabulary, and ``onnx-asr`` looks for them
+    by globbing a folder — ``v?_ctc*.onnx``, ``v?_vocab.txt`` — rather than by the
+    path it was given. Laid out flat in ``models/stt`` the second variant would
+    match the first one's glob and the engine would load whichever came first, so
+    the record names a folder and every file of it lands inside. Staged and
+    swapped like an archive, for the same reason: a half-moved set of files looks
+    installed and then fails on load.
+    """
+
+    def test_the_files_land_in_the_subdirectory(
+        self,
+        work_dir: Path,
+        models_root: Path,
+    ) -> None:
+        model = _directory_entry()
+
+        with Downloader(work_dir, transport=_vendor_transport()) as downloader:
+            downloads = downloader.fetch_all(model)
+        result = Installer(models_root).install(model, downloads)
+
+        assert result.path == models_root / "stt" / "gigaam-v3-ctc"
+        assert result.name == "gigaam-v3-ctc"
+        assert (result.path / "v3_ctc.int8.onnx").read_bytes() == PAYLOAD
+        assert (result.path / "v3_vocab.txt").read_bytes() == VOCAB
+        assert not (models_root / "stt" / "v3_ctc.int8.onnx").exists()
+
+    def test_the_destination_is_the_folder_before_anything_is_downloaded(
+        self,
+        models_root: Path,
+    ) -> None:
+        """``fetch_models.py`` and the settings ask this before spending 215 МБ."""
+        installer = Installer(models_root)
+        model = _directory_entry()
+
+        assert installer.destination(model) == models_root / "stt" / "gigaam-v3-ctc"
+        assert not installer.is_installed(model)
+
+    def test_two_variants_keep_their_own_folders(
+        self,
+        work_dir: Path,
+        models_root: Path,
+    ) -> None:
+        """The whole point: identical file names, and neither shadows the other."""
+        installer = Installer(models_root)
+        plain = _directory_entry()
+        punctuated = _directory_entry(id="test-model-e2e", directory="gigaam-v3-e2e-ctc")
+
+        for model in (plain, punctuated):
+            with Downloader(work_dir, transport=_vendor_transport()) as downloader:
+                installer.install(model, downloader.fetch_all(model))
+
+        stt = models_root / "stt"
+        assert (stt / "gigaam-v3-ctc" / "v3_ctc.int8.onnx").is_file()
+        assert (stt / "gigaam-v3-e2e-ctc" / "v3_ctc.int8.onnx").is_file()
+        assert sorted(path.name for path in stt.iterdir()) == [
+            "gigaam-v3-ctc",
+            "gigaam-v3-e2e-ctc",
+        ]
+
+    def test_installing_writes_a_manifest(self, work_dir: Path, models_root: Path) -> None:
+        """Without it «проверить целостность» could only ever compare sizes: the
+        catalog's ``sha256`` covers one file of the several that arrived."""
+        model = _directory_entry()
+
+        with Downloader(work_dir, transport=_vendor_transport()) as downloader:
+            result = Installer(models_root).install(model, downloader.fetch_all(model))
+
+        manifest = read_manifest(result.path)
+        assert manifest is not None
+        assert manifest.catalog_id == model.id
+        assert {item.name for item in manifest.files} == {"v3_ctc.int8.onnx", "v3_vocab.txt"}
+        assert manifest.total_bytes == model.total_bytes
+        assert (result.path / MANIFEST_NAME).is_file()
+
+    def test_reinstalling_replaces_the_previous_copy(
+        self,
+        work_dir: Path,
+        models_root: Path,
+    ) -> None:
+        """A file the new release dropped has to go, or the loader's glob finds it."""
+        installer = Installer(models_root)
+        model = _directory_entry()
+        with Downloader(work_dir, transport=_vendor_transport()) as downloader:
+            first = installer.install(model, downloader.fetch_all(model))
+        (first.path / "v3_ctc_stale.onnx").write_bytes("из прошлого релиза".encode())
+
+        with Downloader(work_dir, transport=_vendor_transport()) as downloader:
+            again = installer.install(model, downloader.fetch_all(model))
+
+        assert not (again.path / "v3_ctc_stale.onnx").exists()
+        assert (again.path / "v3_vocab.txt").read_bytes() == VOCAB
+        assert not list((models_root / "stt").glob("*.old"))
+        assert not list((models_root / "stt").glob("*.incomplete"))
+
+    def test_a_failed_install_keeps_the_working_copy(
+        self,
+        work_dir: Path,
+        models_root: Path,
+    ) -> None:
+        """All of them or none. Weights that arrived without their vocabulary are
+        not a model, they are a folder that makes the engine raise on load — and
+        the copy that was already installed has to survive the attempt."""
+        installer = Installer(models_root)
+        model = _directory_entry()
+        with Downloader(work_dir, transport=_vendor_transport()) as downloader:
+            first = installer.install(model, downloader.fetch_all(model))
+        (first.path / "keep.txt").write_bytes("эта копия должна остаться".encode())
+
+        with Downloader(work_dir, transport=_vendor_transport()) as downloader:
+            downloads = downloader.fetch_all(model)
+        downloads[1].path.unlink()
+
+        with pytest.raises(InstallError) as excinfo:
+            installer.install(model, downloads)
+
+        assert "не открыты другой программой" in excinfo.value.user_message
+        assert (first.path / "keep.txt").exists()
+        assert (first.path / "v3_vocab.txt").exists()
+        assert not list((models_root / "stt").glob("*.incomplete"))
+
+    def test_the_registry_registers_the_folder_and_deletes_it_whole(
+        self,
+        repos: Repositories,
+        profile_paths: AppPaths,
+        bus: EventBus,
+    ) -> None:
+        """The row points at the folder, and removal takes the folder with it.
+
+        The companion lookup has to keep its hands off a record like this: the
+        vocabulary lives *inside* the folder, so the path it would build —
+        ``models/stt/v3_vocab.txt`` — is somebody else's file or nothing at all.
+        """
+        model = _directory_entry()
+        registry = make_registry(
+            repos,
+            profile_paths,
+            catalog=ModelCatalog((model,)),
+            bus=bus,
+            transport=_vendor_transport(),
+        )
+
+        record = registry.install(model.id)
+
+        folder = profile_paths.model_dir("stt") / "gigaam-v3-ctc"
+        assert record_path(record) == folder
+        assert record.name == "gigaam-v3-ctc"
+        assert registry.installed("stt") == [record]
+
+        freed = registry.remove(record, force=True)
+
+        assert freed >= model.total_bytes
+        assert not folder.exists()
+        assert registry.installed("stt") == []
 
 
 # ----------------------------------------------------------------------
@@ -1687,6 +1877,39 @@ def _archive_entry(body: bytes, *, archive: str = "zip", target: str = "") -> Mo
     if target:
         fields["target"] = target
     return entry(**fields)
+
+
+def _directory_entry(*, directory: str = "gigaam-v3-ctc", **overrides: Any) -> ModelEntry:
+    """A record shaped like a GigaAM export: weights, a vocabulary, one folder.
+
+    The names matter and are the vendor's, not ours: ``onnx-asr`` globs the folder
+    for ``v?_ctc*.onnx`` and ``v?_vocab.txt``, so renaming either file to
+    something tidier is how a model stops loading.
+    """
+    return entry(
+        url="https://models.test/ayris/v3_ctc.int8.onnx",
+        directory=directory,
+        extra_files=[
+            {
+                "url": "https://models.test/ayris/v3_vocab.txt",
+                "sha256": VOCAB_SHA,
+                "size_bytes": len(VOCAB),
+            }
+        ],
+        **overrides,
+    )
+
+
+def _vendor_transport() -> httpx.MockTransport:
+    """Serves :data:`PAYLOAD` for the weights and :data:`VOCAB` for the vocabulary."""
+    server = Server()
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(".txt"):
+            return httpx.Response(200, content=VOCAB)
+        return server.handle(request)
+
+    return httpx.MockTransport(handle)
 
 
 def _flaky(server: Server) -> httpx.MockTransport:

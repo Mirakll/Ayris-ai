@@ -10,10 +10,11 @@ the lifecycle - when to load, when to give the memory back - in
 
 **Why an ABC and not three functions.**  Section 6 of the specification asks for
 Vosk *and* faster-whisper *and* an optional Whisper.cpp, chosen in the settings
-window, plus cloud providers later.  They agree on almost nothing else: Vosk
-streams and returns per-word confidences, faster-whisper works on a whole buffer
-and returns per-segment log-probabilities, Whisper.cpp returns whatever its
-Python binding felt like exposing.  What they do agree on is
+window, plus GigaAM as the default and cloud providers later.  They agree on
+almost nothing else: Vosk streams and returns per-word confidences,
+faster-whisper works on a whole buffer and returns per-segment
+log-probabilities, GigaAM returns a log-probability per character, Whisper.cpp
+returns whatever its Python binding felt like exposing.  What they do agree on is
 :meth:`SttEngine.transcribe`, and :class:`TranscriptResult` is the shape the rest
 of Ayris is allowed to know about.
 
@@ -21,8 +22,9 @@ of Ayris is allowed to know about.
 is one number in the settings window, and a user who raises it expects fewer
 wrong transcripts from whichever engine is selected.  So every engine maps its
 own notion of certainty onto 0.0-1.0 - Vosk averages its word confidences,
-faster-whisper turns ``avg_logprob`` into a probability - and nothing downstream
-has to know which engine produced the number.
+faster-whisper turns ``avg_logprob`` into a probability, GigaAM takes the
+geometric mean of its character probabilities - and nothing downstream has to
+know which engine produced the number.
 
 **Silence is an empty result, not an exception.**  A push-to-talk key released
 too early, a wake word that fired on a door closing, a phrase the segmenter
@@ -109,6 +111,7 @@ _FULL_SCALE: Final = 32768.0
 #: with it.
 ENGINE_ENTRYPOINTS: Final[Mapping[str, str]] = MappingProxyType(
     {
+        "gigaam": "ayris.audio.stt.gigaam_engine:GigaAmEngine",
         "vosk": "ayris.audio.stt.vosk_engine:VoskSttEngine",
         "whisper": "ayris.audio.stt.faster_whisper_engine:FasterWhisperEngine",
         "whispercpp": "ayris.audio.stt.whispercpp_engine:WhisperCppEngine",

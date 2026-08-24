@@ -26,6 +26,15 @@ catalog spells the resulting name out instead of deriving it from ``id``, which
 lets ``vosk-model-small-ru-0.22.zip`` land as the folder the default settings
 already point at.
 
+**``directory`` is for the models that are several files and no archive.** A
+GigaAM export is a weights file plus a vocabulary, published on Hugging Face as
+loose files; ``onnx-asr`` finds them by globbing the folder it is handed. Landing
+them flat in ``models/stt`` would work exactly once - the second GigaAM variant
+would put a second ``v3_*.onnx`` next to the first and the glob would pick
+whichever came first. So a record may name a subdirectory, and then every file of
+that record goes into it and the manifest goes with them, the same way an archive
+install works. Empty means flat, which is what a Piper voice wants.
+
 The file-level ``schema_version`` is the format version, checked against
 :data:`CATALOG_SCHEMA_VERSION`. It is stamped onto every entry that does not
 carry its own, so a record always knows which format it was written in - a newer
@@ -175,7 +184,8 @@ class ModelEntry(ModelFile):
 
     Inherits the artifact fields, because the primary file *is* the model in
     every case except a multi-file voice, and adds the description the settings
-    window shows.
+    window shows.  ``directory``, when set, is the subdirectory of
+    ``models/<kind>`` every file of this record lands in.
     """
 
     id: str = Field(pattern=_ID_PATTERN)
@@ -185,6 +195,7 @@ class ModelEntry(ModelFile):
     description: str = ""
     language: str = ""
     version: str = ""
+    directory: str = ""
     schema_version: int = Field(default=CATALOG_SCHEMA_VERSION, ge=1)
     extra_files: tuple[ModelFile, ...] = ()
 
@@ -193,16 +204,27 @@ class ModelEntry(ModelFile):
     def _fold_engine(cls, value: str) -> str:
         return value.strip().lower()
 
+    @field_validator("directory")
+    @classmethod
+    def _check_directory(cls, value: str) -> str:
+        if any(token in value for token in _TARGET_FORBIDDEN):
+            raise ValueError("имя подпапки не может содержать путь")
+        return value.strip()
+
     @model_validator(mode="after")
     def _fill_targets(self) -> Self:
         """Derive missing ``target`` names and reject companions to an archive.
 
         An archive already decides its own layout, so a companion file next to it
         has nowhere sensible to go; that combination is a catalog mistake rather
-        than something to guess at.
+        than something to guess at.  A subdirectory for an archive is the same
+        mistake spelled differently - the archive's own top-level directory is
+        already the folder.
         """
         if self.extra_files and self.is_archive:
             raise ValueError("к архиву нельзя добавить extra_files")
+        if self.directory and self.is_archive:
+            raise ValueError("архив кладётся в свою папку сам: directory не нужен")
 
         default = self.id if self.is_archive else self.url_name
         if not default:
@@ -235,6 +257,16 @@ class ModelEntry(ModelFile):
             archive=self.archive,
         )
         return (primary, *self.extra_files)
+
+    @property
+    def install_name(self) -> str:
+        """Name this model gets inside ``models/<kind>``.
+
+        The subdirectory when it has one, otherwise the primary file's ``target``.
+        This is the name the settings speak: ``voice.stt.offline_model`` and
+        ``voice.tts.voice`` both hold it verbatim.
+        """
+        return self.directory or self.target
 
     @property
     def total_bytes(self) -> int:

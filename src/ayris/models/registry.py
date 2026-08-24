@@ -286,11 +286,11 @@ class ModelRegistry:
         is unique, and so is a non-empty ``catalog_id``.
         """
         existing = self._repository.by_catalog_id(entry.id) or self._repository.find(
-            entry.kind, entry.target, entry.version
+            entry.kind, entry.install_name, entry.version
         )
         record = ModelRecord(
             kind=entry.kind,
-            name=entry.target,
+            name=entry.install_name,
             id=existing.id if existing is not None else None,
             engine=entry.engine,
             version=entry.version,
@@ -459,10 +459,12 @@ class ModelRegistry:
         """Extra files installed alongside ``path``, per the catalog.
 
         A Piper voice is an ``.onnx`` and an ``.onnx.json``; deleting only the
-        first leaves an orphan the settings list would keep showing.
+        first leaves an orphan the settings list would keep showing. A record with
+        its own subdirectory has nothing alongside it — ``path`` is the folder and
+        every file of the model is inside.
         """
         entry = self._catalog.get(record.catalog_id) if record.catalog_id else None
-        if entry is None or entry.is_archive:
+        if entry is None or entry.is_archive or entry.directory:
             return ()
         return tuple(
             path.parent / extra.target for extra in entry.extra_files if extra.target != path.name

@@ -3,12 +3,50 @@
   "kind": "stt",
   "models": [
     {
+      "id": "gigaam-v3-ctc",
+      "name": "GigaAM v3 CTC (русский)",
+      "engine": "gigaam",
+      "language": "ru",
+      "version": "v3",
+      "description": "Модель по умолчанию: распознаёт русский заметно точнее и быстрее остальных, работает на процессоре. Без интернета, 215 МБ.",
+      "url": "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_ctc.int8.onnx",
+      "sha256": "ceb61454e2e1a2dec5872cbac1de0fe0a4271d1148f6b26b5bda53ff30a12acd",
+      "size_bytes": 224721181,
+      "directory": "gigaam-v3-ctc",
+      "extra_files": [
+        {
+          "url": "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_vocab.txt",
+          "sha256": "a9143c30844d3c0bee3e9e927e4084774eb1b9eeaafc473b2c4521e4911a7c07",
+          "size_bytes": 198
+        }
+      ]
+    },
+    {
+      "id": "gigaam-v3-e2e-ctc",
+      "name": "GigaAM v3 CTC с пунктуацией (русский)",
+      "engine": "gigaam",
+      "language": "ru",
+      "version": "v3-e2e",
+      "description": "Та же модель, но сразу расставляет знаки препинания, заглавные буквы и цифры. Точность на словах чуть ниже; берите для диктовки текста.",
+      "url": "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_ctc.int8.onnx",
+      "sha256": "2e3fcb7a7b66030336fd10c2fcfb033bd1dc7e1bf238fe5cfd83b1d0cfc9d28e",
+      "size_bytes": 224893347,
+      "directory": "gigaam-v3-e2e-ctc",
+      "extra_files": [
+        {
+          "url": "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_ctc_vocab.txt",
+          "sha256": "142de7570b3de5b3035ce111a89c228e80e6085273731d944093ddf24fa539cd",
+          "size_bytes": 2007
+        }
+      ]
+    },
+    {
       "id": "vosk-ru-small",
       "name": "Vosk русский (маленькая)",
       "engine": "vosk",
       "language": "ru",
       "version": "0.22",
-      "description": "Быстрое распознавание без интернета. Работает на любом железе, точность средняя. Хороший выбор по умолчанию.",
+      "description": "Показывает слова ещё во время речи — этого не умеет ни один другой движок. Точность средняя, требования к железу минимальные.",
       "url": "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip",
       "sha256": "961d5ff98a17f4aa6de69864d0aa71fa5bac682301d2b5d17a3f24c5c99a46d4",
       "size_bytes": 46236750,

@@ -344,13 +344,13 @@ class SttConfig(ConfigSection):
         default="auto",
         description="offline — только локально, online — только облако, auto — облако с откатом",
     )
-    offline_engine: Literal["vosk", "whisper"] = Field(
-        default="vosk",
+    offline_engine: Literal["gigaam", "vosk", "whisper"] = Field(
+        default="gigaam",
         description="Локальный движок распознавания",
         json_schema_extra=_restart(RestartScope.STT),
     )
     offline_model: str = Field(
-        default="vosk-model-small-ru-0.22",
+        default="gigaam-v3-ctc",
         description="Имя папки модели в models/stt",
         json_schema_extra=_restart(RestartScope.STT),
     )
