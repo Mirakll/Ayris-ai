@@ -26,9 +26,12 @@ hears. A wrong plural or a bare ``-3`` is what a synthesiser reads as «дефи
 tests assert on the request log rather than on a flag: a cache that reports a hit
 and still calls the service is the bug worth catching.
 
-*Offline.* No link and nothing stored is «нет интернета»; no link and a stale
-answer is that answer plus how old it is; past ``stale_hours`` it is «нет
-интернета» again. The clock is the exception — a time zone does not expire, so it
+*Offline.* No link and nothing stored is «нет подключения к сети»; no link and a
+stale answer is that sentence, the answer, and how old it is; past ``stale_hours``
+it is the refusal again. Offline mode is checked in the same tests as a pulled
+cable, because to the user they are the same thing and
+:func:`~ayris.actions.system.providers.base.network_ready` is the one predicate
+that decides both. The clock is the exception — a time zone does not expire, so it
 is recomputed locally and says nothing about being stale.
 
 Groups:
@@ -39,6 +42,7 @@ Groups:
 * :class:`TestClock` — zones, the reading, and the offline recomputation.
 * :class:`TestFacts` — Wikipedia summaries and the language fallback.
 * :class:`TestPage` — the summary a page publishes about itself.
+* :class:`TestLookup` — the catch-all: search first, then read what it found.
 * :class:`TestRouting` — which provider a phrase reaches, and with what subject.
 * :class:`TestCache` — time to live, eviction, a damaged file.
 * :class:`TestOffline` — the outcomes of having no connection.
@@ -54,6 +58,7 @@ from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -67,6 +72,7 @@ from ayris.actions.system.instant import (
     SiteSummary,
     _age_ru,
     answer_now,
+    at_length,
     detect_kind,
     set_cache,
     set_transport,
@@ -74,11 +80,13 @@ from ayris.actions.system.instant import (
     ttl_for,
 )
 from ayris.actions.system.providers.base import (
+    FALLBACK_KIND,
     AnswerCache,
     HttpFetcher,
     InstantNotFound,
     InstantOffline,
     InstantProviderError,
+    network_ready,
     providers,
 )
 from ayris.actions.system.providers.base import (
@@ -92,6 +100,7 @@ from ayris.actions.system.providers.currency import (
     split_pair,
 )
 from ayris.actions.system.providers.geocode import Place, geocode, parse_place
+from ayris.actions.system.providers.lookup import LookupProvider, parse_opensearch
 from ayris.actions.system.providers.page import (
     FactProvider,
     PageProvider,
@@ -99,6 +108,7 @@ from ayris.actions.system.providers.page import (
     parse_page,
     parse_summary,
     shorten,
+    split_sentences,
 )
 from ayris.actions.system.providers.weather import (
     Forecast,
@@ -185,12 +195,16 @@ class Server:
     One transport for the whole module, routed by host: the geocoder, the
     forecast, the Central Bank, Wikipedia per language, and any other address at
     all — which is what :class:`~ayris.actions.system.providers.page.PageProvider`
-    is pointed at.
+    is pointed at. Wikipedia is routed by path as well, because the search and the
+    article are two endpoints on one host.
 
     The knobs are what the failure tests need. ``fail`` answers one status code
     forever, ``flaky`` answers a queued status per attempt until the queue runs
     out, and ``boom`` raises a transport error the way a dropped Wi-Fi does.
-    ``calls`` is the request log the cache tests assert on.
+    ``opensearch`` is the search result per language, ``articles`` overrides the
+    summary per title — which is how a candidate that turns out to be a
+    disambiguation page is followed by one that answers. ``calls`` is the request
+    log the cache tests assert on.
     """
 
     def __init__(self) -> None:
@@ -199,6 +213,8 @@ class Server:
         self.forecast: Any = _json_fixture("forecast_moscow.json")
         self.rates: bytes = (FIXTURES / "cbr_daily.xml").read_bytes()
         self.wiki: dict[str, Any] = {"ru": _json_fixture("wikipedia_quark.json")}
+        self.opensearch: dict[str, Any] = {}
+        self.articles: dict[str, Any] = {}
         self.page: str = (FIXTURES / "page_article.html").read_text(encoding="utf-8")
         self.page_type: str = "text/html; charset=utf-8"
         self.fail: dict[str, int] = {}
@@ -231,10 +247,11 @@ class Server:
         refusal = self.fail.get(host, 0)
         if refusal:
             return httpx.Response(refusal, text="отказ")
-        return self._answer(host)
+        return self._answer(request)
 
-    def _answer(self, host: str) -> httpx.Response:
-        """The recorded body for one host."""
+    def _answer(self, request: httpx.Request) -> httpx.Response:
+        """The recorded body for one request."""
+        host = request.url.host
         if host == "geocoding-api.open-meteo.com":
             return httpx.Response(200, json=self.geocode)
         if host == "api.open-meteo.com":
@@ -246,11 +263,31 @@ class Server:
                 headers={"content-type": "application/xml"},
             )
         if host.endswith("wikipedia.org"):
-            payload = self.wiki.get(host.split(".", 1)[0])
-            if payload is None:
-                return httpx.Response(404, json={"title": "Not found"})
-            return httpx.Response(200, json=payload)
+            return self._wikipedia(request, host.split(".", 1)[0])
         return httpx.Response(200, text=self.page, headers={"content-type": self.page_type})
+
+    def _wikipedia(self, request: httpx.Request, language: str) -> httpx.Response:
+        """Wikipedia is two endpoints, and the path is what tells them apart.
+
+        ``/w/api.php`` is the search, ``/api/rest_v1/…`` is the article. Routing on
+        the host alone would have answered a search with an article body, which is
+        the one mistake that would make :class:`LookupProvider` look like it works.
+        """
+        if request.url.path.endswith("/w/api.php"):
+            found = self.opensearch.get(language)
+            if found is None:
+                return httpx.Response(200, json=[request.url.params.get("search", ""), []])
+            return httpx.Response(200, json=found)
+        if self.articles:
+            title = unquote(request.url.path.rsplit("/", 1)[-1]).replace("_", " ")
+            article = self.articles.get(title)
+            if article is None:
+                return httpx.Response(404, json={"title": "Not found"})
+            return httpx.Response(200, json=article)
+        payload = self.wiki.get(language)
+        if payload is None:
+            return httpx.Response(404, json={"title": "Not found"})
+        return httpx.Response(200, json=payload)
 
 
 @pytest.fixture(autouse=True)
@@ -712,6 +749,12 @@ class TestFacts:
     def test_shorten_ends_on_a_sentence(self, text: str, sentences: int, said: str) -> None:
         assert shorten(text, sentences=sentences) == said
 
+    def test_the_unit_of_an_answer_is_a_sentence(self) -> None:
+        """What makes unfolding possible: the whole paragraph, cut where it may be."""
+        assert split_sentences("Раз.  Два.\nТри.") == ["Раз.", "Два.", "Три."]
+        assert split_sentences("Вопрос? Ответ.") == ["Вопрос?", "Ответ."]
+        assert split_sentences("   ") == []
+
     def test_the_title_is_prefixed_only_when_the_extract_lacks_it(self) -> None:
         same = PageSummary(title="Кварк", extract="Кварк — это частица.")
         other = PageSummary(title="Ускоритель", extract="Машина разгоняет частицы.")
@@ -845,6 +888,113 @@ class TestPage:
         )
 
 
+class TestLookup:
+    """Any question at all: search first, then read the article that came back.
+
+    This is the provider that removes the list of supported questions. «Столица
+    австралии» is not the name of an article, so the summary endpoint alone cannot
+    answer it — the search in front of it can, and these tests pin both requests
+    and what happens between them.
+    """
+
+    @pytest.fixture
+    def searched(self, server: Server) -> Server:
+        """Wikipedia answering «столица австралии» the way it really does."""
+        server.opensearch = {"ru": _json_fixture("wikipedia_opensearch_capital.json")}
+        server.articles = {
+            "Столица Австралии": _json_fixture("wikipedia_disambiguation.json"),
+            "Канберра": _json_fixture("wikipedia_canberra.json"),
+        }
+        return server
+
+    def test_the_documented_array_becomes_titles(self) -> None:
+        payload = _json_fixture("wikipedia_opensearch_capital.json")
+        assert parse_opensearch(payload, "столица австралии") == [
+            "Столица Австралии",
+            "Канберра",
+            "Австралия",
+        ]
+
+    def test_blank_titles_are_dropped(self) -> None:
+        assert parse_opensearch(["q", ["Кварк", "  ", "", 7]], "q") == ["Кварк"]
+
+    def test_nothing_found_is_an_empty_list_and_not_an_error(self) -> None:
+        assert parse_opensearch(["хогвартс", []], "хогвартс") == []
+
+    @pytest.mark.parametrize("payload", [{"titles": []}, ["только запрос"], "не json", None])
+    def test_a_body_that_is_not_the_documented_array_is_refused(self, payload: Any) -> None:
+        with pytest.raises(InstantProviderError) as raised:
+            parse_opensearch(payload, "кварк")
+        assert raised.value.user_message == "Поиск ответил непонятно."
+
+    def test_a_question_is_answered_from_the_article_it_finds(self, searched: Server) -> None:
+        answer = LookupProvider(searched.fetcher()).fetch("столица австралии")
+        assert answer.kind == "lookup"
+        assert answer.source == "wikipedia.org"
+        assert answer.message_ru.startswith("Канберра — столица Австралии")
+        assert answer.data["matched"] == "Канберра"
+        assert answer.data["question"] == "столица австралии"
+
+    def test_the_search_comes_before_the_article(self, searched: Server) -> None:
+        LookupProvider(searched.fetcher()).fetch("столица австралии")
+        assert "/w/api.php" in searched.urls[0]
+        assert searched.calls[0].url.params["action"] == "opensearch"
+        assert searched.calls[0].url.params["search"] == "столица австралии"
+        assert searched.calls[0].url.params["namespace"] == "0"
+        assert "/api/rest_v1/page/summary/" in searched.urls[1]
+
+    def test_a_disambiguation_hit_falls_through_to_the_next_candidate(
+        self,
+        searched: Server,
+    ) -> None:
+        """The search matched a signpost, which is not a reason to give up."""
+        answer = LookupProvider(searched.fetcher()).fetch("столица австралии")
+        assert answer.data["matched"] == "Канберра"
+        assert len(searched.calls) == 3
+
+    def test_english_is_tried_when_russian_finds_nothing(self, server: Server) -> None:
+        server.opensearch = {"en": ["quark", ["Quark"]]}
+        server.articles = {"Quark": _json_fixture("wikipedia_quark.json")}
+        answer = LookupProvider(server.fetcher()).fetch("quark")
+        assert answer.data["language"] == "en"
+        assert [request.url.host for request in server.calls] == [
+            "ru.wikipedia.org",
+            "en.wikipedia.org",
+            "en.wikipedia.org",
+        ]
+
+    def test_nothing_anywhere_offers_the_browser_instead_of_guessing(
+        self,
+        server: Server,
+    ) -> None:
+        with pytest.raises(InstantNotFound) as raised:
+            LookupProvider(server.fetcher()).fetch("абырвалг колотун")
+        assert raised.value.user_message == (
+            "Не нашла короткого ответа про «абырвалг колотун». Могу открыть поиск в браузере."
+        )
+
+    def test_an_empty_question_never_reaches_the_service(self, server: Server) -> None:
+        with pytest.raises(InstantNotFound) as raised:
+            LookupProvider(server.fetcher()).fetch("   ")
+        assert raised.value.user_message == "Не поняла вопрос."
+        assert server.calls == []
+
+    def test_the_whole_lead_paragraph_is_kept_not_only_what_is_spoken(
+        self,
+        searched: Server,
+    ) -> None:
+        """What makes «расскажи подробнее» free: the rest is already here."""
+        answer = LookupProvider(searched.fetcher()).fetch("столица австралии")
+        assert "между Сиднеем и Мельбурном" in answer.message_ru
+        assert "разрешить их спор" not in answer.message_ru
+        assert "разрешить их спор" in str(answer.data["extract"])
+
+    def test_the_key_is_the_question_and_not_the_article(self, server: Server) -> None:
+        provider = LookupProvider(server.fetcher())
+        assert provider.cache_key("  Столица   Австралии ") == "lookup:столица австралии"
+        assert provider.cache_key("столица австралии") == provider.cache_key("Столица Австралии")
+
+
 class TestRouting:
     """Which provider a phrase reaches, and what subject arrives with it."""
 
@@ -882,6 +1032,38 @@ class TestRouting:
         assert detect_kind(phrase, table) == kind
 
     @pytest.mark.parametrize(
+        "phrase",
+        ["столица австралии", "кто написал онегина", "сколько лет москве", "привет"],
+    )
+    def test_an_unrecognised_question_is_a_search_and_not_a_refusal(
+        self,
+        table: Any,
+        phrase: str,
+    ) -> None:
+        """The whole point: no trigger matched, so it goes and looks it up."""
+        assert detect_kind(phrase, table) == ""
+        assert FALLBACK_KIND in table
+        assert table[FALLBACK_KIND].kind == "lookup"
+
+    @pytest.mark.parametrize(
+        ("phrase", "question"),
+        [
+            ("столица австралии", "столица австралии"),
+            ("а скажи пожалуйста кто написал онегина", "кто написал онегина"),
+            ("сколько лет москве", "сколько лет москве"),
+        ],
+    )
+    def test_a_searching_provider_is_given_the_question_whole(
+        self,
+        table: Any,
+        phrase: str,
+        question: str,
+    ) -> None:
+        """Filler goes, prepositions stay — a search is not given a subject."""
+        assert table[FALLBACK_KIND].wants_phrase is True
+        assert strip_subject(phrase, table[FALLBACK_KIND]) == question
+
+    @pytest.mark.parametrize(
         ("phrase", "kind", "subject"),
         [
             ("какая погода в питере", "weather", "питере"),
@@ -911,7 +1093,13 @@ class TestRouting:
 
     @pytest.mark.parametrize(
         ("kind", "seconds"),
-        [("weather", 600.0), ("rates", 3600.0), ("fact", 86400.0), ("page", 86400.0)],
+        [
+            ("weather", 600.0),
+            ("rates", 3600.0),
+            ("fact", 86400.0),
+            ("page", 86400.0),
+            ("lookup", 86400.0),
+        ],
     )
     def test_each_kind_has_its_own_time_to_live(self, kind: str, seconds: float) -> None:
         assert ttl_for(kind) == seconds
@@ -1024,8 +1212,51 @@ class TestOffline:
         cut_the_link(monkeypatch)
         with pytest.raises(InstantOffline) as raised:
             answer_now(WeatherProvider(server.fetcher()), "москва", now=1000.0)
-        assert raised.value.user_message == "Нет интернета."
+        assert raised.value.user_message == "Нет подключения к сети."
         assert server.calls == []
+
+    def test_offline_mode_is_the_same_thing_as_a_pulled_cable(
+        self,
+        server: Server,
+        configure: Callable[..., None],
+    ) -> None:
+        """The link is up and Ayris still does not go out, because it was told not to."""
+        configure(offline="true")
+        with pytest.raises(InstantOffline) as raised:
+            answer_now(WeatherProvider(server.fetcher()), "москва", now=1000.0)
+        assert raised.value.user_message == "Нет подключения к сети."
+        assert server.calls == []
+
+    def test_offline_mode_still_answers_from_the_cache(
+        self,
+        server: Server,
+        cache: AnswerCache,
+        configure: Callable[..., None],
+    ) -> None:
+        configure(offline="true")
+        provider = WeatherProvider(server.fetcher())
+        stored = Answer(kind="weather", message_ru="В Москве плюс 5 градусов.")
+        cache.put(provider.cache_key("москва"), stored.at(1000.0))
+        resolved = answer_now(provider, "москва", now=1000.0 + 3600.0)
+        assert resolved.answer.stale is True
+        assert server.calls == []
+
+    @pytest.mark.parametrize(
+        ("offline", "linked", "ready"),
+        [("false", True, True), ("false", False, False), ("true", True, False)],
+    )
+    def test_network_ready_is_the_switch_and_the_link_together(
+        self,
+        configure: Callable[..., None],
+        monkeypatch: pytest.MonkeyPatch,
+        offline: str,
+        linked: bool,
+        ready: bool,
+    ) -> None:
+        """One predicate, so «нет сети» and «офлайн» cannot drift apart in wording."""
+        configure(offline=offline)
+        monkeypatch.setattr("ayris.actions.system.providers.base.link_up", lambda: linked)
+        assert network_ready() is ready
 
     def test_a_stale_answer_is_read_out_with_its_age(
         self,
@@ -1094,7 +1325,7 @@ class TestRetries:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         cut_the_link(monkeypatch)
-        with pytest.raises(InstantOffline, match="no network link"):
+        with pytest.raises(InstantOffline, match="no network"):
             server.fetcher(retries=2).get("https://www.cbr.ru/scripts/XML_daily.asp")
         assert server.calls == []
 
@@ -1206,17 +1437,28 @@ class TestActions:
         assert result.data["subject"] == "Санкт-Петербург"
         assert server.calls[0].url.params["name"] == "Санкт-Петербург"
 
-    def test_a_phrase_nobody_claims_is_a_parameter_problem(self) -> None:
-        with pytest.raises(ActionParamsInvalid) as raised:
-            AnswerAction().run(AnswerAction.Params(query="спой мне песню"))
-        assert raised.value.user_message == (
-            "Не поняла, что именно узнать. Могу сказать погоду, курс, время или справку."
+    def test_a_phrase_nobody_claims_is_searched_for(self, server: Server) -> None:
+        """What used to be «не поняла, что именно узнать» is now an answer."""
+        server.opensearch = {"ru": ["столица австралии", ["Канберра"]]}
+        server.articles = {"Канберра": _json_fixture("wikipedia_canberra.json")}
+        result = AnswerAction().run(AnswerAction.Params(query="столица австралии"))
+        assert result.ok is True
+        assert result.data["kind"] == "lookup"
+        assert result.data["subject"] == "столица австралии"
+        assert result.message_ru.startswith("Канберра — столица Австралии")
+
+    def test_a_search_that_finds_nothing_offers_the_browser(self, server: Server) -> None:
+        result = AnswerAction().run(AnswerAction.Params(query="абырвалг колотун"))
+        assert result.ok is False
+        assert result.message_ru == (
+            "Не нашла короткого ответа про «абырвалг колотун». Могу открыть поиск в браузере."
         )
-        assert [problem.field for problem in raised.value.problems] == ["kind"]
 
     def test_an_unknown_kind_is_a_parameter_problem(self) -> None:
-        with pytest.raises(ActionParamsInvalid, match="kind='гороскоп'"):
+        with pytest.raises(ActionParamsInvalid, match="kind='гороскоп'") as raised:
             AnswerAction().run(AnswerAction.Params(query="что там", kind="гороскоп"))
+        assert raised.value.user_message == "Не знаю такого вида ответа. Просто спросите словами."
+        assert [problem.field for problem in raised.value.problems] == ["kind"]
 
     def test_a_missing_city_is_a_handled_failure(self, server: Server) -> None:
         server.geocode = {"results": []}
@@ -1236,6 +1478,42 @@ class TestActions:
         assert result.data["kind"] == "fact"
         assert result.message_ru.startswith("Кварк — фундаментальная частица")
         assert "Всего известно" not in result.message_ru
+
+    def test_asking_for_more_unfolds_the_same_answer(self, server: Server) -> None:
+        """«Расскажи подробнее» — a wider cut of what is already stored."""
+        short = AnswerAction().run(AnswerAction.Params(query="что такое кварк"))
+        assert short.data["sentences_total"] == 3
+        longer = AnswerAction().run(AnswerAction.Params(query="что такое кварк", sentences=3))
+        assert "Всего известно" in longer.message_ru
+        assert len(server.calls) == 1
+
+    def test_unfolding_works_with_the_connection_gone(
+        self,
+        server: Server,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The rest of the paragraph is on the machine, so no link is needed for it."""
+        AnswerAction().run(AnswerAction.Params(query="что такое кварк"))
+        calls = len(server.calls)
+        cut_the_link(monkeypatch)
+        longer = AnswerAction().run(AnswerAction.Params(query="что такое кварк", sentences=3))
+        assert longer.ok is True
+        assert "Всего известно" in longer.message_ru
+        assert len(server.calls) == calls
+
+    def test_an_answer_with_nothing_more_to_say_repeats_itself(self) -> None:
+        """A forecast is one sentence and does not unfold, whatever is asked for."""
+        answer = Answer(kind="weather", message_ru="В Москве плюс 5 градусов.")
+        assert at_length(answer, 5) == "В Москве плюс 5 градусов."
+
+    def test_the_number_of_sentences_is_cut_from_the_stored_extract(self) -> None:
+        stored = Answer(
+            kind="lookup",
+            message_ru="Канберра. Раз. Два.",
+            data={"title": "Канберра", "extract": "Раз. Два. Три.", "url": ""},
+        )
+        assert at_length(stored, 1) == "Канберра. Раз."
+        assert at_length(stored, 3) == "Канберра. Раз. Два. Три."
 
     def test_the_time_somewhere_else(self, server: Server) -> None:
         server.geocode = _json_fixture("geocode_tokyo.json")
@@ -1274,7 +1552,7 @@ class TestActions:
         assert result.ok is True
         assert result.data["stale"] is True
         assert result.message_ru == (
-            f"В Москве плюс 5 градусов. Данные {said}, интернета сейчас нет."
+            f"Нет подключения к сети. В Москве плюс 5 градусов. Данные {said}."
         )
         assert server.calls == []
 
@@ -1296,7 +1574,7 @@ class TestActions:
         cut_the_link(monkeypatch)
         with pytest.raises(InstantOffline) as raised:
             AnswerAction().run(AnswerAction.Params(query="какая погода в москве"))
-        assert raised.value.user_message == "Нет интернета."
+        assert raised.value.user_message == "Нет подключения к сети."
 
     def test_a_page_is_summarised_out_loud(self, server: Server) -> None:
         result = SiteSummary().run(SiteSummary.Params(url="nkj.ru/archive/1.html"))
@@ -1337,4 +1615,4 @@ class TestActions:
         cut_the_link(monkeypatch)
         with pytest.raises(ActionError) as raised:
             SiteSummary().run(SiteSummary.Params(url="nkj.ru/archive/1.html"))
-        assert raised.value.user_message == "Нет интернета."
+        assert raised.value.user_message == "Нет подключения к сети."

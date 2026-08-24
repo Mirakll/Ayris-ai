@@ -1,22 +1,31 @@
-"""Instant answers: weather, rates, the clock elsewhere, a short fact.
+"""Instant answers: a question in, one spoken sentence out.
 
-Two actions. :class:`InstantAnswer` routes a question to one of the providers in
-:mod:`ayris.actions.system.providers` and reads its answer out. :class:`SiteSummary`
-does the same for an arbitrary address — «что на этой странице» — using the summary
-the page publishes about itself, so a wiki, a documentation page or a news article
-can be summarised out loud instead of merely opened.
+Two actions. :class:`InstantAnswer` takes a question — any question — and reads the
+answer out. :class:`SiteSummary` does the same for an address the user already has,
+«что на этой странице», using the summary the page publishes about itself, so a
+wiki, a documentation page or a news article can be listened to instead of merely
+opened.
 
-**Routing is a table, not a chain of ``if``.** Each provider declares the words
-that lead to it, :func:`detect_kind` matches the phrase against them, and
-:func:`strip_subject` removes the matched words so what reaches the provider is
-the subject alone — a city, a currency, a topic. Adding a provider adds a row; it
-does not touch this module.
+**There is no list of supported questions.** The providers in
+:mod:`ayris.actions.system.providers` that declare trigger words get the questions
+they are good at — a forecast, a rate, a clock, an article by name — and
+everything else goes to
+:class:`~ayris.actions.system.providers.lookup.LookupProvider`, which searches
+first and answers from whatever article the question turns out to be about. So
+«какая погода» is a forecast, «столица австралии» is an encyclopedia, and neither
+of them is «не поняла, что именно узнать».
+
+**Answers unfold rather than repeat.** An article's whole lead paragraph is stored
+with the answer, and ``sentences`` decides how much of it is spoken. «Расскажи
+подробнее» is the same request with a bigger number: no second call to the network,
+and it works with the connection gone.
 
 **The cache is what makes this usable.** Every free API has a rate limit, and
 «какая погода» gets asked four times an evening. An answer inside its time to live
 never leaves the machine. An answer past it is still there, and that is the whole
-offline story: with no connection Ayris reads the stale answer and says how old it
-is, and only when there is nothing cached at all does it say «нет интернета».
+offline story: with no connection — or with offline mode on, which Ayris treats as
+the same thing — it reads the stale answer and says outright that there is no
+network, and when nothing is cached it says only that.
 
 **Nothing here runs on its own.** Every request in this module is one thing the
 user just said. No refresh timer, no prefetch, no warming of the cache at
@@ -37,6 +46,7 @@ from ayris.actions.registry import register
 from ayris.actions.result import ActionResult
 from ayris.actions.system.browser import normalize_url
 from ayris.actions.system.providers import (
+    FALLBACK_KIND,
     AnswerCache,
     HttpFetcher,
     InstantNotFound,
@@ -45,7 +55,9 @@ from ayris.actions.system.providers import (
     PageProvider,
     providers,
 )
+from ayris.actions.system.providers.base import OFFLINE_MESSAGE
 from ayris.actions.system.providers.base import InstantAnswer as Answer
+from ayris.actions.system.providers.page import MAX_SENTENCES, PageSummary, split_sentences
 from ayris.core.config import get_settings
 from ayris.core.errors import ActionError, ActionParamsInvalid, ParamProblem
 from ayris.nlu.numbers import plural_form
@@ -60,6 +72,7 @@ __all__ = [
     "InstantAnswer",
     "SiteSummary",
     "answer_now",
+    "at_length",
     "detect_kind",
     "get_cache",
     "get_transport",
@@ -158,9 +171,13 @@ def strip_subject(query: str, provider: InstantProvider) -> str:
     A provider whose triggers are also its subject
     (:attr:`~ayris.actions.system.providers.base.InstantProvider.keeps_triggers`)
     keeps them: «сколько стоит доллар» has to reach the rates provider with the
-    word «доллар» still in it.
+    word «доллар» still in it. A provider that searches
+    (:attr:`~ayris.actions.system.providers.base.InstantProvider.wants_phrase`)
+    keeps the prepositions too, because it is given a question and not a subject.
     """
     words = _clean(query)
+    if provider.wants_phrase:
+        return " ".join(words)
     if not provider.keeps_triggers:
         for trigger in sorted(provider.triggers, key=len, reverse=True):
             words = _without(words, trigger.split())
@@ -191,6 +208,7 @@ def ttl_for(kind: str) -> float:
         "weather": instant.weather_ttl_min,
         "rates": instant.rates_ttl_min,
         "fact": instant.facts_ttl_min,
+        "lookup": instant.facts_ttl_min,
         "page": instant.facts_ttl_min,
         "time": 0,
     }.get(kind, instant.facts_ttl_min)
@@ -310,6 +328,34 @@ def _usable_stale(stored: Answer | None, *, now: float) -> Answer | None:
     return stored if stored.age_sec(now=now) <= limit else None
 
 
+def at_length(answer: Answer, sentences: int) -> str:
+    """The answer's sentence, re-cut to ``sentences`` when there is more of it.
+
+    A forecast or a rate is one sentence and has no longer version — «доллар — 91
+    рубль 50 копеек» does not unfold. An article does: the whole lead paragraph
+    came back with the first request and is stored with the answer, so «расскажи
+    подробнее» is a wider slice of a string that is already on the machine. No
+    second request, and it works with the connection gone.
+    """
+    extract = answer.data.get("extract")
+    if sentences <= 0 or not isinstance(extract, str) or not extract.strip():
+        return answer.message_ru
+    title = answer.data.get("title")
+    summary = PageSummary(
+        title=title.strip() if isinstance(title, str) else "",
+        extract=extract,
+        url=str(answer.data.get("url") or ""),
+        source=answer.source,
+    )
+    return summary.spoken(sentences=sentences)
+
+
+def _sentences_available(answer: Answer) -> int:
+    """How many sentences the stored answer could be unfolded to, at most."""
+    extract = answer.data.get("extract")
+    return len(split_sentences(extract)) if isinstance(extract, str) else 0
+
+
 def _age_ru(seconds: float) -> str:
     """How old an answer is, in the words a caveat needs.
 
@@ -328,23 +374,38 @@ def _age_ru(seconds: float) -> str:
     return f"{days} {plural_form(days, 'день', 'дня', 'дней')} назад"
 
 
-def _spoken(resolved: Resolved, *, now: float) -> str:
-    """The final sentence: the answer, plus a caveat when it is stale."""
+def _spoken(resolved: Resolved, *, now: float, sentences: int = MAX_SENTENCES) -> str:
+    """The final sentence: the answer, and the state of the network before it.
+
+    A stale answer starts with «Нет подключения к сети.» rather than ending with a
+    softer version of it. That is the wording the user asked for and the order they
+    asked for it in: the fact that Ayris could not check is the first thing to say,
+    and the old reading follows as something better than silence.
+    """
     answer = resolved.answer
+    message = at_length(answer, sentences)
     if not answer.stale:
-        return answer.message_ru
-    return f"{answer.message_ru} Данные {_age_ru(answer.age_sec(now=now))}, интернета сейчас нет."
+        return message
+    return f"{OFFLINE_MESSAGE} {message} Данные {_age_ru(answer.age_sec(now=now))}."
 
 
 @register
 class InstantAnswer(Action):
-    """Answer a question out loud: weather, rates, the time somewhere, a fact."""
+    """Answer a question out loud — any question, not one off a list.
+
+    The trigger words in the providers route what they are good at: a forecast, a
+    rate, a clock, an article asked for by name. Everything else falls through to
+    :data:`~ayris.actions.system.providers.base.FALLBACK_KIND`, which searches and
+    answers from the article it lands on. So an unrecognised question is a search,
+    not a refusal, and ``kind`` stays a way to *force* a provider rather than the
+    only way to reach one.
+    """
 
     meta: ClassVar = ActionMeta(
         name="InstantAnswer",
         category=ActionCategory.WEB,
         title_ru="Мгновенный ответ",
-        description_ru="Погода, курс валют, время в городе, короткая справка",
+        description_ru="Короткий ответ на вопрос: погода, курс, время, справка, поиск",
         timeout_ms=30_000,
     )
 
@@ -357,26 +418,30 @@ class InstantAnswer(Action):
         kind: str = Field(
             default="",
             max_length=32,
-            description="Тип ответа: weather, rates, time, fact; пусто — определить по фразе",
+            description="Тип ответа: weather, rates, time, fact, lookup; пусто — по фразе",
         )
         fresh: bool = Field(
             default=False,
             title="Игнорировать кэш",
             description="Запросить заново, не беря ответ из кэша",
         )
+        sentences: int = Field(
+            default=MAX_SENTENCES,
+            ge=1,
+            le=8,
+            description="Сколько предложений озвучить; больше — подробнее",
+        )
 
     def run(self, params: Params) -> ActionResult[dict[str, object]]:
         table = providers(_fetcher())
-        kind = params.kind.strip().casefold() or detect_kind(params.query, table)
+        kind = params.kind.strip().casefold() or detect_kind(params.query, table) or FALLBACK_KIND
         provider = table.get(kind)
         if provider is None:
             listed = ", ".join(sorted(table))
             raise ActionParamsInvalid(
                 f"no instant provider for {params.query!r} (kind={kind!r}), have {listed}",
                 problems=[ParamProblem("kind", f"неизвестный тип {kind or '—'}")],
-                user_message=(
-                    "Не поняла, что именно узнать. " "Могу сказать погоду, курс, время или справку."
-                ),
+                user_message="Не знаю такого вида ответа. Просто спросите словами.",
             )
         subject = strip_subject(params.query, provider) if not params.kind.strip() else params.query
         if not subject and kind in _NEEDS_CITY:
@@ -386,7 +451,7 @@ class InstantAnswer(Action):
             resolved = answer_now(provider, subject, fresh=params.fresh, now=now)
         except InstantNotFound as exc:
             return ActionResult.failed(exc.user_message, detail=exc.technical)
-        message = _spoken(resolved, now=now)
+        message = _spoken(resolved, now=now, sentences=params.sentences)
         source = "кэш" if resolved.cached else "сеть"
         _log.info("мгновенный ответ (%s, %s): %s", kind, source, subject)
         return ActionResult.done(
@@ -400,6 +465,7 @@ class InstantAnswer(Action):
                 "stale": resolved.answer.stale,
                 "source": resolved.answer.source,
                 "age_sec": round(resolved.answer.age_sec(now=now), 1),
+                "sentences_total": _sentences_available(resolved.answer),
             },
         )
 
@@ -455,7 +521,7 @@ class SiteSummary(Action):
             return ActionResult.failed(exc.user_message, detail=exc.technical)
         except InstantOffline as exc:
             raise ActionError(exc.technical, user_message=exc.user_message) from exc
-        message = _spoken(resolved, now=now)
+        message = _spoken(resolved, now=now, sentences=params.sentences)
         _log.info("выжимка со страницы %s (%s)", url, "кэш" if resolved.cached else "сеть")
         return ActionResult.done(
             message,

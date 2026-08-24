@@ -937,6 +937,11 @@ class InstantActionsConfig(ConfigSection):
     ``stale_hours`` is how old a cached answer may be before Ayris refuses to
     read it out at all when the network is gone. Yesterday's weather with the
     date said out loud is useful; a forecast from last week is not.
+
+    ``offline`` is the switch that says «do not go out at all». With it on Ayris
+    answers from what it already has and otherwise says «нет подключения к сети»,
+    exactly as it does with the cable pulled — which is the point: a metered
+    connection or a flight should behave like no connection, not like a slow one.
     """
 
     city: str = Field(
@@ -944,6 +949,10 @@ class InstantActionsConfig(ConfigSection):
         min_length=1,
         max_length=120,
         description="Город по умолчанию для погоды и времени",
+    )
+    offline: bool = Field(
+        default=False,
+        description="Офлайн-режим: не выходить в сеть за ответом ни при каких условиях",
     )
     weather_ttl_min: int = Field(
         default=10,

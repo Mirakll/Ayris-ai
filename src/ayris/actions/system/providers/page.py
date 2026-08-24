@@ -52,8 +52,8 @@ __all__ = [
     "parse_page",
     "parse_summary",
     "shorten",
+    "split_sentences",
 ]
-
 #: Wikipedia's REST summary endpoint, per language. Official, keyless, and
 #: documented as the way to get one paragraph about a title.
 SUMMARY_URL: Final = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
@@ -82,6 +82,20 @@ _SENTENCE_END: Final = re.compile(r"(?<=[.!?])\s+(?=[«\"(]?[A-ZА-ЯЁ0-9])")
 _SPACES: Final = re.compile(r"[\s   ]+")
 
 
+def split_sentences(text: str) -> list[str]:
+    """``text`` as a list of sentences, whitespace normalised, empties dropped.
+
+    The unit of an answer here is a sentence and not a paragraph or a character
+    count, because a spoken answer is unfolded one sentence at a time: Ayris says
+    the first two and keeps the rest for «расскажи подробнее», and a cut that
+    lands mid-sentence would make both halves unreadable.
+    """
+    clean = _SPACES.sub(" ", unescape(text)).strip()
+    if not clean:
+        return []
+    return [part.strip() for part in _SENTENCE_END.split(clean) if part.strip()]
+
+
 def shorten(text: str, *, sentences: int = MAX_SENTENCES) -> str:
     """The first few sentences of ``text``, whitespace normalised.
 
@@ -89,11 +103,7 @@ def shorten(text: str, *, sentences: int = MAX_SENTENCES) -> str:
     mid-word is worse than a long one, and a synthesiser reading an ellipsis
     aloud is worse than both.
     """
-    clean = _SPACES.sub(" ", unescape(text)).strip()
-    if not clean:
-        return ""
-    parts = _SENTENCE_END.split(clean)
-    return " ".join(parts[:sentences]).strip()
+    return " ".join(split_sentences(text)[: max(0, sentences)]).strip()
 
 
 @dataclass(frozen=True, slots=True)

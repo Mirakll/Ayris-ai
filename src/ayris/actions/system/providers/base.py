@@ -27,9 +27,10 @@ is what lets the action say «данные за …» instead of pretending.
 
 *The offline check.* Asking the network when there is no network wastes the
 timeout budget and produces a traceback where a sentence would do. So
-:class:`HttpFetcher` refuses before the first attempt when
-:func:`~ayris.core.connectivity.link_up` says there is no link at all, and the
-action then reaches for the stale cache.
+:class:`HttpFetcher` refuses before the first attempt when :func:`network_ready`
+is false — either :func:`~ayris.core.connectivity.link_up` reports no link, or
+the user has turned on offline mode — and the action then reaches for the stale
+cache.
 
 Nothing here starts a request on its own. Every fetch is one user command — no
 background refresh, no prefetching, no telemetry.
@@ -47,6 +48,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import httpx
 
+from ayris.core.config import get_settings
 from ayris.core.connectivity import link_up
 from ayris.core.errors import ActionError
 from ayris.core.paths import get_paths
@@ -60,6 +62,8 @@ __all__ = [
     "BACKOFF_BASE_SEC",
     "BACKOFF_MAX_SEC",
     "CONNECT_TIMEOUT_SEC",
+    "FALLBACK_KIND",
+    "OFFLINE_MESSAGE",
     "USER_AGENT",
     "AnswerCache",
     "HttpFetcher",
@@ -68,6 +72,7 @@ __all__ = [
     "InstantOffline",
     "InstantProvider",
     "InstantProviderError",
+    "network_ready",
     "provider_names",
     "providers",
 ]
@@ -92,6 +97,29 @@ BACKOFF_MAX_SEC: Final = 2.0
 #: applies to what Ayris says about itself as much as to what it sends.
 USER_AGENT: Final = "Ayris/1.0 (voice assistant; +https://github.com/Mirakll/Ayris-ai)"
 
+#: What Ayris says when it cannot ask anything at all.
+#:
+#: One sentence for two situations the user does not distinguish: the machine has
+#: no link, and Ayris was told not to use the one it has. Both mean the same thing
+#: out loud — «нет подключения к сети» — and both are answered before a socket is
+#: opened, so neither costs the timeout budget.
+OFFLINE_MESSAGE: Final = "Нет подключения к сети."
+
+
+def network_ready() -> bool:
+    """Whether Ayris is allowed to ask the network, and able to.
+
+    Two conditions, one answer. :func:`~ayris.core.connectivity.link_up` is the
+    machine's own view of whether there is a link at all — free, local, and no
+    traffic. ``actions.instant.offline`` is the user's: a switch that says «do not
+    go out» regardless of what the adapter thinks, for a metered connection, a
+    flight, or simply not wanting the assistant to talk to anything.
+
+    Checked in one place so every provider, and the action above them, refuse the
+    same way and say the same sentence.
+    """
+    return not get_settings().actions.instant.offline and link_up()
+
 
 class InstantProviderError(ActionError):
     """A provider could not answer. Base class for the two real cases."""
@@ -100,9 +128,9 @@ class InstantProviderError(ActionError):
 
 
 class InstantOffline(InstantProviderError):
-    """There is no network, or the service never answered."""
+    """There is no network, offline mode is on, or the service never answered."""
 
-    default_user_message = "Нет интернета — не могу это узнать."
+    default_user_message = OFFLINE_MESSAGE
 
 
 class InstantNotFound(InstantProviderError):
@@ -258,8 +286,8 @@ class HttpFetcher:
             InstantOffline: No link, no answer, or a 5xx after every attempt.
             InstantProviderError: The service refused with a 4xx.
         """
-        if not link_up():
-            raise InstantOffline(f"{url}: no network link", user_message="Нет интернета.")
+        if not network_ready():
+            raise InstantOffline(f"{url}: no network", user_message=OFFLINE_MESSAGE)
         started = perf_counter()
         attempt = 0
         last: Exception | None = None
@@ -464,6 +492,15 @@ class InstantProvider(ABC):
     #: triggers there would leave «сколько стоит» and nothing to look up.
     keeps_triggers: ClassVar[bool] = False
 
+    #: Whether this provider wants the question as asked, not a subject cut out of it.
+    #:
+    #: ``False`` for the providers that look one thing up: «какая погода в питере»
+    #: is a city, and the prepositions around it are noise.
+    #: :class:`~ayris.actions.system.providers.lookup.LookupProvider` sets it,
+    #: because it searches — and «сколько лет москве» with «сколько» removed is a
+    #: different question from the one that was asked.
+    wants_phrase: ClassVar[bool] = False
+
     def __init__(self, fetcher: HttpFetcher) -> None:
         self._fetcher = fetcher
 
@@ -513,6 +550,7 @@ def providers(fetcher: HttpFetcher) -> dict[str, InstantProvider]:
     around.
     """
     from ayris.actions.system.providers.currency import CurrencyProvider
+    from ayris.actions.system.providers.lookup import LookupProvider
     from ayris.actions.system.providers.page import FactProvider
     from ayris.actions.system.providers.weather import WeatherProvider
     from ayris.actions.system.providers.worldtime import WorldTimeProvider
@@ -522,6 +560,7 @@ def providers(fetcher: HttpFetcher) -> dict[str, InstantProvider]:
         CurrencyProvider(fetcher),
         WorldTimeProvider(fetcher),
         FactProvider(fetcher),
+        LookupProvider(fetcher),
     )
     return {provider.kind: provider for provider in built}
 
@@ -533,8 +572,15 @@ def provider_names() -> tuple[str, ...]:
 
 #: Provider kinds in matching order. Weather before facts, because «погода в
 #: москве» is a forecast and not an article about a city, and facts last because
-#: an encyclopedia has an article about everything.
+#: an encyclopedia has an article about everything. ``lookup`` is not here: it
+#: has no triggers and is never matched *by* a word — it is where a phrase goes
+#: when it matched nothing else, chosen by the action, not by :func:`detect_kind`.
 _KINDS: Final[tuple[str, ...]] = ("weather", "rates", "time", "fact")
+
+#: The catch-all kind, answered by
+#: :class:`~ayris.actions.system.providers.lookup.LookupProvider`. Kept as a name
+#: so the action and its tests refer to it without spelling the string twice.
+FALLBACK_KIND: Final = "lookup"
 
 
 def iter_kinds() -> Iterator[str]:

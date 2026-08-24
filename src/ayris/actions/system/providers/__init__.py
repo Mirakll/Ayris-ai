@@ -19,6 +19,9 @@ What ships:
   Wikipedia's summary API.
 - :class:`~ayris.actions.system.providers.page.PageProvider` — the summary any
   other site publishes about a page of its own.
+- :class:`~ayris.actions.system.providers.lookup.LookupProvider` — the catch-all:
+  a question that matched none of the above is searched for first and answered
+  from whatever article it turns out to be about.
 
 Re-exported here so a caller writes one import, and so the split between
 :mod:`base` and the sources is an implementation detail rather than something
@@ -28,6 +31,8 @@ every user of the package has to know about.
 from __future__ import annotations
 
 from ayris.actions.system.providers.base import (
+    FALLBACK_KIND,
+    OFFLINE_MESSAGE,
     AnswerCache,
     HttpFetcher,
     InstantAnswer,
@@ -35,16 +40,27 @@ from ayris.actions.system.providers.base import (
     InstantOffline,
     InstantProvider,
     InstantProviderError,
+    network_ready,
     provider_names,
     providers,
 )
 from ayris.actions.system.providers.currency import CurrencyProvider, RateTable
 from ayris.actions.system.providers.geocode import Place, geocode
-from ayris.actions.system.providers.page import FactProvider, PageProvider, PageSummary
+from ayris.actions.system.providers.lookup import LookupProvider
+from ayris.actions.system.providers.page import (
+    MAX_SENTENCES,
+    FactProvider,
+    PageProvider,
+    PageSummary,
+    split_sentences,
+)
 from ayris.actions.system.providers.weather import Forecast, WeatherProvider
 from ayris.actions.system.providers.worldtime import CityTime, WorldTimeProvider
 
 __all__ = [
+    "FALLBACK_KIND",
+    "MAX_SENTENCES",
+    "OFFLINE_MESSAGE",
     "AnswerCache",
     "CityTime",
     "CurrencyProvider",
@@ -56,6 +72,7 @@ __all__ = [
     "InstantOffline",
     "InstantProvider",
     "InstantProviderError",
+    "LookupProvider",
     "PageProvider",
     "PageSummary",
     "Place",
@@ -63,6 +80,8 @@ __all__ = [
     "WeatherProvider",
     "WorldTimeProvider",
     "geocode",
+    "network_ready",
     "provider_names",
     "providers",
+    "split_sentences",
 ]
