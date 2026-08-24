@@ -188,19 +188,19 @@ class ClipboardBackend(ABC):
 
 
 class WinClipboard(ClipboardBackend):
-    """The real thing: win32 first, ``pyperclip`` only if win32 is not there.
+    """The real thing: win32, and only win32.
 
-    The win32 path is the one that matters — it is the only one that can tell a
-    picture from text, see the password-manager exclusion markers, or read the
-    change counter, and it is the one that retries when the clipboard is locked.
-    ``pyperclip`` is kept as a text-only fallback for a developer machine that is
-    not Windows; it is imported inside the method so a missing package is never an
-    import-time failure.
+    The single clipboard implementation in the project. A text-only stand-in was
+    tried and dropped: it cannot tell a picture from text, cannot see the
+    password-manager exclusion markers, cannot read the change counter and does not
+    retry when the clipboard is locked — that is four silent regressions in
+    exchange for a clipboard on a developer machine that is not Windows. Off
+    Windows every method says so instead of half-working.
     """
 
     def read(self) -> ClipboardSnapshot:
         if not winapi.available():
-            return self._fallback_read()
+            raise _no_clipboard()
         try:
             data = winapi.read_clipboard(blobs=self._exclusion_formats())
         except winapi.WinApiError as error:
@@ -209,8 +209,7 @@ class WinClipboard(ClipboardBackend):
 
     def write_text(self, text: str) -> None:
         if not winapi.available():
-            self._fallback_write(text)
-            return
+            raise _no_clipboard()
         try:
             winapi.clipboard_set_text(text)
         except winapi.WinApiError as error:
@@ -218,8 +217,7 @@ class WinClipboard(ClipboardBackend):
 
     def clear(self) -> None:
         if not winapi.available():
-            self._fallback_write("")
-            return
+            raise _no_clipboard()
         try:
             winapi.clipboard_clear()
         except winapi.WinApiError as error:
@@ -247,30 +245,6 @@ class WinClipboard(ClipboardBackend):
             if registered:
                 ids.append(registered)
         return tuple(ids)
-
-    @staticmethod
-    def _fallback_read() -> ClipboardSnapshot:
-        try:
-            import pyperclip
-        except ImportError:  # pragma: no cover - pyperclip is a pinned dependency
-            raise _no_clipboard() from None
-        try:
-            text = str(pyperclip.paste())
-        except Exception as error:  # pyperclip raises its own, undeclared types
-            raise _no_clipboard() from error
-        kind = ClipboardKind.TEXT if text else ClipboardKind.EMPTY
-        return ClipboardSnapshot(kind=kind, text=text)
-
-    @staticmethod
-    def _fallback_write(text: str) -> None:
-        try:
-            import pyperclip
-        except ImportError:  # pragma: no cover - pyperclip is a pinned dependency
-            raise _no_clipboard() from None
-        try:
-            pyperclip.copy(text)
-        except Exception as error:
-            raise _no_clipboard() from error
 
 
 class FakeClipboard(ClipboardBackend):

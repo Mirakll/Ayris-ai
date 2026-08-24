@@ -82,7 +82,6 @@ dependencies = [
     # Кодирование снимков (PNG/JPEG с качеством), масштабирование и бинаризация
     # перед OCR. mss отдаёт сырой BGRA, сам ничего не кодирует.
     "pillow==12.3.0",
-    "pyperclip==1.9.0",
     "keyboard==0.13.5",
     # --- Windows.Media.Ocr (задача 26) ---
     # Модульные пакеты pywinrt вместо монолитного winsdk: тот тянет проекции всего
@@ -292,7 +291,6 @@ module = [
     "paddleocr.*",
     "piper.*",
     "pycaw.*",
-    "pyperclip.*",
     "pytesseract.*",
     "pvporcupine.*",
     "pywinauto.*",

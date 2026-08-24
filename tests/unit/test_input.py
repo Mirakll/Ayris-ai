@@ -50,6 +50,7 @@ Groups:
 * :class:`TestMousePoint` — desktop, monitor, window and cursor frames; DPI.
 * :class:`TestMouseActions` — click, move, drag and wheel as event sequences.
 * :class:`TestRealSendInput` — one Windows-only call that really injects.
+* :class:`TestRealClipboardPaste` — the paste route against the real clipboard.
 """
 
 from __future__ import annotations
@@ -103,6 +104,14 @@ from ayris.actions.input.mouse import (
     drag_path,
     normalize_point,
     set_screen_backend,
+)
+from ayris.actions.system import clipboard as clipboard_module
+from ayris.actions.system.clipboard import (
+    ClipboardKind,
+    ClipboardSnapshot,
+    FakeClipboard,
+    reset_clipboard,
+    set_clipboard,
 )
 from ayris.core.errors import ActionError
 from ayris.utils.logger import ROOT_LOGGER_NAME
@@ -219,6 +228,28 @@ def recorder() -> Iterator[RecordingBackend]:
         set_input_backend(None)
         reset_input_backend()
         keys_module._held.clear()
+
+
+@pytest.fixture
+def clipboard() -> Iterator[FakeClipboard]:
+    """Install a clipboard in a variable, because paste mode now needs a real one.
+
+    ``TypeText`` in clipboard mode goes through the project's one clipboard
+    wrapper, and that wrapper is win32-only. Without this seam every paste-mode
+    test would be skipped outside Windows — and the part worth asserting, that
+    whatever the user had copied comes back afterwards, has nothing to do with
+    Windows. :class:`TestRealClipboardPaste` covers the win32 half.
+    """
+    fake = FakeClipboard()
+    set_clipboard(fake)
+    try:
+        yield fake
+    finally:
+        set_clipboard(None)
+        reset_clipboard()
+        # The paste hides its own two writes from the history monitor; the marks
+        # are consumed by a monitor that is not running here.
+        clipboard_module._suppressed.clear()
 
 
 @pytest.fixture
@@ -1069,52 +1100,62 @@ class TestTypeText:
         assert result.data["mode"] == "unicode"
 
     def test_the_clipboard_route_pastes_and_restores(
-        self, recorder: RecordingBackend, monkeypatch: pytest.MonkeyPatch
+        self, recorder: RecordingBackend, clipboard: FakeClipboard
     ) -> None:
         """Losing what the user had copied would be a worse failure than a slow paste."""
-        clipboard = ["что-то важное"]
-
-        class FakePyperclip:
-            @staticmethod
-            def paste() -> str:
-                return clipboard[-1]
-
-            @staticmethod
-            def copy(value: str) -> None:
-                clipboard.append(value)
-
-        monkeypatch.setitem(sys.modules, "pyperclip", FakePyperclip)
+        clipboard.put(ClipboardSnapshot(kind=ClipboardKind.TEXT, text="что-то важное"))
         TypeText().run(TypeText.Params(text="длинный текст", mode=TypeMode.CLIPBOARD))
         assert recorder.keys == ("+ctrl", "+v", "-v", "-ctrl")
-        assert clipboard[-2] == "длинный текст"
-        assert clipboard[-1] == "что-то важное"
+        assert clipboard.writes == ["длинный текст", "что-то важное"]
+
+    def test_neither_write_reaches_the_clipboard_history(
+        self, recorder: RecordingBackend, clipboard: FakeClipboard
+    ) -> None:
+        """The user copied neither value: the clipboard is a transport here, not a copy."""
+        clipboard.put(ClipboardSnapshot(kind=ClipboardKind.TEXT, text="что-то важное"))
+        TypeText().run(TypeText.Params(text="длинный текст", mode=TypeMode.CLIPBOARD))
+        for text in ("длинный текст", "что-то важное"):
+            assert clipboard_module._claim_suppressed(text), text
+
+    def test_a_picture_in_the_clipboard_is_not_restored_as_text(
+        self, recorder: RecordingBackend, clipboard: FakeClipboard
+    ) -> None:
+        """A screenshot cannot be put back, and pretending otherwise loses it silently.
+
+        It is already lost — win32 has no «give me back the bitmap I overwrote» — so
+        the honest end state is an empty clipboard rather than the *word* for what
+        used to be there.
+        """
+        clipboard.put(ClipboardSnapshot(kind=ClipboardKind.IMAGE))
+        TypeText().run(TypeText.Params(text="длинный текст", mode=TypeMode.CLIPBOARD))
+        assert clipboard.writes == ["длинный текст", ""]
 
     def test_the_clipboard_is_restored_even_when_the_paste_fails(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, clipboard: FakeClipboard
     ) -> None:
-        clipboard = ["исходное"]
-
-        class FakePyperclip:
-            @staticmethod
-            def paste() -> str:
-                return clipboard[-1]
-
-            @staticmethod
-            def copy(value: str) -> None:
-                clipboard.append(value)
+        clipboard.put(ClipboardSnapshot(kind=ClipboardKind.TEXT, text="исходное"))
 
         class RefusesEverything(RecordingBackend):
             def key_down(self, key: KeyStroke, *, scancode: bool = False) -> None:
                 raise backend_module.InputBlocked("refused")
 
-        monkeypatch.setitem(sys.modules, "pyperclip", FakePyperclip)
         set_input_backend(RefusesEverything())
         try:
             with pytest.raises(backend_module.InputBlocked):
                 TypeText().run(TypeText.Params(text="текст", mode=TypeMode.CLIPBOARD))
         finally:
             set_input_backend(None)
-        assert clipboard[-1] == "исходное"
+            reset_input_backend()
+        assert clipboard.snapshot.text == "исходное"
+
+    def test_a_clipboard_that_cannot_be_read_still_pastes(
+        self, recorder: RecordingBackend, clipboard: FakeClipboard
+    ) -> None:
+        """Nothing readable means nothing worth putting back, not a refused paste."""
+        clipboard.busy_reads = 99
+        TypeText().run(TypeText.Params(text="длинный текст", mode=TypeMode.CLIPBOARD))
+        assert recorder.keys == ("+ctrl", "+v", "-v", "-ctrl")
+        assert clipboard.writes[0] == "длинный текст"
 
     def test_text_longer_than_the_field_allows_is_refused(self) -> None:
         with pytest.raises(ValidationError):
@@ -1526,3 +1567,42 @@ class TestRealSendInput:
             SendInputBackend().mouse_move(*normalize_point(*origin, layout.virtual))
         assert abs(moved[0] - target[0]) <= 2
         assert abs(moved[1] - target[1]) <= 2
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="нужен настоящий буфер обмена Windows")
+class TestRealClipboardPaste:
+    """Paste mode against the real clipboard, since that path used to be a fake.
+
+    Until task 27 this route went through ``pyperclip`` and the test replaced the
+    module with four lines of Python — so on a Windows runner the code that talks to
+    the clipboard was never executed at all, and the one thing that can actually go
+    wrong here (a clipboard another program is holding open) could not happen. Now
+    it is the project's own win32 wrapper, and this asks Windows.
+
+    Input stays recorded: a real Ctrl+V would land in whatever window has the focus.
+    What matters is that the text is genuinely on the clipboard at the moment the
+    combination fires, which is what the watching backend checks.
+    """
+
+    def test_the_text_is_really_on_the_clipboard_when_ctrl_v_fires(self) -> None:
+        set_clipboard(None)
+        reset_clipboard()
+        real = clipboard_module.get_clipboard()
+        real.write_text("прежнее значение")
+        seen: list[str] = []
+
+        class WatchingBackend(RecordingBackend):
+            def key_down(self, key: KeyStroke, *, scancode: bool = False) -> None:
+                super().key_down(key, scancode=scancode)
+                seen.append(real.read().text)
+
+        set_input_backend(WatchingBackend())
+        try:
+            TypeText().run(TypeText.Params(text="вставляемый текст", mode=TypeMode.CLIPBOARD))
+        finally:
+            set_input_backend(None)
+            reset_input_backend()
+            clipboard_module._suppressed.clear()
+
+        assert "вставляемый текст" in seen
+        assert real.read().text == "прежнее значение"

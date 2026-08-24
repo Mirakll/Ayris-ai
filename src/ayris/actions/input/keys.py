@@ -823,23 +823,33 @@ class TypeText(Action):
     def _paste(self, text: str, *, backend: InputBackend) -> None:
         """Clipboard and Ctrl+V, with the old contents restored.
 
+        Goes through :class:`~ayris.actions.system.clipboard.ClipboardBackend`, the
+        one clipboard wrapper in the project: it retries a clipboard held open by
+        another program, which is exactly what happens right after a Ctrl+C. Both
+        writes are hidden from the history monitor — the user copied neither of
+        them, the clipboard is only being borrowed as a transport.
+
         Restoring is best-effort by nature: the receiving application reads the
         clipboard on its own schedule, so the old value goes back after the hold
         delay rather than immediately. Losing what the user had copied would be a
         worse failure than a paste that lands a moment late.
         """
+        # Imported here rather than at module level: clipboard.py synthesises its
+        # own Ctrl+V through press_combo from this module, so one of the two
+        # directions has to be late.
+        from ayris.actions.system.clipboard import get_clipboard, suppress_record
+
+        clipboard = get_clipboard()
         try:
-            import pyperclip
-        except ImportError as exc:  # pragma: no cover - pyperclip is a dependency
-            raise ActionError(
-                f"pyperclip is unavailable: {exc}",
-                user_message="Вставка через буфер обмена недоступна, попробуйте обычную печать.",
-            ) from exc
-        try:
-            previous = str(pyperclip.paste())
-        except Exception:
+            snapshot = clipboard.read()
+        except ActionError:
+            # Nothing readable is not a reason to refuse the paste; it only means
+            # there is nothing worth putting back afterwards.
             previous = ""
-        pyperclip.copy(text)
+        else:
+            previous = snapshot.text if snapshot.is_text else ""
+        suppress_record(text)
+        clipboard.write_text(text)
         _, hold, _ = _timings()
         try:
             press_combo(
@@ -851,6 +861,7 @@ class TypeText(Action):
             _pause(max(hold, 20))
         finally:
             try:
-                pyperclip.copy(previous)
-            except Exception:
+                suppress_record(previous)
+                clipboard.write_text(previous)
+            except ActionError:
                 _log.warning("не удалось вернуть буфер обмена", exc_info=True)

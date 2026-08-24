@@ -38,6 +38,7 @@ from pydantic import Field, model_validator
 from ayris.actions.base import Action, ActionCategory, ActionMeta, ActionParams
 from ayris.actions.registry import register
 from ayris.actions.result import ActionResult
+from ayris.actions.system.clipboard import get_clipboard
 from ayris.actions.system.ocr_engines import Choice, OcrEngine, OcrText, select_engine
 from ayris.actions.system.screenshot import (
     MAX_SIDE,
@@ -316,21 +317,20 @@ def copy_text(text: str) -> bool:
     """Put the text on the clipboard, ``False`` if it would not go.
 
     Text, unlike the pictures in :mod:`ayris.actions.system.screenshot`, needs no
-    win32 detour — ``CF_UNICODETEXT`` is the one format ``pyperclip`` handles well,
-    and it is what the rest of Ayris already uses.
+    win32 code of its own here: the project's one clipboard wrapper already writes
+    ``CF_UNICODETEXT`` and already retries a clipboard another program is holding
+    open. Recognised text is deliberately *not* hidden from the history monitor —
+    the user asked for it to be on the clipboard, so it belongs in «вставь второй»
+    like any other copy.
+
+    A refusal never fails the recognition: the text is still returned and still
+    read out, so a locked clipboard costs a warning and nothing else.
     """
     if not text.strip():
         return False
     try:
-        import pyperclip
-    except ImportError as exc:  # pragma: no cover - pyperclip is a dependency
-        _log.warning("pyperclip is unavailable, the text stays unread: %s", exc)
-        return False
-    try:
-        pyperclip.copy(text)
-    except Exception:
-        # pyperclip raises its own exception type for a clipboard held open by
-        # another process. Failing to copy must not fail the recognition.
+        get_clipboard().write_text(text)
+    except ActionError:
         _log.warning("не удалось скопировать распознанный текст", exc_info=True)
         return False
     return True
