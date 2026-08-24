@@ -218,6 +218,20 @@ class ActionParams(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, validate_default=True)
 
+    def secret_now(self) -> frozenset[str]:
+        """Extra field names to mask for *this* call, on top of the schema ones.
+
+        ``json_schema_extra={"secret": True}`` marks a field that is always a
+        secret, which is what the editor draws as a password box. Some fields are
+        only sometimes one: the text handed to ``ClipboardSet`` is an ordinary
+        note when a macro copies a link and a password when it copies a password,
+        and the caller is the only one who knows which. Overriding this makes the
+        decision per call, and :func:`mask_params` honours both sources — so the
+        audit row keeps the readable value in the first case and hides it in the
+        second.
+        """
+        return frozenset()
+
 
 class Action(ABC):
     """One executable action.
@@ -343,9 +357,14 @@ def mask_params(params: BaseModel) -> dict[str, Any]:
     ``audit`` row, :class:`~ayris.core.events.ActionStarted`. Nesting is walked by
     value rather than by annotation, so a ``Params`` that carries a sub-model
     still gets its inner secrets masked.
+
+    Fields named by :meth:`ActionParams.secret_now` are masked as well, which is
+    how a value that is only sometimes a secret stays out of the audit.
     """
     dumped = params.model_dump(mode="json")
     hidden = secret_fields(type(params))
+    if isinstance(params, ActionParams):
+        hidden |= params.secret_now()
     for name in dumped:
         if name in hidden:
             dumped[name] = SECRET_MASK

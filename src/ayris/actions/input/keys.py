@@ -62,6 +62,7 @@ __all__ = [
     "char_shift_state",
     "held_keys",
     "parse_combo",
+    "press_combo",
     "release_held_keys",
     "resolve_key",
 ]
@@ -495,12 +496,12 @@ def _timings() -> tuple[int, int, int]:
     return (section.key_delay_ms, section.key_hold_ms, section.char_delay_ms)
 
 
-def _press_combo(
+def press_combo(
     keys: Sequence[KeyStroke],
     *,
     backend: InputBackend,
     hold_ms: int,
-    scancode: bool,
+    scancode: bool = False,
 ) -> None:
     """Down in order, hold, up in reverse — with the release guaranteed.
 
@@ -579,7 +580,7 @@ class KeyPress(Action):
         for index in range(params.times):
             if index:
                 _pause(delay)
-            _press_combo(keys, backend=backend, hold_ms=hold, scancode=params.scancode)
+            press_combo(keys, backend=backend, hold_ms=hold, scancode=params.scancode)
         suffix = f" ×{params.times}" if params.times > 1 else ""
         return ActionResult.done(
             f"Нажал {title}{suffix}.",
@@ -841,7 +842,7 @@ class TypeText(Action):
         pyperclip.copy(text)
         _, hold, _ = _timings()
         try:
-            _press_combo(
+            press_combo(
                 parse_combo("ctrl+v"),
                 backend=backend,
                 hold_ms=hold,

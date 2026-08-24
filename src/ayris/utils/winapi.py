@@ -27,19 +27,25 @@ action layer is the one that translates it into a Russian
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Iterator, Mapping, Sequence
 
 __all__ = [
+    "CF_BITMAP",
     "CF_DIB",
+    "CF_DIBV5",
+    "CF_HDROP",
+    "CF_TIFF",
+    "CF_UNICODETEXT",
     "DWMWA_EXTENDED_FRAME_BOUNDS",
     "ELEVATION_TYPE_DEFAULT",
     "ELEVATION_TYPE_FULL",
@@ -51,6 +57,7 @@ __all__ = [
     "EWX_REBOOT",
     "EWX_SHUTDOWN",
     "GW_OWNER",
+    "IMAGE_FORMATS",
     "INTEGRITY_HIGH",
     "INTEGRITY_LOW",
     "INTEGRITY_MEDIUM",
@@ -89,19 +96,26 @@ __all__ = [
     "VK_MENU",
     "VK_RIGHT",
     "WHEEL_DELTA",
+    "WM_CLIPBOARDUPDATE",
     "WS_EX_APPWINDOW",
     "WS_EX_NOACTIVATE",
     "WS_EX_TOOLWINDOW",
+    "ClipboardData",
     "ElevationInfo",
+    "MessageWindow",
     "MonitorInfo",
     "ProcessRun",
     "Rect",
     "WinApiError",
     "abort_shutdown",
+    "add_clipboard_format_listener",
     "attach_thread_input",
     "available",
     "bring_window_to_top",
+    "clipboard_clear",
+    "clipboard_sequence_number",
     "clipboard_set_binary",
+    "clipboard_set_text",
     "console_output_codepage",
     "current_thread_id",
     "cursor_position",
@@ -130,7 +144,9 @@ __all__ = [
     "process_elevation",
     "process_image_name",
     "process_running",
+    "read_clipboard",
     "register_clipboard_format",
+    "remove_clipboard_format_listener",
     "send_close",
     "send_key_events",
     "send_mouse_event",
@@ -200,6 +216,23 @@ DWMWA_EXTENDED_FRAME_BOUNDS: Final = 9
 #: back to Paint understands; the registered ``"PNG"`` format keeps the alpha
 #: channel for the ones that prefer it (browsers, Office, Telegram).
 CF_DIB: Final = 8
+
+#: The other standard formats Ayris only ever *reads*, to tell what is on the
+#: clipboard. Text is the only kind the history stores; a picture or a set of
+#: dragged files is recognised and reported, never copied into the database.
+CF_BITMAP: Final = 2
+CF_TIFF: Final = 6
+CF_UNICODETEXT: Final = 13
+CF_HDROP: Final = 15
+CF_DIBV5: Final = 17
+
+#: Formats that mean «there is a picture on the clipboard», in the order Windows
+#: itself prefers them.
+IMAGE_FORMATS: Final = (CF_DIBV5, CF_DIB, CF_BITMAP, CF_TIFF)
+
+#: ``WM_CLIPBOARDUPDATE`` — the one message a clipboard listener window gets. It
+#: carries no data: the window is told the clipboard changed and reads it itself.
+WM_CLIPBOARDUPDATE: Final = 0x031D
 
 #: ``GlobalAlloc`` flags: moveable memory, which is the only kind the clipboard
 #: accepts ownership of.
@@ -331,6 +364,19 @@ _CHORD_HOLD_S: Final = 0.02
 #: something always does right after a Ctrl+C. Retry a few times over ~0.15 s.
 _CLIPBOARD_TRIES: Final = 6
 _CLIPBOARD_RETRY_S: Final = 0.03
+#: Caps on what one clipboard read may pull into memory. Text longer than this is
+#: not something a person copied on purpose, and the history limit is far lower
+#: anyway; the blob cap only guards a caller that asked for a picture format.
+_MAX_CLIPBOARD_TEXT: Final = 1_000_000
+_MAX_CLIPBOARD_BLOB: Final = 4096
+_MAX_CLIPBOARD_FORMATS: Final = 64
+_MAX_DROPPED_FILES: Final = 256
+#: ``HWND_MESSAGE``: parent of a window that exists only to receive messages.
+_HWND_MESSAGE: Final = -3
+#: ``WM_APP + 1``: the message :meth:`MessageWindow.stop` posts to itself. Windows
+#: promises the ``WM_APP`` range is never used by the system.
+_WM_AYRIS_STOP: Final = 0x8001
+_ERROR_CLASS_ALREADY_EXISTS: Final = 1410
 #: Longest title Windows will hand back. Titles are short; the cap only exists so
 #: a hostile window cannot make us allocate megabytes.
 _MAX_TEXT: Final = 1024
@@ -1654,6 +1700,36 @@ def register_clipboard_format(name: str) -> int:
     return int(register(name))
 
 
+@contextlib.contextmanager
+def _clipboard_open() -> Iterator[None]:
+    """Hold the clipboard open for the body, retrying while someone else has it.
+
+    The clipboard is one global lock for the whole desktop, and right after a
+    Ctrl+C something always holds it — the source program, a manager, Windows'
+    own history service. It nearly always lets go within a frame, so a refusal is
+    worth retrying for ~0.15 s before it becomes an error. Without this every
+    clipboard action would fail at random, which is exactly what it looks like to
+    the user: «иногда работает».
+    """
+    open_clipboard = _require("user32", "OpenClipboard")
+    close_clipboard = _require("user32", "CloseClipboard")
+    open_clipboard.restype = ctypes.c_bool
+    open_clipboard.argtypes = [ctypes.c_void_p]
+    close_clipboard.restype = ctypes.c_bool
+    close_clipboard.argtypes = []
+
+    for attempt in range(_CLIPBOARD_TRIES):
+        if open_clipboard(None):
+            break
+        if attempt == _CLIPBOARD_TRIES - 1:
+            raise _last_error("OpenClipboard")
+        time.sleep(_CLIPBOARD_RETRY_S)
+    try:
+        yield
+    finally:
+        close_clipboard()
+
+
 def clipboard_set_binary(payloads: Sequence[tuple[int, bytes]]) -> None:
     """Put the same picture on the clipboard in several formats at once.
 
@@ -1663,31 +1739,23 @@ def clipboard_set_binary(payloads: Sequence[tuple[int, bytes]]) -> None:
     screenshot that pastes into Paint and one that keeps its alpha channel in a
     browser; neither format alone covers both.
 
-    The clipboard is a single global lock, and whatever holds it usually lets go
-    within a frame, so a refusal is retried briefly before it becomes an error.
     Memory handed to ``SetClipboardData`` belongs to the system afterwards and
     must not be freed; memory it rejected still belongs to us and must be.
     """
     if not payloads:
         return
 
-    open_clipboard = _require("user32", "OpenClipboard")
     empty_clipboard = _require("user32", "EmptyClipboard")
     set_data = _require("user32", "SetClipboardData")
-    close_clipboard = _require("user32", "CloseClipboard")
     global_alloc = _require("kernel32", "GlobalAlloc")
     global_lock = _require("kernel32", "GlobalLock")
     global_unlock = _require("kernel32", "GlobalUnlock")
     global_free = _require("kernel32", "GlobalFree")
 
-    open_clipboard.restype = ctypes.c_bool
-    open_clipboard.argtypes = [ctypes.c_void_p]
     empty_clipboard.restype = ctypes.c_bool
     empty_clipboard.argtypes = []
     set_data.restype = ctypes.c_void_p
     set_data.argtypes = [ctypes.c_uint, ctypes.c_void_p]
-    close_clipboard.restype = ctypes.c_bool
-    close_clipboard.argtypes = []
     global_alloc.restype = ctypes.c_void_p
     global_alloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
     global_lock.restype = ctypes.c_void_p
@@ -1697,14 +1765,7 @@ def clipboard_set_binary(payloads: Sequence[tuple[int, bytes]]) -> None:
     global_free.restype = ctypes.c_void_p
     global_free.argtypes = [ctypes.c_void_p]
 
-    for attempt in range(_CLIPBOARD_TRIES):
-        if open_clipboard(None):
-            break
-        if attempt == _CLIPBOARD_TRIES - 1:
-            raise _last_error("OpenClipboard")
-        time.sleep(_CLIPBOARD_RETRY_S)
-
-    try:
+    with _clipboard_open():
         if not empty_clipboard():
             raise _last_error("EmptyClipboard")
         for fmt, blob in payloads:
@@ -1725,8 +1786,352 @@ def clipboard_set_binary(payloads: Sequence[tuple[int, bytes]]) -> None:
                 error = _last_error("SetClipboardData")
                 global_free(block)
                 raise error
+
+
+def clipboard_set_text(text: str) -> None:
+    """Put plain text on the clipboard as :data:`CF_UNICODETEXT`.
+
+    Windows expects the buffer NUL-terminated and counted in bytes, so the
+    terminator is two of them.
+    """
+    clipboard_set_binary([(CF_UNICODETEXT, text.encode("utf-16-le") + b"\x00\x00")])
+
+
+def clipboard_clear() -> None:
+    """Empty the clipboard. What a secret paste has to do the moment it is done."""
+    empty_clipboard = _require("user32", "EmptyClipboard")
+    empty_clipboard.restype = ctypes.c_bool
+    empty_clipboard.argtypes = []
+    with _clipboard_open():
+        if not empty_clipboard():
+            raise _last_error("EmptyClipboard")
+
+
+def clipboard_sequence_number() -> int:
+    """Counter Windows bumps on every clipboard change. ``0`` when unavailable.
+
+    Cheaper than reading the clipboard and needs no lock, so a monitor can tell
+    «nothing happened» from «read it again» without fighting for the handle.
+    """
+    counter = _win_function("user32", "GetClipboardSequenceNumber")
+    if counter is None:
+        return 0
+    counter.restype = ctypes.c_uint
+    counter.argtypes = []
+    return int(counter())
+
+
+@dataclass(frozen=True, slots=True)
+class ClipboardData:
+    """One consistent look at the clipboard, taken while it was held open.
+
+    Everything comes from a single open/close cycle on purpose: asking for the
+    formats, then the text, then the pictures would be three separate locks with
+    a different clipboard possibly behind each one.
+    """
+
+    formats: tuple[int, ...] = ()
+    text: str = ""
+    files: tuple[str, ...] = ()
+    blobs: Mapping[int, bytes] = field(default_factory=dict)
+    sequence: int = 0
+
+    def has(self, fmt: int) -> bool:
+        """Whether the clipboard offered that format."""
+        return fmt in self.formats
+
+
+def _read_blob(handle: Any, *, limit: int = 0) -> bytes:
+    """Copy a global memory block out of the clipboard, optionally truncated."""
+    global_lock = _require("kernel32", "GlobalLock")
+    global_unlock = _require("kernel32", "GlobalUnlock")
+    global_size = _require("kernel32", "GlobalSize")
+    global_lock.restype = ctypes.c_void_p
+    global_lock.argtypes = [ctypes.c_void_p]
+    global_unlock.restype = ctypes.c_bool
+    global_unlock.argtypes = [ctypes.c_void_p]
+    global_size.restype = ctypes.c_size_t
+    global_size.argtypes = [ctypes.c_void_p]
+
+    size = int(global_size(handle))
+    if size <= 0:
+        return b""
+    if limit and size > limit:
+        size = limit
+    address = global_lock(handle)
+    if not address:
+        return b""
+    try:
+        return ctypes.string_at(address, size)
     finally:
-        close_clipboard()
+        global_unlock(handle)
+
+
+def _read_dropped_files(handle: Any) -> tuple[str, ...]:
+    """Names behind a :data:`CF_HDROP` handle, or ``()`` when shell32 refuses."""
+    query = _win_function("shell32", "DragQueryFileW")
+    if query is None:
+        return ()
+    query.restype = ctypes.c_uint
+    query.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_wchar_p, ctypes.c_uint]
+
+    count = int(query(handle, 0xFFFFFFFF, None, 0))
+    names: list[str] = []
+    for index in range(min(count, _MAX_DROPPED_FILES)):
+        length = int(query(handle, index, None, 0))
+        if length <= 0:
+            continue
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        if query(handle, index, buffer, length + 1):
+            names.append(buffer.value)
+    return tuple(names)
+
+
+def read_clipboard(blobs: Sequence[int] = ()) -> ClipboardData:
+    """Read the clipboard once: which formats it holds, its text, its files.
+
+    ``blobs`` names extra formats whose raw bytes the caller wants — the markers
+    password managers set to ask monitors to look away are DWORD-sized formats
+    read this way. Their payload is capped: a caller asking for a picture format
+    by mistake should not pull megabytes into memory.
+    """
+    enum_formats = _require("user32", "EnumClipboardFormats")
+    get_data = _require("user32", "GetClipboardData")
+    enum_formats.restype = ctypes.c_uint
+    enum_formats.argtypes = [ctypes.c_uint]
+    get_data.restype = ctypes.c_void_p
+    get_data.argtypes = [ctypes.c_uint]
+
+    wanted = {fmt for fmt in blobs if fmt}
+    formats: list[int] = []
+    payloads: dict[int, bytes] = {}
+    text = ""
+    files: tuple[str, ...] = ()
+
+    with _clipboard_open():
+        current = int(enum_formats(0))
+        while current and len(formats) < _MAX_CLIPBOARD_FORMATS:
+            formats.append(current)
+            current = int(enum_formats(current))
+        if CF_UNICODETEXT in formats:
+            handle = get_data(CF_UNICODETEXT)
+            if handle:
+                raw = _read_blob(handle, limit=_MAX_CLIPBOARD_TEXT * 2)
+                text = raw.decode("utf-16-le", "replace").split("\0", 1)[0]
+        if CF_HDROP in formats:
+            handle = get_data(CF_HDROP)
+            if handle:
+                files = _read_dropped_files(handle)
+        for fmt in sorted(wanted & set(formats)):
+            handle = get_data(fmt)
+            if handle:
+                payloads[fmt] = _read_blob(handle, limit=_MAX_CLIPBOARD_BLOB)
+
+    return ClipboardData(
+        formats=tuple(formats),
+        text=text,
+        files=files,
+        blobs=payloads,
+        sequence=clipboard_sequence_number(),
+    )
+
+
+def add_clipboard_format_listener(hwnd: int) -> None:
+    """Ask Windows to post :data:`WM_CLIPBOARDUPDATE` to ``hwnd``.
+
+    The modern replacement for the clipboard viewer chain: no chain to join, no
+    neighbour to forward to, and nothing breaks when another listener crashes.
+    """
+    listen = _require("user32", "AddClipboardFormatListener")
+    listen.restype = ctypes.c_bool
+    listen.argtypes = [ctypes.c_void_p]
+    if not listen(_handle(hwnd)):
+        raise _last_error("AddClipboardFormatListener")
+
+
+def remove_clipboard_format_listener(hwnd: int) -> None:
+    """Stop the notifications :func:`add_clipboard_format_listener` started."""
+    stop = _win_function("user32", "RemoveClipboardFormatListener")
+    if stop is None:
+        return
+    stop.restype = ctypes.c_bool
+    stop.argtypes = [ctypes.c_void_p]
+    stop(_handle(hwnd))
+
+
+class _MSG(ctypes.Structure):
+    _fields_ = (
+        ("hwnd", ctypes.c_void_p),
+        ("message", ctypes.c_uint),
+        ("wParam", ctypes.c_void_p),
+        ("lParam", ctypes.c_void_p),
+        ("time", ctypes.c_ulong),
+        ("pt", _POINT),
+    )
+
+
+class _WNDCLASSW(ctypes.Structure):
+    _fields_ = (
+        ("style", ctypes.c_uint),
+        ("lpfnWndProc", ctypes.c_void_p),
+        ("cbClsExtra", ctypes.c_int),
+        ("cbWndExtra", ctypes.c_int),
+        ("hInstance", ctypes.c_void_p),
+        ("hIcon", ctypes.c_void_p),
+        ("hCursor", ctypes.c_void_p),
+        ("hbrBackground", ctypes.c_void_p),
+        ("lpszMenuName", ctypes.c_wchar_p),
+        ("lpszClassName", ctypes.c_wchar_p),
+    )
+
+
+class MessageWindow:
+    """A window with no pixels, existing only to be sent messages.
+
+    ``AddClipboardFormatListener`` needs a window handle, and a background thread
+    has none — so it makes one whose parent is ``HWND_MESSAGE``. Such a window
+    never appears on screen, in the taskbar or in Alt+Tab, and it is not painted,
+    which is why it costs nothing to keep alive for the whole session.
+
+    The window procedure is Windows' own ``DefWindowProcW``: every message Ayris
+    cares about is *posted*, so it arrives in the thread's queue and :meth:`pump`
+    reads it there. Nothing has to travel through a Python callback, and a bug in
+    the handler therefore cannot corrupt the stack of a WinAPI call.
+
+    :meth:`create` and :meth:`pump` must run on the same thread. :meth:`stop` is
+    the exception and may be called from any of them.
+    """
+
+    def __init__(self, class_name: str, on_message: Callable[[int], None]) -> None:
+        self._class_name = class_name
+        self._on_message = on_message
+        self._hwnd = 0
+        self._atom = 0
+
+    @property
+    def hwnd(self) -> int:
+        """Handle of the live window, or ``0`` before :meth:`create`."""
+        return self._hwnd
+
+    def create(self) -> None:
+        """Register the class and make the window. Idempotent."""
+        if self._hwnd:
+            return
+        register = _require("user32", "RegisterClassW")
+        create = _require("user32", "CreateWindowExW")
+        default_proc = _require("user32", "DefWindowProcW")
+        module_handle = _require("kernel32", "GetModuleHandleW")
+        register.restype = ctypes.c_ushort
+        register.argtypes = [ctypes.c_void_p]
+        create.restype = ctypes.c_void_p
+        create.argtypes = [
+            ctypes.c_uint,
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_uint,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+        module_handle.restype = ctypes.c_void_p
+        module_handle.argtypes = [ctypes.c_wchar_p]
+
+        instance = module_handle(None)
+        window_class = _WNDCLASSW()
+        window_class.lpfnWndProc = ctypes.cast(default_proc, ctypes.c_void_p)
+        window_class.hInstance = instance
+        window_class.lpszClassName = self._class_name
+        atom = int(register(ctypes.byref(window_class)))
+        if not atom:
+            error = _last_error("RegisterClassW")
+            # 1410 is ERROR_CLASS_ALREADY_EXISTS: a previous window of ours was
+            # torn down without unregistering, and the class is still usable.
+            if error.code != _ERROR_CLASS_ALREADY_EXISTS:
+                raise error
+        else:
+            self._atom = atom
+
+        hwnd = create(
+            0,
+            self._class_name,
+            self._class_name,
+            0,
+            0,
+            0,
+            0,
+            0,
+            _handle(_HWND_MESSAGE),
+            None,
+            instance,
+            None,
+        )
+        if not hwnd:
+            raise _last_error("CreateWindowExW")
+        self._hwnd = int(hwnd)
+
+    def pump(self) -> None:
+        """Read messages until :meth:`stop`. Blocks; call on the owning thread."""
+        if not self._hwnd:
+            raise WinApiError("MessageWindow.pump called before create")
+        get_message = _require("user32", "GetMessageW")
+        translate = _require("user32", "TranslateMessage")
+        dispatch = _require("user32", "DispatchMessageW")
+        get_message.restype = ctypes.c_int
+        get_message.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint, ctypes.c_uint]
+        translate.restype = ctypes.c_bool
+        translate.argtypes = [ctypes.c_void_p]
+        dispatch.restype = ctypes.c_void_p
+        dispatch.argtypes = [ctypes.c_void_p]
+
+        message = _MSG()
+        pointer = ctypes.byref(message)
+        while True:
+            got = int(get_message(pointer, _handle(self._hwnd), 0, 0))
+            if got <= 0:
+                # 0 is WM_QUIT, -1 an invalid handle — the window is gone either way.
+                return
+            code = int(message.message)
+            if code == _WM_AYRIS_STOP:
+                return
+            translate(pointer)
+            dispatch(pointer)
+            try:
+                self._on_message(code)
+            except Exception:
+                _log.exception("message window handler failed on 0x%04X", code)
+
+    def stop(self) -> None:
+        """Make :meth:`pump` return. Safe from another thread."""
+        if not self._hwnd:
+            return
+        post = _win_function("user32", "PostMessageW")
+        if post is None:
+            return
+        post.restype = ctypes.c_bool
+        post.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+        post(_handle(self._hwnd), _WM_AYRIS_STOP, None, None)
+
+    def close(self) -> None:
+        """Destroy the window and forget the class. Idempotent."""
+        if self._hwnd:
+            destroy = _win_function("user32", "DestroyWindow")
+            if destroy is not None:
+                destroy.restype = ctypes.c_bool
+                destroy.argtypes = [ctypes.c_void_p]
+                destroy(_handle(self._hwnd))
+            self._hwnd = 0
+        if self._atom:
+            unregister = _win_function("user32", "UnregisterClassW")
+            if unregister is not None:
+                unregister.restype = ctypes.c_bool
+                unregister.argtypes = [ctypes.c_wchar_p, ctypes.c_void_p]
+                unregister(self._class_name, None)
+            self._atom = 0
 
 
 # --------------------------------------------------------------------------- #

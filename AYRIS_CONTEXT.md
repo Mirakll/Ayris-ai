@@ -58,19 +58,36 @@ Ayris (Айрис) — голосовой помощник для Windows 11. Р
 Проверки не сваливаются на пользователя: он не обязан уметь запускать линтеры. Всё, что можно проверить автоматически, должно проверяться автоматически.
 
 **Три уровня.**
-1. **В песочнице чата** — питон лежит в самом проекте, сети не нужно. Всё
-   проверяется одной командой: `scripts/check.sh` (ruff + black + mypy + pytest
-   + поиск секретов, ~135 с). Во время работы — `scripts/check.sh --lint` (~15 с)
-   и `scripts/check.sh tests/unit/test_нужный.py`. Скрипт сам подставляет флаги,
-   без которых `mypy` падает на `PermissionError`, а `pytest` — на
-   `RecursionError` при удалении tmp; вручную эти команды перечислены в
-   `CLAUDE.md`.
+1. **В чате** — интерпретатор и инструменты лежат в самом проекте, сети не нужно.
 
-   Чтобы не открывать соседние модули целиком ради их интерфейса, есть карта
-   API: `python scripts/map.py` (индекс модулей), `scripts/map.py <подсистема>`
-   (сигнатуры), `--events` и `--errors` (шина событий и дерево исключений).
+   На Windows-машине пользователя (так идёт работа сейчас) — venv в `_tools/venv`.
+   Консоль в cp1251, поэтому префикс `PYTHONIOENCODING=utf-8` обязателен, иначе вывод с
+   кириллицей падает на `UnicodeEncodeError`:
 
-   Песочница — Linux, но `spawn` и `shared_memory` в ней работают, поэтому воркеры тестируются настоящими процессами, а не подделкой.
+   ```bash
+   PYTHONIOENCODING=utf-8 _tools/venv/Scripts/ruff.exe check src tests
+   PYTHONIOENCODING=utf-8 _tools/venv/Scripts/black.exe --check src tests
+   PYTHONIOENCODING=utf-8 _tools/venv/Scripts/python.exe -m mypy src
+   PYTHONIOENCODING=utf-8 _tools/venv/Scripts/python.exe -m pytest -q
+   ```
+
+   Пакет установлен в venv как editable, `PYTHONPATH` задавать не нужно. Полный прогон
+   тестов ~135 с, `pytest-xdist` здесь нет. `scripts/check.sh` и `_tools/python` — из
+   Linux-песочницы: это ELF-бинарники, на Windows они не запускаются.
+
+   В Linux-песочнице (если чат идёт там) всё проверяется одной командой:
+   `scripts/check.sh` (ruff + black + mypy + pytest + поиск секретов, ~135 с), во время
+   работы — `scripts/check.sh --lint` (~15 с) и `scripts/check.sh tests/unit/test_нужный.py`.
+   Скрипт сам подставляет флаги, без которых `mypy` падает на `PermissionError`, а `pytest` —
+   на `RecursionError` при удалении tmp; вручную эти команды перечислены в `CLAUDE.md`.
+
+   Чтобы не открывать соседние модули целиком ради их интерфейса, есть карта API:
+   `scripts/map.py` (индекс модулей), `scripts/map.py <подсистема>` (сигнатуры), `--events`
+   и `--errors` (шина событий и дерево исключений). Связи между модулями — граф `graphify`
+   в `_tools/graph`, команды в `CLAUDE.md`.
+
+   `spawn` и `shared_memory` работают в обеих средах, поэтому воркеры тестируются
+   настоящими процессами, а не подделкой.
 2. **CI на GitHub Actions** (`.github/workflows/ci.yml`) — источник истины. Линтеры и mypy на ubuntu, тесты на **windows-latest** для Python 3.11 и 3.12. Именно здесь проверяется WinAPI-код, который в песочнице не запустить.
 3. **Руками у пользователя** — только то, что физически требует железа: микрофон, наушники, второй монитор, реальная громкость, яркость. Таких пунктов должно быть как можно меньше.
 

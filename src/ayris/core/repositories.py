@@ -1070,15 +1070,75 @@ class ClipboardRepository(_Repository):
         return ClipboardEntry(id=entry_id, ts=now, content=content, pinned=pinned)
 
     def recent(self, limit: int = 50) -> list[ClipboardEntry]:
-        """Pinned entries first, then newest — the order the picker shows."""
+        """Pinned entries first, then newest — the order the picker shows.
+
+        ``id`` breaks ties because ``ts`` is stored to the second and two copies
+        inside one second are ordinary: without it the picker would shuffle the
+        entries a person just made.
+        """
         rows = self._db.query_all(
             f"""
             SELECT {self._COLUMNS} FROM clipboard_history
-             ORDER BY pinned DESC, ts DESC LIMIT ?
+             ORDER BY pinned DESC, ts DESC, id DESC LIMIT ?
             """,
             (limit,),
         )
         return [ClipboardEntry.from_row(row) for row in rows]
+
+    def history(
+        self,
+        *,
+        limit: int = 50,
+        query: str = "",
+        pinned_only: bool = False,
+    ) -> list[ClipboardEntry]:
+        """Newest first, no exceptions — the order spoken numbering counts in.
+
+        Unlike :meth:`recent` this ignores ``pinned`` when sorting. «Вставь
+        третий» has to mean the third thing copied, and if pinning moved entries
+        to the top of the list then pinning an address would silently renumber
+        everything a person had just copied.
+        """
+        sql = f"SELECT {self._COLUMNS} FROM clipboard_history"
+        conditions: list[str] = []
+        params: list[str | int] = []
+        if pinned_only:
+            conditions.append("pinned = 1")
+        if query:
+            # ulower, like CommandRepository.search: SQLite folds ASCII only, so a
+            # plain LIKE would not match «пароль» against «Пароль».
+            conditions.append("ulower(content) LIKE ?")
+            params.append(f"%{query.lower()}%")
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
+        sql += " ORDER BY ts DESC, id DESC LIMIT ?"
+        params.append(limit)
+        rows = self._db.query_all(sql, tuple(params))
+        return [ClipboardEntry.from_row(row) for row in rows]
+
+    def newest(self) -> ClipboardEntry | None:
+        """The last entry written, whatever its pinned state. Used to deduplicate."""
+        row = self._db.query_one(
+            f"SELECT {self._COLUMNS} FROM clipboard_history ORDER BY ts DESC, id DESC LIMIT 1"
+        )
+        return None if row is None else ClipboardEntry.from_row(row)
+
+    def get(self, entry_id: int) -> ClipboardEntry | None:
+        """One entry by id, or ``None`` when it has already been evicted."""
+        row = self._db.query_one(
+            f"SELECT {self._COLUMNS} FROM clipboard_history WHERE id = ?", (entry_id,)
+        )
+        return None if row is None else ClipboardEntry.from_row(row)
+
+    def count(self, *, pinned: bool | None = None) -> int:
+        """How many entries there are, optionally only the pinned or unpinned ones."""
+        if pinned is None:
+            return int(self._db.query_value("SELECT COUNT(*) FROM clipboard_history", (), 0))
+        return int(
+            self._db.query_value(
+                "SELECT COUNT(*) FROM clipboard_history WHERE pinned = ?", (int(pinned),), 0
+            )
+        )
 
     def set_pinned(self, entry_id: int, *, pinned: bool) -> None:
         self._db.execute(
@@ -1090,7 +1150,14 @@ class ClipboardRepository(_Repository):
         return cursor.rowcount > 0
 
     def trim_to_limit(self, limit: int) -> int:
-        """Keep the newest ``limit`` unpinned entries; pinned ones always stay."""
+        """Keep the newest ``limit`` unpinned entries; pinned ones always stay.
+
+        ``id`` breaks the ``ts`` tie, and here it decides correctness rather than
+        neatness: timestamps are stored to the second, so a handful of quick
+        copies share one, and without a tiebreak SQLite is free to keep any three
+        of them — evicting entries from the middle of the history instead of its
+        end.
+        """
         if limit <= 0:
             return 0
         cursor = self._db.execute(
@@ -1098,7 +1165,7 @@ class ClipboardRepository(_Repository):
             DELETE FROM clipboard_history
              WHERE pinned = 0 AND id NOT IN (
                    SELECT id FROM clipboard_history WHERE pinned = 0
-                    ORDER BY ts DESC LIMIT ?
+                    ORDER BY ts DESC, id DESC LIMIT ?
              )
             """,
             (limit,),

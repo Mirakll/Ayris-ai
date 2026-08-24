@@ -72,7 +72,9 @@ __all__ = [
     "AiConfig",
     "AudioActionsConfig",
     "AudioInputConfig",
+    "AutofillActionsConfig",
     "BrowserActionsConfig",
+    "ClipboardActionsConfig",
     "CommandsConfig",
     "ConfigChange",
     "ConfigChanged",
@@ -1126,6 +1128,140 @@ class OcrActionsConfig(ConfigSection):
     )
 
 
+class ClipboardActionsConfig(ConfigSection):
+    """Sub-section ``[actions.clipboard]`` — the clipboard history.
+
+    ``monitor`` is the master switch. It is on by default because a history
+    nobody enabled is a history nobody has, and the whole point is that «вставь
+    третий» works for something copied ten minutes ago. Turning it off stops the
+    listener and leaves the recorded entries alone: the setting governs what gets
+    written from now on, not what is already there.
+
+    ``limit`` is the number of *unpinned* entries kept. Pinned ones are outside
+    the count entirely — a person who pinned an address did so precisely so that a
+    day of copying would not push it out.
+
+    ``max_length`` skips over-long entries instead of truncating them. A truncated
+    entry looks fine in the list and pastes half a document, which is worse than
+    not offering it: a copied file, a base64 blob or a whole page has no place in
+    a spoken «вставь второй» anyway.
+
+    ``preview_length`` is only about the list the user hears or sees; the stored
+    text is never shortened.
+
+    ``skip_password_managers`` honours the two clipboard formats managers set to
+    ask monitors to look away — ``Clipboard Viewer Ignore`` and
+    ``ExcludeClipboardContentFromMonitorProcessing``. It is the difference between
+    a history and a plaintext password file, so turning it off is a deliberate act
+    and is left possible only because a manager can set the marker on something
+    harmless.
+    """
+
+    monitor: bool = Field(
+        default=True,
+        description="Записывать копирования в историю буфера",
+    )
+    limit: int = Field(
+        default=50,
+        ge=1,
+        le=1000,
+        description="Сколько незакреплённых записей хранить",
+    )
+    max_length: int = Field(
+        default=20_000,
+        ge=16,
+        le=1_000_000,
+        description="Длиннее этого — в историю не пишется",
+    )
+    preview_length: int = Field(
+        default=80,
+        ge=8,
+        le=400,
+        description="Длина превью записи в списке",
+    )
+    skip_password_managers: bool = Field(
+        default=True,
+        description="Не сохранять то, что менеджер паролей просил не сохранять",
+    )
+    clear_after_secret: bool = Field(
+        default=True,
+        description="Очищать буфер сразу после вставки пароля или карты",
+    )
+    warn_windows_history: bool = Field(
+        default=True,
+        description="Предупреждать, если включена история буфера Windows (Win+V)",
+    )
+
+
+class AutofillActionsConfig(ConfigSection):
+    """Sub-section ``[actions.autofill]`` — templates and password managers.
+
+    Only the non-secret half of a template lives here. A value is either written
+    down in ``config.toml`` — a city, a street, an email — or it is a reference to
+    the Credential Manager or to a password manager, and then the settings file
+    holds the reference and never the value. That split is what makes it safe to
+    put ``config.toml`` in a backup.
+
+    ``provider`` picks where a reference with no explicit source is looked up.
+    ``keyring`` is the Windows Credential Manager and needs nothing installed;
+    the other two shell out to ``keepassxc-cli`` and ``bw``, which is why they are
+    opt-in and why the paths below exist for a CLI that is not in ``PATH``.
+
+    ``session_ttl_s`` is how long an unlocked vault stays usable. The session
+    token lives in memory only — never on disk, never in the log — so quitting
+    Ayris always relocks. Ten minutes is long enough to fill a form and short
+    enough that a walk away from an unlocked machine is not a whole afternoon.
+
+    ``clear_clipboard`` and ``paste_mode`` decide how a value reaches the field.
+    Typing it avoids the clipboard entirely and is the default for that reason;
+    the clipboard route exists for the fields that refuse synthesised keystrokes,
+    and there the clipboard is wiped the moment the paste is done.
+    """
+
+    provider: Literal["keyring", "keepass", "bitwarden"] = Field(
+        default="keyring",
+        description="Откуда брать секретные значения по умолчанию",
+    )
+    paste_mode: Literal["type", "clipboard"] = Field(
+        default="type",
+        description="Как подставлять значение: печатать или через буфер",
+    )
+    clear_clipboard: bool = Field(
+        default=True,
+        description="Очищать буфер после подстановки через буфер",
+    )
+    session_ttl_s: int = Field(
+        default=600,
+        ge=30,
+        le=7200,
+        description="Сколько секунд держать хранилище разблокированным",
+    )
+    keepass_cli: str = Field(
+        default="",
+        max_length=400,
+        description="Путь к keepassxc-cli.exe, если он не в PATH",
+    )
+    keepass_database: str = Field(
+        default="",
+        max_length=400,
+        description="Путь к базе KeePass (.kdbx)",
+    )
+    keepass_key_file: str = Field(
+        default="",
+        max_length=400,
+        description="Файл-ключ к базе KeePass, если он используется",
+    )
+    bitwarden_cli: str = Field(
+        default="",
+        max_length=400,
+        description="Путь к bw.exe, если он не в PATH",
+    )
+    templates: dict[str, dict[str, str]] = Field(
+        default_factory=dict,
+        description="Шаблоны: имя → поле → значение или ссылка secret:имя",
+    )
+
+
 class ActionsConfig(ConfigSection):
     """Tab «Действия» — what the action library reads out of the settings."""
 
@@ -1152,6 +1288,14 @@ class ActionsConfig(ConfigSection):
     ocr: OcrActionsConfig = Field(
         default_factory=OcrActionsConfig,
         description="Распознавание текста с экрана",
+    )
+    clipboard: ClipboardActionsConfig = Field(
+        default_factory=ClipboardActionsConfig,
+        description="История буфера обмена: монитор, лимиты, закрепление",
+    )
+    autofill: AutofillActionsConfig = Field(
+        default_factory=AutofillActionsConfig,
+        description="Шаблоны автозаполнения и менеджеры паролей",
     )
 
 

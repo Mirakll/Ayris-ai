@@ -25,6 +25,7 @@ import logging
 import logging.handlers
 import re
 import sys
+import threading
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -38,10 +39,16 @@ __all__ = [
     "MAX_BYTES",
     "PIPELINE_LOGGER_NAME",
     "ROOT_LOGGER_NAME",
+    "SECRET_PLACEHOLDER",
     "DailySizedRotatingFileHandler",
     "LogLevel",
+    "SecretFilter",
+    "forget_secret",
     "get_logger",
     "get_pipeline_logger",
+    "guard_secret",
+    "guarded_secret_count",
+    "redact",
     "setup_logging",
     "shutdown_logging",
 ]
@@ -191,18 +198,140 @@ class _PipelineFilter(logging.Filter):
         return True
 
 
+# --------------------------------------------------------------------------- #
+# Secret redaction
+# --------------------------------------------------------------------------- #
+
+#: What a redacted value looks like in the log. Deliberately not the same string
+#: as :data:`ayris.actions.base.SECRET_MASK`: seeing this one in a log file means
+#: a value leaked into a message that was never meant to carry it, and the two
+#: are worth telling apart when that happens.
+SECRET_PLACEHOLDER: Final = "[скрыто]"
+
+#: Shorter than this and a secret is not worth guarding: redacting every «abc»
+#: would mangle unrelated messages, and nothing that short is worth protecting.
+_MIN_SECRET_LEN: Final = 4
+#: A bound on the registry, because forgetting is best-effort — a provider that
+#: reads a hundred passwords must not grow this list forever. The oldest value
+#: falls out first; it is also the least likely to still be on its way to a log.
+_MAX_SECRETS: Final = 64
+
+_secrets_lock = threading.Lock()
+#: Insertion-ordered set of the values currently worth hiding.
+_secrets: dict[str, None] = {}
+
+
+def guard_secret(value: str) -> None:
+    """Redact ``value`` from every log record from now on.
+
+    Called the moment a password or a card number enters the process — by the
+    autofill action and by the password-manager providers — and undone with
+    :func:`forget_secret` once the value has been used. Sequence matters: guard
+    before the value can reach any code that logs, not after.
+
+    Ayris does not log secrets on purpose anywhere, so in normal operation this
+    filter never fires. It exists for the paths nobody audited: an exception
+    whose message quotes the argument that failed, a DEBUG dump of a whole
+    parameter dict, a third-party library being helpful. One rule catching all of
+    them beats trusting that every future call site remembers.
+    """
+    text = value.strip()
+    if len(text) < _MIN_SECRET_LEN:
+        return
+    with _secrets_lock:
+        _secrets.pop(text, None)
+        _secrets[text] = None
+        while len(_secrets) > _MAX_SECRETS:
+            del _secrets[next(iter(_secrets))]
+
+
+def forget_secret(value: str) -> None:
+    """Stop redacting ``value``. Safe to call for something never guarded."""
+    text = value.strip()
+    if not text:
+        return
+    with _secrets_lock:
+        _secrets.pop(text, None)
+
+
+def guarded_secret_count() -> int:
+    """How many values are currently being redacted. For tests and DevTools."""
+    with _secrets_lock:
+        return len(_secrets)
+
+
+def redact(text: str) -> str:
+    """Replace every guarded secret in ``text`` with :data:`SECRET_PLACEHOLDER`.
+
+    Longest values first, so a password that happens to contain a shorter one
+    does not leave the tail of itself behind.
+    """
+    if not _secrets or not text:
+        return text
+    with _secrets_lock:
+        values = sorted(_secrets, key=len, reverse=True)
+    for value in values:
+        if value in text:
+            text = text.replace(value, SECRET_PLACEHOLDER)
+    return text
+
+
+class SecretFilter(logging.Filter):
+    """Strip known secret values out of records on their way to a handler.
+
+    Installed on handlers rather than on loggers: a filter on the ``ayris`` logger
+    would only see records logged through that logger itself, while every record
+    a child logger emits passes the *handlers* of its ancestors. Sitting there
+    also covers records made by code outside Ayris that :func:`logging.captureWarnings`
+    routes our way.
+
+    The record is rewritten rather than dropped — the line is still useful, only
+    without the value. When nothing is guarded the filter returns immediately, so
+    the ordinary case costs one dictionary emptiness check.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not _secrets:
+            return True
+        message = str(record.msg)
+        if record.args:
+            try:
+                formatted = record.getMessage()
+            except (TypeError, ValueError):
+                formatted = message + " " + repr(record.args)
+            cleaned = redact(formatted)
+            if cleaned != formatted:
+                record.msg = cleaned
+                record.args = None
+            return True
+        cleaned = redact(message)
+        if cleaned != message:
+            record.msg = cleaned
+        if record.exc_text:
+            record.exc_text = redact(record.exc_text)
+        return True
+
+
+def _install_filters(handler: logging.Handler, *extra: logging.Filter) -> logging.Handler:
+    """Add the secret filter, and whatever else this handler needs, to it."""
+    handler.addFilter(SecretFilter())
+    for one in extra:
+        handler.addFilter(one)
+    return handler
+
+
 def _build_file_handler(directory: Path, prefix: str, level: int) -> logging.Handler:
     handler = DailySizedRotatingFileHandler(directory, prefix)
     handler.setLevel(level)
     handler.setFormatter(logging.Formatter(_FILE_FORMAT, datefmt=_DATE_FORMAT))
-    return handler
+    return _install_filters(handler)
 
 
 def _build_console_handler(level: int) -> logging.Handler:
     handler = logging.StreamHandler(sys.stderr)
     handler.setLevel(level)
     handler.setFormatter(logging.Formatter(_CONSOLE_FORMAT, datefmt=_DATE_FORMAT))
-    return handler
+    return _install_filters(handler)
 
 
 def _configure_pipeline_logger(directory: Path, level: int) -> None:
@@ -221,7 +350,7 @@ def _configure_pipeline_logger(directory: Path, level: int) -> None:
     handler = DailySizedRotatingFileHandler(directory, PIPELINE_LOG_PREFIX)
     handler.setLevel(level)
     handler.setFormatter(logging.Formatter(_PIPELINE_FORMAT, datefmt=_DATE_FORMAT))
-    handler.addFilter(_PipelineFilter())
+    _install_filters(handler, _PipelineFilter())
     pipeline.addHandler(handler)
 
 
@@ -323,12 +452,19 @@ def get_pipeline_logger() -> logging.Logger:
 
 
 def shutdown_logging() -> None:
-    """Flush and detach handlers. Called on exit and between tests."""
+    """Flush and detach handlers. Called on exit and between tests.
+
+    Propagation goes back on as well. :func:`setup_logging` turns it off because
+    Ayris owns its subtree while it has handlers of its own; once they are gone,
+    leaving it off would silently drop every later record instead of letting it
+    reach whoever is listening — which between tests is ``caplog``.
+    """
     global _configured
     for name in (PIPELINE_LOGGER_NAME, ROOT_LOGGER_NAME):
         logger = logging.getLogger(name)
         for handler in logger.handlers:
             handler.flush()
         _clear_handlers(logger)
+        logger.propagate = True
     logging.captureWarnings(False)
     _configured = False
