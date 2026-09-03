@@ -86,6 +86,7 @@ __all__ = [
     "HotkeysConfig",
     "InputActionsConfig",
     "InstantActionsConfig",
+    "MediaActionsConfig",
     "OcrActionsConfig",
     "OverlayConfig",
     "PerformanceConfig",
@@ -1262,6 +1263,91 @@ class AutofillActionsConfig(ConfigSection):
     )
 
 
+class MediaActionsConfig(ConfigSection):
+    """Sub-section ``[actions.media]`` — the player Ayris controls.
+
+    Two levels of control, and most of these settings are about the second one.
+    Pause, play, next, previous and «что играет» go through Windows' own media
+    transport and need nothing configured; starting a named artist, a playlist or
+    Моя волна means driving Яндекс Музыка's own interface, and that needs the app
+    to be running with a DevTools port open.
+
+    ``player_app_id`` is how the app is recognised in Windows' list of players —
+    ``SourceAppUserModelId``, not a process name. Clearing it makes the transport
+    actions address whichever player is currently playing, which is what somebody
+    who does not use Яндекс Музыка wants.
+
+    ``launch_app`` lets Ayris start the app itself, with the debug flags, when it
+    is not running. It has to: Яндекс Музыка has no autostart entry to add a flag
+    to, so an app started by hand never has the port. An app already running
+    *without* the port is never restarted — that would cut the music off — and the
+    advanced actions say so instead.
+
+    ``media_keys_fallback`` is off, and that is deliberate rather than cautious.
+    A synthesised key press goes to whatever has focus, and the person using this
+    plays games where keys are binds; the transport above sends the order straight
+    to the player's session object instead, so nothing is broadcast. The fallback
+    exists only for a player that publishes no session at all.
+
+    ``selectors`` overrides individual entries of
+    :data:`ayris.actions.media.yandex_music.SELECTORS`. The app's ``data-test-id``
+    names are its internal business and an update can rename one; the override
+    makes that a line in ``config.toml`` instead of a wait for a new Ayris.
+    """
+
+    player_app_id: str = Field(
+        default="ru.yandex.desktop.music",
+        max_length=200,
+        description="Идентификатор плеера в Windows; пусто — любой играющий",
+    )
+    player_name: str = Field(
+        default="Яндекс Музыка",
+        max_length=120,
+        description="Под каким названием искать программу, чтобы запустить",
+    )
+    player_path: str = Field(
+        default="",
+        max_length=400,
+        description="Путь к exe плеера, если его не находит поиск программ",
+    )
+    debug_port: int = Field(
+        default=9222,
+        ge=1024,
+        le=65535,
+        description="Порт отладки, через который Ayris управляет приложением",
+    )
+    launch_app: bool = Field(
+        default=True,
+        description="Запускать Яндекс Музыку самой, если она закрыта",
+    )
+    launch_timeout_s: float = Field(
+        default=20.0,
+        ge=1.0,
+        le=120.0,
+        description="Сколько секунд ждать, пока приложение откроет порт",
+    )
+    command_timeout_s: float = Field(
+        default=15.0,
+        ge=1.0,
+        le=120.0,
+        description="Сколько секунд ждать ответа от приложения на команду",
+    )
+    render_timeout_ms: int = Field(
+        default=8000,
+        ge=500,
+        le=60_000,
+        description="Сколько миллисекунд ждать, пока страница нарисует нужное",
+    )
+    media_keys_fallback: bool = Field(
+        default=False,
+        description="Если плеер не виден Windows — жать медиа-клавиши (в играх нежелательно)",
+    )
+    selectors: dict[str, str] = Field(
+        default_factory=dict,
+        description="Переопределения селекторов интерфейса: имя → CSS-селектор",
+    )
+
+
 class ActionsConfig(ConfigSection):
     """Tab «Действия» — what the action library reads out of the settings."""
 
@@ -1296,6 +1382,10 @@ class ActionsConfig(ConfigSection):
     autofill: AutofillActionsConfig = Field(
         default_factory=AutofillActionsConfig,
         description="Шаблоны автозаполнения и менеджеры паролей",
+    )
+    media: MediaActionsConfig = Field(
+        default_factory=MediaActionsConfig,
+        description="Плеер: Яндекс Музыка и управление воспроизведением",
     )
 
 

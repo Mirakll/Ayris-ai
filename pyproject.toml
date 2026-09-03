@@ -95,6 +95,11 @@ dependencies = [
     "winrt-Windows.Globalization==3.2.1; sys_platform == 'win32'",
     "winrt-Windows.Graphics.Imaging==3.2.1; sys_platform == 'win32'",
     "winrt-Windows.Media.Ocr==3.2.1; sys_platform == 'win32'",
+    # --- Windows.Media.Control (задача 29) ---
+    # Список плееров, который Windows и так ведёт: «что играет», пауза, плей,
+    # следующий, предыдущий — без единой синтезированной клавиши. Базовый уровень
+    # управления музыкой, поэтому зависимость, а не extra.
+    "winrt-Windows.Media.Control==3.2.1; sys_platform == 'win32'",
     "winrt-Windows.Storage.Streams==3.2.1; sys_platform == 'win32'",
     # --- Web ---
     "requests==2.32.3",
@@ -144,7 +149,9 @@ ocr = [
 games = [
     "interception-python==1.13.6",
 ]
-# Браузерная автоматизация для Яндекс Музыки (задача 29).
+# Браузерная автоматизация. Задача 29 её не использует: Яндекс Музыка управляется
+# по CDP прямо в своём приложении (`actions/media/`), второй браузер и отдельная
+# авторизация не нужны. Extra оставлен для веб-задач, которым понадобится браузер.
 web = [
     "playwright==1.50.0",
 ]

@@ -66,6 +66,10 @@ winrt-Windows.Foundation.Collections==3.2.1; sys_platform == 'win32'
 winrt-Windows.Globalization==3.2.1; sys_platform == 'win32'
 winrt-Windows.Graphics.Imaging==3.2.1; sys_platform == 'win32'
 winrt-Windows.Media.Ocr==3.2.1; sys_platform == 'win32'
+# Windows.Media.Control — список плееров Windows (задача 29). На раннере ни один
+# плеер не запущен, поэтому проверяется не музыка, а то, что список пустой и
+# действия отвечают понятным отказом, а не трейсбеком.
+winrt-Windows.Media.Control==3.2.1; sys_platform == 'win32'
 winrt-Windows.Storage.Streams==3.2.1; sys_platform == 'win32'
 
 # --- Инструменты проверок ---

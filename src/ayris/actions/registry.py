@@ -91,6 +91,7 @@ if TYPE_CHECKING:
 __all__ = [
     "ACTION_PACKAGES",
     "INPUT_PACKAGE",
+    "MEDIA_PACKAGE",
     "SYSTEM_PACKAGE",
     "ActionRegistry",
     "AuditSink",
@@ -111,9 +112,14 @@ SYSTEM_PACKAGE: Final = "ayris.actions.system"
 #: pile of coordinate arithmetic that nothing in ``system`` needs.
 INPUT_PACKAGE: Final = "ayris.actions.input"
 
+#: The player: Windows' media transport, and Яндекс Музыка over its debug port. Kept
+#: apart from ``system`` because half of it talks WinRT and the other half speaks a
+#: web protocol, and neither belongs next to window management.
+MEDIA_PACKAGE: Final = "ayris.actions.media"
+
 #: Everything :meth:`ActionRegistry.discover` walks when asked for no package in
 #: particular. Order is the order actions appear in a fresh registry.
-ACTION_PACKAGES: Final = (SYSTEM_PACKAGE, INPUT_PACKAGE)
+ACTION_PACKAGES: Final = (SYSTEM_PACKAGE, INPUT_PACKAGE, MEDIA_PACKAGE)
 
 #: How many synchronous actions may run at once. Section 12 lets the user size the
 #: macro thread pool; this is the floor the registry keeps for itself.
