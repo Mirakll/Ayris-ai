@@ -117,6 +117,15 @@ dev = [
     "pytest-asyncio==0.25.3",
     "pytest-cov==6.0.0",
     "pytest-qt==4.4.0",
+    # Прогон в несколько процессов. Тесты ждут не процессор, а порождённые
+    # процессы и таймеры, поэтому 4900 тестов идут 182 с последовательно и 41 с
+    # на пяти воркерах. Не «ускорение ради ускорения»: полный прогон стал
+    # дешевле, чем частичный, и его перестали пропускать.
+    "pytest-xdist==3.8.0",
+    # Зависший тест без этого — джоб до лимита GitHub (шесть часов) и обрыв
+    # вызова без диагноза локально. Потолок в ini, метод thread: у SIGALRM,
+    # который использует метод signal, на Windows нет аналога.
+    "pytest-timeout==2.3.1",
     "pre-commit==4.1.0",
 ]
 # GPU-ускорение faster-whisper / llama.cpp. Ставится отдельно, ~1 ГБ.
@@ -193,6 +202,7 @@ select = [
     "A",   # flake8-builtins
     "C4",  # flake8-comprehensions
     "T20", # flake8-print - print() в проекте запрещён
+    "T10", # flake8-debugger - забытый breakpoint() или import pdb
     "SIM", # flake8-simplify
     "PTH", # flake8-use-pathlib
     "RUF", # ruff-specific
@@ -331,16 +341,28 @@ markers = [
 filterwarnings = ["error", "ignore::DeprecationWarning:pkg_resources.*"]
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
+# Потолок на один тест. Самый долгий обычный тест — 15 с (настоящий
+# ShellExecuteW в test_browser), так что 120 с ловят только настоящий висяк, а
+# не медленную машину. Метод thread — единственный работающий на Windows:
+# signal опирается на SIGALRM, которого там нет. Тестам с железом (микрофон,
+# колонки) потолок может быть тесен — они запускаются руками, и там
+# `--timeout=0`.
+timeout = 120
+timeout_method = "thread"
 
 [tool.coverage.run]
 source = ["src/ayris"]
 branch = true
 
 [tool.coverage.report]
+# Порог, а не просто отчёт. Без него покрытие — картинка в артефакте, на которую
+# никто не смотрит: за прошлый месяц оно могло уехать вниз на десять пунктов, и
+# ни один джоб не покраснел бы. 84 при фактических 85 % — запас на один
+# рефакторинг, а не на медленную эрозию.
+fail_under = 84
 exclude_lines = [
     "pragma: no cover",
     "if TYPE_CHECKING:",
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
-

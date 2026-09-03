@@ -710,17 +710,25 @@ class TestNetworkAwareness:
         pair = EnginePair()
         pair.handler.failures = [(401, b"bad key")]
         bus = make_bus()
+        # Мост обязателен именно здесь. С шиной роутер узнаёт о конце фразы
+        # только из `TtsFinished`, которую публикует мост, а не из коллбэка
+        # плеера — и без него `wait` честно отсчитывал таймаут до конца, оба
+        # раза по пять секунд, а тест зеленел на проверках, которым конец
+        # воспроизведения не нужен. Десять секунд из прогона на пустом месте.
+        bridge = connect_player(bus, pair.player)
         router = pair.make_router(bus=bus, monitor=FakeMonitor())
         first = router.say("Привет!")
-        first.wait(TIMEOUT_S)
+        assert first.wait(TIMEOUT_S), "фраза не доиграла"
+        assert first.reason == PlaybackReason.COMPLETED
         assert router.using_local
 
         bus.publish(OnlineStatusChanged(online=True, detail="связь вернулась"))
         wait_until(lambda: not router.using_local)
         second = router.say("Пока!")
-        second.wait(TIMEOUT_S)
+        assert second.wait(TIMEOUT_S), "фраза не доиграла"
         assert second.engine == "elevenlabs"
         router.close()
+        del bridge
 
     def test_cloud_success_reports_to_the_monitor(self, keyring_store: SecretsStore) -> None:
         """A phrase that came back is evidence the network is up.

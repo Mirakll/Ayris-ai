@@ -194,6 +194,31 @@ def test_the_special_markers_are_excluded_everywhere_and_run_somewhere() -> None
 
 
 @pytest.mark.unit
+def test_the_slow_marker_still_runs_somewhere() -> None:
+    """``slow`` is excluded from the parallel passes, so some pass must keep it.
+
+    The thirteen ``slow`` tests are the only ones that assert anything about
+    time. Under ``-n`` they share a core with seven other processes, so "fits in
+    N ms" becomes a coin toss and a red job stops meaning anything — hence the
+    exclusion. But an excluded marker is one edit away from being an unrun one:
+    drop the separate serial invocation, or add ``not slow`` to the linux job,
+    and thirteen tests quietly stop running while every job stays green. That is
+    exactly how the tests on real weights sat unrun for months.
+    """
+    expressions = [
+        line.split('"')[1]
+        for line in WORKFLOW.read_text(encoding="utf-8").splitlines()
+        if "pytest -m " in line and '"' in line
+    ]
+    running = [text for text in expressions if "not slow" not in text]
+    assert running, (
+        "маркер slow исключён во всех прогонах: тесты про время не идут нигде. "
+        f'Нужен либо отдельный вызов `pytest -m "slow"`, либо прогон без '
+        f"`not slow`. Сейчас: {expressions}"
+    )
+
+
+@pytest.mark.unit
 def test_every_dependency_is_pinned() -> None:
     """Loose bounds make a build non-reproducible; the project pins exactly."""
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))

@@ -54,6 +54,22 @@ jobs:
       - name: mypy
         run: mypy src
 
+      - name: Секретов в коде нет
+        # Единственное место, где это проверяется автоматически. Шаблон
+        # намеренно разорван конкатенацией: без разрыва `git grep` находит сам
+        # этот файл и джоб краснеет на собственном тексте. Проверка стоит в
+        # линтерах, а не в тестах: она нужна один раз на прогон и требует git,
+        # которого у песочницы с распакованным архивом может не быть.
+        run: |
+          PAT='githu''b_pat_|gh''p_|sk-[A-Za-z0-9]{20}|BEGIN (RSA|OPENSSH|PRIVATE)'
+          FOUND=$(git grep -nIE "$PAT" || true)
+          if [ -n "$FOUND" ]; then
+            echo "::error::похоже на секрет в коде"
+            echo "$FOUND"
+            exit 1
+          fi
+          echo "секретов не найдено"
+
   test-windows:
     name: Тесты Windows / py${{ matrix.python }}
     runs-on: windows-latest
@@ -86,10 +102,29 @@ jobs:
         # models — тесты на скачанных весах; для них есть джоб test-models.
         # network — ходят к чужим серверам; там же, где веса, чтобы падение
         # чужого сайта не красило четыре джоба сразу.
+        # slow — единственные тесты, которые утверждают что-то про время. Они
+        # идут отдельным последовательным вызовом ниже: под -n они делят ядро с
+        # семью другими процессами, и «уложился в N мс» становится броском
+        # монеты. Шесть секунд за то, чтобы красный цвет всегда что-то значил.
+        #
+        # -n auto: тесты ждут не процессор, а порождённые процессы и таймеры,
+        # поэтому четыре воркера дают не 4x, а больше — 293 с превращаются в
+        # ~90. --dist=load быстрее loadfile и на этой сюите одинаково зелен;
+        # если падение похоже на гонку, источник истины — джоб «Тесты Linux»,
+        # он намеренно последовательный.
+        #
+        # --cov только на py3.12: покрытие удваивает прогон, а отчёт с двух
+        # версий питона один и тот же. Порог (fail_under) — в pyproject.toml.
         run: >
-          pytest -m "not hardware and not models and not network"
-          --cov --cov-report=xml --cov-report=term-missing
+          pytest -m "not hardware and not models and not network and not slow"
+          -n auto --dist=load
+          ${{ matrix.python == '3.12' && '--cov --cov-report=xml --cov-report=term-missing' || '' }}
           --junitxml=junit/pytest-${{ matrix.python }}.xml
+
+      - name: pytest про время, последовательно
+        run: >
+          pytest -m "slow"
+          --junitxml=junit/pytest-slow-${{ matrix.python }}.xml
 
       - name: Приложение отвечает на --version
         run: python -m ayris --version
@@ -137,6 +172,11 @@ jobs:
         # На Linux часть подсистем недоступна принципиально (WinAPI, реестр,
         # Credential Manager). Такие тесты сами скипаются по sys.platform.
         # Прогон здесь нужен, чтобы совпадать с тем, что проверяется в песочнице.
+        #
+        # Намеренно без -n: если падение похоже на гонку, а не на баг, источник
+        # истины — этот джоб. И намеренно без `not slow`: маркер исключён на
+        # обоих windows-джобах, и если убрать его отсюда, тесты про время не
+        # будут идти в одном прогоне ни у кого.
         run: pytest -m "not hardware and not models and not network"
 
   test-models:
