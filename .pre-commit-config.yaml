@@ -1,51 +1,34 @@
-# Локальные хуки. Ставятся так:
+# Хук перед коммитом — один, и он зовёт те же проверки, что CI.
+#
+# Ставится так:
 #   pip install pre-commit
 #   pre-commit install
-# Прогнать по всему проекту разом: pre-commit run --all-files
+# Прогнать руками: pre-commit run --all-files
 #
-# Версия Python намеренно не закреплена: pre-commit возьмёт тот интерпретатор,
-# который есть в системе. Проект поддерживает 3.11 и 3.12, жёсткая привязка
-# ломала бы setup на машине с другой версией.
+# Раньше здесь было четыре чужих репозитория с закреплёнными версиями ruff,
+# black и mypy плюс пять питоньих пинов в `additional_dependencies`. То есть
+# второй список версий рядом с pyproject.toml — и ничем не проверяемый: подняв
+# ruff в проекте, легко забыть про эту копию, и тогда хук и CI начинают судить
+# по разным правилам. Хуже того, `mixed-line-ending --fix=lf` переписывал
+# `*.ps1`, `*.bat`, `*.cmd`, `*.iss` и `*.reg`, которым `.gitattributes`
+# намеренно велит лежать в рабочей копии с CRLF.
+#
+# Теперь хук вызывает `scripts/check.sh --lint`: ruff, black, mypy, сверку
+# установленных версий с пинами и запуск `python -m ayris --version` — тем же
+# скриптом и тем же питоном проекта, каким это делается вручную. ~6 с.
+#
+# Гигиена (UTF-8, маркеры конфликта, размер файлов, перевод строки в конце,
+# LF в индексе, разбор toml и json) в хук не входит: она переехала в
+# tests/unit/test_hygiene.py, идёт в каждом джобе и в каждом прогоне тестов и
+# падает с объяснением, а не с молчаливой правкой файла под руками.
 
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+  - repo: local
     hooks:
-      - id: trailing-whitespace
-        exclude: \.md$
-      - id: end-of-file-fixer
-      - id: check-yaml
-      - id: check-toml
-      - id: check-json
-      - id: check-merge-conflict
-      - id: check-added-large-files
-        args: ["--maxkb=1024"]
-      - id: mixed-line-ending
-        args: ["--fix=lf"]
-      - id: debug-statements
-
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.9.6
-    hooks:
-      - id: ruff
-        args: ["--fix", "--exit-non-zero-on-fix"]
-
-  - repo: https://github.com/psf/black
-    rev: 25.1.0
-    hooks:
-      - id: black
-
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.15.0
-    hooks:
-      - id: mypy
-        args: ["--config-file=pyproject.toml"]
-        files: ^src/ayris/
-        # Версии совпадают с pyproject.toml. Если поднимаешь их там — подними и здесь,
-        # иначе mypy в хуке и mypy в CI начнут расходиться в выводах.
-        additional_dependencies:
-          - pydantic==2.10.6
-          - pydantic-settings==2.8.1
-          - PySide6==6.8.1
-          - tomlkit==0.13.2
-          - types-requests==2.32.0.20250306
+      - id: ayris-lint
+        name: ruff + black + mypy + пины + запуск
+        entry: bash scripts/check.sh --lint
+        language: system
+        pass_filenames: false
+        # Тексты и картинки эти проверки не трогают, а шесть секунд стоят.
+        files: \.(py|pyi|toml|cfg|txt)$
