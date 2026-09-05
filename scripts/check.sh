@@ -15,6 +15,11 @@
 #   в коде нет секретов. Первые два ловят ровно те поломки, которые тесты
 #   проходят молча: подмену версии библиотеки и упавший импорт в `__main__`.
 # * Вывод сжат до строки на проверку; разворачивается только упавшая.
+# * Судится то, что уйдёт в коммит: индекс и трекаемые файлы. Питоний файл,
+#   которого в индексе нет, скрипт называет отдельной строкой и исключает из
+#   ruff, black, mypy и сбора тестов — иначе недописанный модуль соседнего чата
+#   не даёт запушить чужую готовую работу. Свой новый файл проверяется с момента
+#   `git add`, то есть раньше, чем из него получится коммит.
 #
 # Использование:
 #   scripts/check.sh                        всё: линтеры + тесты + окружение
@@ -123,6 +128,35 @@ done
 FULL=$((${#PYTEST_ARGS[@]} == 0 ? 1 : 0))
 ((FULL)) || JOBS=1
 
+# Чужая незакрытая работа прогон не красит. Над проектом работает несколько
+# чатов в одной рабочей копии, и питоний файл, который соседний чат пишет прямо
+# сейчас, в индексе ещё не лежит: в коммит и в пуш он не уйдёт, а ruff, mypy и
+# pytest его уже видят. Проверено 05.09.2026 на первом же пуше — три F822 в
+# чужом недописанном модуле не пустили коммит, к которому не имели отношения.
+# Поэтому судится то, что уходит: индекс и трекаемые файлы, как и git grep по
+# секретам ниже. Свой новый файл попадает под проверку ровно на `git add` —
+# то есть раньше, чем появится коммит, и хук перед коммитом его уже увидит.
+mapfile -t OUTSIDE < <(git ls-files --others --exclude-standard -- src tests 2>/dev/null | grep -E '\.py$')
+RUFF_X=()
+BLACK_X=()
+MYPY_X=()
+PT_X=()
+if ((${#OUTSIDE[@]})); then
+    RUFF_X=(--extend-exclude "$(
+        IFS=,
+        echo "${OUTSIDE[*]}"
+    )")
+    # black и mypy принимают не список путей, а регулярное выражение поверх
+    # пути. Разделитель делаем любым: у mypy он зависит от платформы.
+    rx=$(printf '%s\n' "${OUTSIDE[@]}" | sed -e 's/\./\\./g' -e 's#/#[/\\\\]#g' | paste -sd'|' -)
+    BLACK_X=(--extend-exclude "$rx")
+    MYPY_X=(--exclude "$rx")
+    for f in "${OUTSIDE[@]}"; do
+        [[ $f == tests/* ]] && PT_X+=("--ignore=$f")
+    done
+    echo "вне прогона (нет в индексе, чужая работа): ${OUTSIDE[*]}"
+fi
+
 LOGDIR=$(mktemp -d) || exit 2
 trap 'rm -rf "$LOGDIR"' EXIT
 
@@ -160,6 +194,7 @@ stage() {
 # каждому прогону нужен свой.
 pt_common() {
     PT=(-q --tb=short -p no:cacheprovider)
+    ((${#PT_X[@]})) && PT+=("${PT_X[@]}")
     # Только для песочницы: там pytest падает в RecursionError на удалении
     # tmp_path в смонтированной папке проекта. На windows каталог по умолчанию
     # нормальный, и подсовывать ему msys-путь — только портить.
@@ -214,18 +249,18 @@ pytest_wait() {
 if ((RUN_LINT)); then
     # Ровно те же цели, что в CI: src и tests. Расширять список нельзя, иначе
     # локальный прогон краснеет там, где CI зелёный, и наоборот.
-    stage ruff "$PY" -m ruff check src tests
+    stage ruff "$PY" -m ruff check "${RUFF_X[@]}" src tests
     if ((FMT)); then
-        stage black "$PY" -m black src tests
+        stage black "$PY" -m black "${BLACK_X[@]}" src tests
     else
-        stage black "$PY" -m black --check src tests
+        stage black "$PY" -m black --check "${BLACK_X[@]}" src tests
     fi
     if ((WINDOWS)); then
-        stage mypy "$PY" -m mypy src
+        stage mypy "$PY" -m mypy "${MYPY_X[@]}" src
     else
         # Вне windows `.mypy_cache` в смонтированной папке не пишется:
         # PermissionError вместо проверки типов.
-        stage mypy "$PY" -m mypy --cache-dir=/tmp/mypycache src
+        stage mypy "$PY" -m mypy --cache-dir=/tmp/mypycache "${MYPY_X[@]}" src
     fi
 fi
 
