@@ -16,18 +16,17 @@ VoiceAttack, система плагинов и оверлей.
 ## Установка для разработки
 
 ```powershell
-git clone https://github.com/ayris-app/ayris.git
-cd ayris
+git clone https://github.com/Mirakll/Ayris-ai.git
+cd Ayris-ai
 py -3.11 -m venv .venv
 .venv\Scripts\activate
 pip install -e ".[dev]"
-move build\pre-commit-config.yaml .pre-commit-config.yaml
 pre-commit install
 ```
 
-> Файл конфигурации pre-commit лежит в `build\pre-commit-config.yaml` и его нужно
-> один раз перенести в корень под именем `.pre-commit-config.yaml` — среда,
-> в которой создавался скелет, не позволяла записывать файлы, начинающиеся с точки.
+> Хук перед коммитом один и зовёт `scripts/check.sh --lint` — тот же скрипт и тот
+> же питон, каким проверки запускаются вручную. Конфиг — `.pre-commit-config.yaml`
+> в корне.
 
 Тяжёлые зависимости не тянутся по умолчанию. Ставьте их группами по мере
 необходимости:
@@ -68,14 +67,32 @@ python -m ayris
 
 ## Проверки
 
-```powershell
-ruff check .
-black --check .
-mypy src
-pytest
+Всё одной командой — линтеры, типы, тесты, сверка установленных версий с пинами,
+запуск приложения и поиск секретов:
+
+```bash
+bash scripts/check.sh
 ```
 
-Те же проверки навешаны на pre-commit хук.
+Полный прогон — около минуты: тесты идут в фон и в несколько процессов, линтеры
+успевают закончиться внутри них. Вывод — строка на проверку, разворачивается
+только упавшая. Во время работы полезны более короткие формы:
+
+```bash
+bash scripts/check.sh --lint                 # ruff/black/mypy/пины/запуск, ~6 с
+bash scripts/check.sh tests/unit/test_x.py   # линтеры и один тест-файл
+bash scripts/check.sh --fmt                  # black переформатирует на месте
+```
+
+Тесты, которым нужен настоящий микрофон, помечены маркером `hardware` и в этот
+прогон не входят — они для человека за реальной машиной: `pytest -m hardware`.
+
+Тот же скрипт (в форме `--lint`) висит на pre-commit хуке, а полный набор гоняет
+CI на Windows 3.11/3.12 и Linux. После пуша прогон удобно ждать так:
+
+```bash
+python scripts/ci_wait.py
+```
 
 ## Сборка
 
