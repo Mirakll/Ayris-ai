@@ -77,6 +77,13 @@ __all__ = [
     "Handler",
     "IntentMatched",
     "LogLine",
+    "MacroBlockFinished",
+    "MacroCancelled",
+    "MacroEnded",
+    "MacroFailed",
+    "MacroFinished",
+    "MacroSkipped",
+    "MacroStarted",
     "MicToggled",
     "ModeChanged",
     "ModelDownloadFailed",
@@ -249,6 +256,106 @@ class ActionFailed(Event):
     user_message: str = ""
     request_id: str = ""
     reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MacroStarted(Event):
+    """A command began running: the engine accepted it and gave it a thread.
+
+    ``trigger`` is what set it going — ``voice``, ``hotkey``, ``timer``, ``call`` — and
+    is wider than :class:`~ayris.core.models.TriggerType` because a run can also come
+    from the editor's button or from inside another command.
+    """
+
+    run_id: str
+    command: str = ""
+    command_id: int | None = None
+    trigger: str = ""
+    request_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MacroBlockFinished(Event):
+    """One block of a running command finished, with what it cost.
+
+    Published per block, so the DevTools timeline can be drawn while the command is
+    still running rather than only from the report it returns at the end. ``path`` is
+    the reader's spelling of the position — ``actions[1].then[0]``.
+    """
+
+    run_id: str
+    path: str
+    block: str
+    status: str = "ok"
+    duration_ms: int = 0
+    depth: int = 0
+    message: str = ""
+    request_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MacroEnded(Event):
+    """A run is over, whichever way it ended.
+
+    The base of the three below and an event in its own right: the history tab wants
+    every finished run and subscribes here once, while the overlay only cares about
+    failures and subscribes to :class:`MacroFailed`. The report with the per-block
+    timings is returned by the engine, not published — it is too big for a bus that
+    also carries audio levels.
+    """
+
+    run_id: str
+    command: str = ""
+    command_id: int | None = None
+    outcome: str = ""
+    duration_ms: int = 0
+    steps: int = 0
+    request_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MacroFinished(MacroEnded):
+    """A command ran to its end. ``message_ru`` is the line the overlay may show."""
+
+    message_ru: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MacroFailed(MacroEnded):
+    """A block failed and the policy stopped the chain, or a limit did.
+
+    ``path`` is the block that broke, ``user_message`` is safe to show, ``error`` is
+    for the log. A run that finished with a failed step under ``on_error = continue``
+    is a :class:`MacroFinished`: the command did what it was asked to.
+    """
+
+    error: str = ""
+    user_message: str = ""
+    path: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MacroCancelled(MacroEnded):
+    """A run was stopped on purpose: the stop word, the hotkey, or a command with priority."""
+
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MacroSkipped(Event):
+    """A command was fired and did not run at all.
+
+    ``reason`` is ``cooldown`` or ``disabled``. ``retry_after_ms`` is how long the
+    cooldown still has to go, so the overlay can say "ещё 400 мс" instead of going
+    silent on a user pressing a hotkey twice.
+    """
+
+    command: str
+    command_id: int | None = None
+    reason: str = "cooldown"
+    retry_after_ms: int = 0
+    trigger: str = ""
+    request_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
