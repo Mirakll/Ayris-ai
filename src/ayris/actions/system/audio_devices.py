@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import sys
 import threading
+import warnings
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol
@@ -420,7 +421,7 @@ def endpoint_volume(
             if device_id
             else enumerator.GetDefaultAudioEndpoint(kind.flow, ROLE_MULTIMEDIA)
         )
-        described = utilities.CreateDevice(raw)
+        described = _create_device(utilities, raw)
     except COM_ERRORS as exc:
         raise DeviceUnavailable(
             f"no {kind} endpoint {device_id or '(default)'}: {exc}",
@@ -451,6 +452,34 @@ def invalidate_devices() -> None:
     enumerator costs them is one failed call.
     """
     _com.__dict__.clear()
+
+
+def _create_device(utilities: Any, endpoint: Any) -> Any:
+    """``pycaw``'s wrapper for one endpoint, with its warnings sent to the log.
+
+    ``AudioUtilities.CreateDevice`` walks a fixed list of property keys off the
+    endpoint's store, and when one of them is not there it swallows the
+    ``COMError`` and calls :func:`warnings.warn` instead of failing. A machine
+    that remembers an unplugged headset hits that on every single enumeration —
+    this box does it right now, on property 21 of one dead render endpoint.
+
+    Harmless as long as nobody is listening, which is exactly the problem: the
+    text goes to stderr past the logger, and under ``-W error`` (how the tests
+    run, and rightly so) it turns into an exception that hides forty working
+    devices behind one dead one. So the warning is caught and written where the
+    rest of the subsystem writes.
+
+    ``catch_warnings`` touches process-wide filter state and is documented as not
+    thread-safe; that is acceptable here and nowhere near as bad as it sounds.
+    The window is one COM call wide, and the only thing another thread can lose
+    in it is whether its own warning was recorded — not a device, not an error.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        device = utilities.CreateDevice(endpoint)
+    for entry in caught:
+        _log.debug("pycaw о свойстве устройства: %s", entry.message)
+    return device
 
 
 class DeviceBackend(Protocol):
@@ -521,8 +550,8 @@ class WasapiDevices:
         utilities = audio_utilities()
         enumerator = device_enumerator()
         try:
-            described = utilities.CreateDevice(
-                enumerator.GetDefaultAudioEndpoint(kind.flow, ROLE_MULTIMEDIA)
+            described = _create_device(
+                utilities, enumerator.GetDefaultAudioEndpoint(kind.flow, ROLE_MULTIMEDIA)
             )
         except COM_ERRORS as exc:
             raise DeviceUnavailable(
@@ -570,7 +599,7 @@ class WasapiDevices:
     ) -> AudioDevice | None:
         """One endpoint out of the collection, or ``None`` when it cannot be read."""
         try:
-            described = utilities.CreateDevice(collection.Item(index))
+            described = _create_device(utilities, collection.Item(index))
         except COM_ERRORS as exc:
             _log.debug("устройство %s не читается: %s", index, exc)
             return None
