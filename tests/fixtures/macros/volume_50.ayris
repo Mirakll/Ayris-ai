@@ -1,0 +1,57 @@
+{
+  "schema_version": 2,
+  "kind": "command",
+  "folders": [],
+  "commands": [
+    {
+      "name": "Громкость 50",
+      "description": "Пример 1 из раздела 22 ТЗ: действие и звук на успех.",
+      "tags": [
+        "система",
+        "звук"
+      ],
+      "folder": [],
+      "enabled": true,
+      "priority": 0,
+      "cooldown_ms": 0,
+      "require_admin": false,
+      "triggers": [
+        {
+          "type": "voice",
+          "phrase": "айрис громкость {volume:int}",
+          "fuzzy": true,
+          "regex": false,
+          "priority": 100,
+          "enabled": true,
+          "conditions": {}
+        },
+        {
+          "type": "hotkey",
+          "combo": "ctrl+alt+v",
+          "enabled": true
+        }
+      ],
+      "actions": [
+        {
+          "type": "SetVolume",
+          "params": {
+            "level": "{volume}"
+          },
+          "enabled": true,
+          "comment": "",
+          "on_error": "stop"
+        }
+      ],
+      "variables": [],
+      "sounds": [
+        {
+          "stage": "on_success",
+          "source": "builtin",
+          "value": "volume_changed"
+        }
+      ],
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}
