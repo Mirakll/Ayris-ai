@@ -745,7 +745,17 @@ class TestRnnoise:
             assert stream.engine is engine
             assert len(stream.push(pcm) + stream.flush()) == len(pcm)
 
+    @pytest.mark.slow
     def test_it_keeps_up_with_the_microphone(self):
+        """Suppression has to be faster than the audio it cleans, with margin.
+
+        Marked ``slow`` — it measures wall time, so it belongs to the sequential
+        pass. Under ``-n auto`` it shares a core with seven other workers, and
+        that is not a hypothesis: on 2026-09-05 a windows-latest runner measured
+        0.5085 against the 0.5 threshold and turned the job red while the
+        sequential Linux job was green on the same revision. The threshold stays
+        where it was: twice real time is the claim being made, not a lucky number.
+        """
         stream = DenoiseStream(DenoiseSettings(mode=DenoiseMode.RNNOISE))
         stream.push(wav("phrase.wav"))
         stats = stream.stats
