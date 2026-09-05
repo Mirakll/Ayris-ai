@@ -549,7 +549,9 @@ class TestShippedCatalog:
 
         Sizes are compared but digests are not: verifying sha256 means
         downloading two gigabytes, which belongs to the job that installs the
-        weights, not to a liveness check.
+        weights, not to a liveness check. A file of a few kilobytes whose length
+        the server will not state on ``HEAD`` is fetched whole instead — five
+        kilobytes are cheaper than a test that flakes.
         """
         directory = catalog_dir()
         if not directory.is_dir():  # pragma: no cover - only in a stripped checkout
@@ -567,13 +569,22 @@ class TestShippedCatalog:
                     if response.status_code != httpx.codes.OK:
                         broken.append(f"{entry.id}/{file.target}: HTTP {response.status_code}")
                         continue
-                    # Не у всякого сервера есть Content-Length на HEAD; если он
-                    # есть, он обязан совпасть - иначе файл на том же адресе
-                    # заменили другим, и sha256 не сойдётся уже у пользователя.
+                    # Не у всякого сервера есть Content-Length на HEAD, и его
+                    # молчание — не «файл пустой». Hugging Face отдаёт мелкие
+                    # .json с gzip и длину то не пишет вовсе, то пишет 0: оба
+                    # ответа приехали с одних и тех же адресов в пределах минуты
+                    # (05.09.2026, четыре голоса piper, тела при этом были ровно
+                    # той длины, что в каталоге). Поэтому у мелкого файла размер
+                    # берётся телом — пять килобайт дешевле флака, — у большого
+                    # HEAD длину и так отдаёт честно, а подмену содержимого при
+                    # той же длине ловит sha256 на установке.
                     length = response.headers.get("content-length")
-                    if length is not None and int(length) != file.size_bytes:
+                    size = int(length) if length is not None else 0
+                    if size == 0 and file.size_bytes <= 1 << 20:
+                        size = len(client.get(file.url).content)
+                    if size and size != file.size_bytes:
                         broken.append(
-                            f"{entry.id}/{file.target}: {length} байт "
+                            f"{entry.id}/{file.target}: {size} байт "
                             f"вместо {file.size_bytes} из каталога"
                         )
 
