@@ -35,7 +35,7 @@
 #
 # Переменные: AYRIS_PY (питон проекта, если он не там, где скрипт его ищет),
 # AYRIS_CHECK_JOBS (процессов pytest, по умолчанию ядра минус одно),
-# AYRIS_CHECK_DIST (load или loadfile, по умолчанию load),
+# AYRIS_CHECK_DIST (loadgroup, load или loadfile, по умолчанию loadgroup),
 # AYRIS_CHECK_TAIL (строк от упавшей проверки, 120).
 #
 # Про маркеры: не запускается только то, что просит переменную окружения, —
@@ -102,7 +102,11 @@ RNNOISE="$ROOT/_tools/rnnoise/librnnoise.so"
 
 cpus=$(nproc 2>/dev/null || echo 4)
 JOBS=${AYRIS_CHECK_JOBS:-$((cpus > 2 ? cpus - 1 : 1))}
-DIST=${AYRIS_CHECK_DIST:-load}
+# loadgroup, а не load: раскладка по тестам та же, но тесты с маркером
+# `xdist_group` уходят на один воркер. Этим держатся тесты настоящего буфера
+# обмена — буфер один на весь рабочий стол, и на двух воркерах сразу они
+# отбирают его друг у друга (`OpenClipboard [5]`).
+DIST=${AYRIS_CHECK_DIST:-loadgroup}
 TAIL=${AYRIS_CHECK_TAIL:-120}
 RUN_LINT=1
 RUN_TESTS=1

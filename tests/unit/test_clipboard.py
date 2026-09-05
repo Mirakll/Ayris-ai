@@ -51,6 +51,7 @@ Groups:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sys
 from typing import TYPE_CHECKING
@@ -90,7 +91,8 @@ from ayris.utils import logger as logger_module
 from ayris.utils import winapi
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
+    from contextlib import AbstractContextManager
     from pathlib import Path
 
     from ayris.core.repositories import ClipboardRepository
@@ -863,23 +865,37 @@ class TestSecretsStayOut:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.xdist_group("clipboard")
 @pytest.mark.skipif(sys.platform != "win32", reason="нужен настоящий буфер обмена Windows")
 class TestRealClipboard:
-    """The parts a fake cannot check: that the win32 calls are spelled right."""
+    """The parts a fake cannot check: that the win32 calls are spelled right.
 
-    def test_запись_чтение_и_очистка(self) -> None:
+    ``xdist_group`` holds this class on the same worker as
+    ``test_input.py::TestRealClipboardPaste``: the clipboard is one lock for the
+    whole desktop, and the listener below reads it on every update, so the two
+    classes running side by side on different workers make each other fail with
+    ``OpenClipboard [5]``. The run passes ``--dist=loadgroup`` for the group to
+    mean anything.
+    """
+
+    def test_запись_чтение_и_очистка(
+        self, clipboard_or_skip: Callable[[], AbstractContextManager[None]]
+    ) -> None:
         backend = WinClipboard()
         marker = "Айрис: проверка буфера 27"
-        backend.write_text(marker)
-        snapshot = backend.read()
-        assert snapshot.kind is ClipboardKind.TEXT
-        assert snapshot.text == marker
-        assert backend.sequence() > 0
-        backend.clear()
-        assert backend.read().kind is ClipboardKind.EMPTY
+        with clipboard_or_skip():
+            backend.write_text(marker)
+            snapshot = backend.read()
+            assert snapshot.kind is ClipboardKind.TEXT
+            assert snapshot.text == marker
+            assert backend.sequence() > 0
+            backend.clear()
+            assert backend.read().kind is ClipboardKind.EMPTY
 
     def test_окно_слушателя_поднимается_и_получает_сообщения(
-        self, store: ClipboardRepository
+        self,
+        store: ClipboardRepository,
+        clipboard_or_skip: Callable[[], AbstractContextManager[None]],
     ) -> None:
         """The listener really registers, really pumps, and really stops.
 
@@ -890,16 +906,20 @@ class TestRealClipboard:
         monitor = ClipboardMonitor(backend=real, store=store, settings=config())
         assert monitor.start() is True
         try:
-            deadline = 3.0
-            waited = 0.0
-            real.write_text("Айрис: проверка слушателя 27")
-            while monitor.stats.received == 0 and waited < deadline:
-                import time
+            with clipboard_or_skip():
+                deadline = 3.0
+                waited = 0.0
+                real.write_text("Айрис: проверка слушателя 27")
+                while monitor.stats.received == 0 and waited < deadline:
+                    import time
 
-                time.sleep(0.05)
-                waited += 0.05
-            assert monitor.stats.received >= 1
+                    time.sleep(0.05)
+                    waited += 0.05
+                assert monitor.stats.received >= 1
         finally:
             monitor.stop()
-            real.clear()
+            # Очистка — гигиена, а не проверка: если буфер в этот момент забрала
+            # чужая программа, тест уже сказал всё, что хотел.
+            with contextlib.suppress(ClipboardBusy):
+                real.clear()
         assert not monitor.running

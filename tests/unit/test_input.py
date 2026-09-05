@@ -118,7 +118,8 @@ from ayris.utils.logger import ROOT_LOGGER_NAME
 from ayris.utils.winapi import MonitorInfo, Rect
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
+    from contextlib import AbstractContextManager
 
 pytestmark = pytest.mark.unit
 
@@ -1569,6 +1570,7 @@ class TestRealSendInput:
         assert abs(moved[1] - target[1]) <= 2
 
 
+@pytest.mark.xdist_group("clipboard")
 @pytest.mark.skipif(sys.platform != "win32", reason="нужен настоящий буфер обмена Windows")
 class TestRealClipboardPaste:
     """Paste mode against the real clipboard, since that path used to be a fake.
@@ -1582,13 +1584,20 @@ class TestRealClipboardPaste:
     Input stays recorded: a real Ctrl+V would land in whatever window has the focus.
     What matters is that the text is genuinely on the clipboard at the moment the
     combination fires, which is what the watching backend checks.
+
+    ``xdist_group`` is what keeps it green. The clipboard is one lock for the whole
+    desktop, so this class and ``test_clipboard.py::TestRealClipboard`` cannot run at
+    the same time on two workers — one of them then loses the lock race and reports
+    ``OpenClipboard [5]``. The group name puts every real-clipboard test on the same
+    worker; the run passes ``--dist=loadgroup`` for that.
     """
 
-    def test_the_text_is_really_on_the_clipboard_when_ctrl_v_fires(self) -> None:
+    def test_the_text_is_really_on_the_clipboard_when_ctrl_v_fires(
+        self, clipboard_or_skip: Callable[[], AbstractContextManager[None]]
+    ) -> None:
         set_clipboard(None)
         reset_clipboard()
         real = clipboard_module.get_clipboard()
-        real.write_text("прежнее значение")
         seen: list[str] = []
 
         class WatchingBackend(RecordingBackend):
@@ -1598,11 +1607,12 @@ class TestRealClipboardPaste:
 
         set_input_backend(WatchingBackend())
         try:
-            TypeText().run(TypeText.Params(text="вставляемый текст", mode=TypeMode.CLIPBOARD))
+            with clipboard_or_skip():
+                real.write_text("прежнее значение")
+                TypeText().run(TypeText.Params(text="вставляемый текст", mode=TypeMode.CLIPBOARD))
+                assert "вставляемый текст" in seen
+                assert real.read().text == "прежнее значение"
         finally:
             set_input_backend(None)
             reset_input_backend()
             clipboard_module._suppressed.clear()
-
-        assert "вставляемый текст" in seen
-        assert real.read().text == "прежнее значение"

@@ -120,6 +120,7 @@ __all__ = [
     "available",
     "bring_window_to_top",
     "clipboard_clear",
+    "clipboard_holder",
     "clipboard_sequence_number",
     "clipboard_set_binary",
     "clipboard_set_text",
@@ -392,7 +393,10 @@ _DEFAULT_DPI: Final = 96
 #: the shell occasionally sees the modifier as still held and swallows the arrow.
 _CHORD_HOLD_S: Final = 0.02
 #: ``OpenClipboard`` fails outright while another process holds the clipboard, and
-#: something always does right after a Ctrl+C. Retry a few times over ~0.15 s.
+#: something always does right after a Ctrl+C. The pause grows with every refusal:
+#: the usual holder lets go within a frame, but a clipboard manager or Windows' own
+#: history service reading the new value takes longer than one, and under load
+#: longer still. Six tries spread over ~0.45 s, and the common case costs 30 ms.
 _CLIPBOARD_TRIES: Final = 6
 _CLIPBOARD_RETRY_S: Final = 0.03
 #: Caps on what one clipboard read may pull into memory. Text longer than this is
@@ -1731,6 +1735,29 @@ def register_clipboard_format(name: str) -> int:
     return int(register(name))
 
 
+def clipboard_holder() -> str:
+    """File name of the program that has the clipboard open right now, or ``""``.
+
+    ``GetOpenClipboardWindow`` is the only way to ask this. The owner reported by
+    ``GetClipboardOwner`` is whoever last put data there, which is usually not the
+    one holding the lock — the holder is a manager or a history service that woke
+    up on the update. Best effort by design: the window can close between the
+    refusal and the question, and the name is for the message, not for a decision.
+    """
+    ask = _win_function("user32", "GetOpenClipboardWindow")
+    if ask is None:
+        return ""
+    ask.restype = ctypes.c_void_p
+    ask.argtypes = []
+    hwnd = ask()
+    if not hwnd:
+        return ""
+    try:
+        return process_image_name(window_pid(int(hwnd)))
+    except WinApiError:  # pragma: no cover - the holder exited meanwhile
+        return ""
+
+
 @contextlib.contextmanager
 def _clipboard_open() -> Iterator[None]:
     """Hold the clipboard open for the body, retrying while someone else has it.
@@ -1738,9 +1765,14 @@ def _clipboard_open() -> Iterator[None]:
     The clipboard is one global lock for the whole desktop, and right after a
     Ctrl+C something always holds it — the source program, a manager, Windows'
     own history service. It nearly always lets go within a frame, so a refusal is
-    worth retrying for ~0.15 s before it becomes an error. Without this every
+    worth retrying for ~0.45 s before it becomes an error. Without this every
     clipboard action would fail at random, which is exactly what it looks like to
     the user: «иногда работает».
+
+    Each pause is longer than the last. A flat 30 ms six times over is enough for
+    the program that just copied, but not for a manager that woke up on the update
+    and is now parsing the value, and not for a machine with every core busy —
+    that is what a paste failing once in a hundred runs turned out to be.
     """
     open_clipboard = _require("user32", "OpenClipboard")
     close_clipboard = _require("user32", "CloseClipboard")
@@ -1753,8 +1785,15 @@ def _clipboard_open() -> Iterator[None]:
         if open_clipboard(None):
             break
         if attempt == _CLIPBOARD_TRIES - 1:
-            raise _last_error("OpenClipboard")
-        time.sleep(_CLIPBOARD_RETRY_S)
+            # Naming the holder is what makes this error readable at all: «[5]
+            # Отказано в доступе» looks the same for a clipboard manager and for
+            # another thread of our own process, and the two are fixed differently.
+            error = _last_error("OpenClipboard")
+            holder = clipboard_holder()
+            if not holder:
+                raise error
+            raise WinApiError(f"{error} (clipboard held by {holder})", code=error.code)
+        time.sleep(_CLIPBOARD_RETRY_S * (attempt + 1))
     try:
         yield
     finally:

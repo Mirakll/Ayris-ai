@@ -605,7 +605,18 @@ class TestLifecycle:
         assert started == ["plugin", "stopped"]
 
 
+@pytest.mark.xdist_group("single-instance")
 class TestSingleInstance:
+    """The token is a named mutex on Windows, and a name is machine-wide.
+
+    That makes these tests the second resource in the suite that cannot be shared
+    (the first is the clipboard): two of them starting an app on two xdist workers
+    at once, and one gets ``AlreadyRunningError`` where it expected a clean start —
+    a red run that says nothing about the code. ``xdist_group`` keeps the class on
+    one worker, where the mutex is free between tests; the run passes
+    ``--dist=loadgroup`` for the mark to mean anything.
+    """
+
     def test_a_second_instance_is_refused(self, tmp_path: Path) -> None:
         first = AyrisApp(_options(tmp_path, single_instance=True)).startup()
         second = AyrisApp(_options(tmp_path, single_instance=True))

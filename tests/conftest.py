@@ -8,6 +8,7 @@ reach the real Windows Credential Manager.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shutil
 import tempfile
@@ -102,3 +103,31 @@ def ascii_weights() -> Iterator[Callable[[Path], Path]]:
     yield prepared
     if root is not None:
         shutil.rmtree(root, ignore_errors=True)
+
+
+@contextlib.contextmanager
+def _clipboard_or_skip() -> Iterator[None]:
+    """Skip, rather than fail, when another program is holding the clipboard.
+
+    The clipboard is one lock for the whole desktop and nothing can reserve it:
+    a clipboard manager, Windows' own history service or a program that has just
+    copied something can hold it past every retry in ``winapi._clipboard_open``.
+    A test that never gets the lock has not found a defect in Ayris, it has found
+    a busy desktop — and a red run that means «кто-то что-то скопировал» teaches
+    everyone to stop reading red runs.
+
+    The reason carries the holder's file name, so a skip that says ``python.exe``
+    is a signal that this one is ours after all and worth chasing.
+    """
+    from ayris.actions.system.clipboard import ClipboardBusy
+
+    try:
+        yield
+    except ClipboardBusy as busy:  # pragma: no cover - зависит от чужой программы
+        pytest.skip(f"буфер обмена занят другой программой: {busy}")
+
+
+@pytest.fixture
+def clipboard_or_skip() -> Callable[[], contextlib.AbstractContextManager[None]]:
+    """The guard above, as a fixture: tests never import from ``conftest`` here."""
+    return _clipboard_or_skip
