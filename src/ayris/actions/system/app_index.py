@@ -62,6 +62,7 @@ from ayris.nlu.apps import (
 from ayris.nlu.matcher import similarity
 from ayris.nlu.normalize import normalize_text
 from ayris.utils.logger import get_logger
+from ayris.utils.winapi import COM_ERRORS
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
@@ -722,6 +723,13 @@ def _scan_path() -> Iterator[IndexedApp]:
                 break
 
 
+#: What enumerating Store applications can fail with. COM refusing is one half;
+#: the other is the shell handing back something without the properties this code
+#: reads. A constant rather than a starred tuple in place because ``mypy`` does
+#: not accept the latter in an ``except``.
+_UWP_ERRORS: Final[tuple[type[Exception], ...]] = (*COM_ERRORS, AttributeError, ValueError)
+
+
 def _scan_uwp() -> Iterator[IndexedApp]:
     """Store applications, through the ``shell:AppsFolder`` namespace.
 
@@ -740,7 +748,7 @@ def _scan_uwp() -> Iterator[IndexedApp]:
         return
     try:
         comtypes.CoInitialize()
-    except OSError as exc:  # pragma: no cover - depends on the thread's COM state
+    except COM_ERRORS as exc:  # pragma: no cover - depends on the thread's COM state
         _log.debug("COM не инициализирован: %s", exc)
         return
     try:
@@ -752,7 +760,7 @@ def _scan_uwp() -> Iterator[IndexedApp]:
             app = parse_uwp_entry(str(item.Name), str(item.Path))
             if app is not None:
                 yield app
-    except (OSError, AttributeError, ValueError) as exc:
+    except _UWP_ERRORS as exc:
         _log.warning("приложения Store не перечислены: %s", exc)
     finally:
         comtypes.CoUninitialize()

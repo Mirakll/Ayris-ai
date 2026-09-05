@@ -26,6 +26,10 @@ CI runner checks for real: it has no audio endpoints at all, so the listing is
 empty there and the actions must say «не нашла» rather than raise a ``COMError``.
 :class:`~…audio_devices.DeviceUnavailable` and :class:`~…audio.MixerUnavailable`
 are :class:`~ayris.core.errors.ActionUnavailable` subclasses for exactly that.
+A runner without a sound card is not the same thing as a sound card that fails,
+though, and for years only the first was covered — which is how a raw
+``COMError`` from a real WASAPI refusal stayed invisible. Now
+:class:`TestComFailuresSpeakRussian` raises both error types on purpose.
 
 Groups:
 
@@ -45,6 +49,8 @@ Groups:
 * :class:`TestSetAudioDeviceAction` — all three roles moved, and the two refusals.
 * :class:`TestBackendSeams` — the injection points and the off-Windows refusals.
 * :class:`TestSchemas` — six actions as the macro editor sees them.
+* :class:`TestComErrorIsNotAnOsError` — why ``COM_ERRORS`` has to exist at all.
+* :class:`TestComFailuresSpeakRussian` — a refusing WASAPI, in both error types.
 * :class:`TestLiveAudio` — read-only checks against the real WASAPI, on Windows only.
 """
 
@@ -91,6 +97,7 @@ from ayris.actions.system.audio_devices import (
     set_device_backend,
 )
 from ayris.core.errors import ActionUnavailable
+from ayris.utils.winapi import COM_ERRORS
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -1172,40 +1179,289 @@ class TestSchemas:
         assert build_schema(SetAudioDevice).require_admin is False
 
 
+# --------------------------------------------------------------------------- #
+# COM failures: a fake of pycaw itself, not of the backend protocol
+# --------------------------------------------------------------------------- #
+
+
+def com_failure(error_type: type[Exception]) -> Exception:
+    """One instance of ``error_type``, built the way that type insists on.
+
+    ``COMError`` takes exactly three arguments — the HRESULT, Windows' own text,
+    and the ``(descr, source, helpfile, helpcontext, progid)`` tuple — and refuses
+    the single-string form every other exception accepts. The values below are a
+    real refusal from a real machine: ``E_INVALIDARG`` out of
+    ``GetDefaultAudioEndpoint`` when the endpoint asked for is not there.
+    """
+    if error_type.__name__ == "COMError":
+        return error_type(-2147024809, "Параметр задан неверно.", (None, None, None, 0, None))
+    return error_type("endpoint is gone")
+
+
+class ExplodingCom:
+    """``AudioUtilities``, an ``IMMDeviceEnumerator`` and ``IPolicyConfig`` in one.
+
+    Every method raises, because every method is a COM call and the whole question
+    is what the layer above does with the failure. The names are Microsoft's —
+    hence a ``noqa`` on each — because that is what the code under test calls.
+    """
+
+    def __init__(self, error: Exception, *, listing_works: bool = False) -> None:
+        self.error = error
+        self.listing_works = listing_works
+
+    def GetDeviceEnumerator(self) -> Any:  # noqa: N802
+        raise self.error
+
+    def CreateDevice(self, raw: Any) -> Any:  # noqa: N802
+        raise self.error
+
+    def GetAllSessions(self) -> Any:  # noqa: N802
+        raise self.error
+
+    def GetDefaultAudioEndpoint(self, flow: int, role: int) -> Any:  # noqa: N802
+        raise self.error
+
+    def GetDevice(self, device_id: str) -> Any:  # noqa: N802
+        raise self.error
+
+    def EnumAudioEndpoints(self, flow: int, mask: int) -> Any:  # noqa: N802
+        """The listing itself either refuses or hands back one unreadable device."""
+        if not self.listing_works:
+            raise self.error
+        return self
+
+    def GetCount(self) -> int:  # noqa: N802
+        return 1
+
+    def Item(self, index: int) -> Any:  # noqa: N802
+        return object()
+
+    def SetDefaultEndpoint(self, device_id: str, role: int) -> None:  # noqa: N802
+        raise self.error
+
+
+class TestComErrorIsNotAnOsError:
+    """The one fact the whole class below rests on, asserted on its own.
+
+    ``COMError`` derives straight from ``Exception``, so ``except OSError`` around
+    a ``comtypes`` call compiles, reads correctly and catches nothing. That is not
+    a hypothetical: it is how «(-2147024809, 'Параметр задан неверно.')» reached
+    the user instead of «Не нашла микрофон.»
+    """
+
+    def test_the_tuple_always_has_oserror_in_it(self) -> None:
+        assert OSError in COM_ERRORS
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="COMError exists only on Windows")
+    def test_on_windows_comerror_is_in_the_tuple_and_is_not_an_oserror(self) -> None:
+        from _ctypes import COMError
+
+        assert not issubclass(COMError, OSError)
+        assert COMError in COM_ERRORS
+
+
+@pytest.mark.parametrize("error_type", COM_ERRORS, ids=lambda item: item.__name__)
+class TestComFailuresSpeakRussian:
+    """Every type in :data:`COM_ERRORS` has to come out as a domain error.
+
+    Parametrising over the tuple is what keeps this honest: the ``OSError`` half
+    runs on Linux too, and the ``COMError`` half is the one that used to escape.
+    Unlike the rest of this module the fakes here stand in for ``pycaw`` itself,
+    one layer below the backend protocol, because that is where the ``except``
+    clauses under test live.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _empty_com_cache(self) -> Iterator[None]:
+        """The thread-local enumerator, before and after. A cached one hides the fake."""
+        from ayris.actions.system.audio_devices import invalidate_devices
+
+        invalidate_devices()
+        yield
+        invalidate_devices()
+
+    @staticmethod
+    def _install(monkeypatch: pytest.MonkeyPatch, com: ExplodingCom) -> None:
+        """Put ``com`` everywhere the two modules reach for ``pycaw``."""
+        from ayris.actions.system import audio, audio_devices
+
+        monkeypatch.setattr(audio_devices, "initialize_com", lambda: None)
+        monkeypatch.setattr(audio_devices, "audio_utilities", lambda: com)
+        monkeypatch.setattr(audio_devices, "device_enumerator", lambda: com)
+        monkeypatch.setattr(audio, "initialize_com", lambda: None)
+        monkeypatch.setattr(audio, "audio_utilities", lambda: com)
+
+    def test_reading_the_volume_says_which_device_is_missing(
+        self,
+        error_type: type[Exception],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ayris.actions.system.audio import WasapiAudio
+
+        self._install(monkeypatch, ExplodingCom(com_failure(error_type)))
+        with pytest.raises(DeviceUnavailable) as excinfo:
+            WasapiAudio().get_master_volume()
+        assert excinfo.value.user_message == DeviceKind.OUTPUT.missing_ru
+
+    def test_the_microphone_gets_its_own_sentence(
+        self,
+        error_type: type[Exception],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ayris.actions.system.audio import WasapiAudio
+
+        self._install(monkeypatch, ExplodingCom(com_failure(error_type)))
+        with pytest.raises(DeviceUnavailable) as excinfo:
+            WasapiAudio().get_master_volume(DeviceKind.INPUT)
+        assert excinfo.value.user_message == DeviceKind.INPUT.missing_ru
+
+    def test_setting_the_volume_refuses_before_touching_anything(
+        self,
+        error_type: type[Exception],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ayris.actions.system.audio import WasapiAudio
+
+        self._install(monkeypatch, ExplodingCom(com_failure(error_type)))
+        with pytest.raises(DeviceUnavailable):
+            WasapiAudio().set_master_volume(0.5)
+
+    def test_the_mixer_refuses_in_russian(
+        self,
+        error_type: type[Exception],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ayris.actions.system.audio import MixerUnavailable, WasapiAudio
+
+        self._install(monkeypatch, ExplodingCom(com_failure(error_type)))
+        with pytest.raises(MixerUnavailable) as excinfo:
+            WasapiAudio().list_sessions()
+        assert excinfo.value.user_message == "Не смогла прочитать микшер Windows."
+
+    def test_the_sound_subsystem_refusing_the_enumerator_is_russian_too(
+        self,
+        error_type: type[Exception],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The one call that is not behind ``device_enumerator``: creating it."""
+        from ayris.actions.system import audio_devices
+
+        com = ExplodingCom(com_failure(error_type))
+        monkeypatch.setattr(audio_devices, "initialize_com", lambda: None)
+        monkeypatch.setattr(audio_devices, "audio_utilities", lambda: com)
+        with pytest.raises(DeviceUnavailable) as excinfo:
+            audio_devices.device_enumerator()
+        assert excinfo.value.user_message == "Не смогла добраться до звуковой подсистемы Windows."
+
+    def test_a_listing_that_refuses_is_empty_rather_than_fatal(
+        self,
+        error_type: type[Exception],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ayris.actions.system.audio_devices import WasapiDevices
+
+        self._install(monkeypatch, ExplodingCom(com_failure(error_type)))
+        assert WasapiDevices().list_devices(DeviceKind.OUTPUT) == []
+
+    def test_an_endpoint_that_will_not_describe_itself_is_skipped(
+        self,
+        error_type: type[Exception],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """One broken driver must not take the other forty devices with it."""
+        from ayris.actions.system.audio_devices import WasapiDevices
+
+        com = ExplodingCom(com_failure(error_type), listing_works=True)
+        self._install(monkeypatch, com)
+        assert WasapiDevices().list_devices(DeviceKind.OUTPUT) == []
+
+    def test_there_is_no_default_device_and_that_is_said_out_loud(
+        self,
+        error_type: type[Exception],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ayris.actions.system.audio_devices import WasapiDevices
+
+        self._install(monkeypatch, ExplodingCom(com_failure(error_type)))
+        with pytest.raises(DeviceUnavailable) as excinfo:
+            WasapiDevices().default_device(DeviceKind.INPUT)
+        assert excinfo.value.user_message == DeviceKind.INPUT.missing_ru
+
+    def test_switching_the_default_refuses_with_the_policy_sentence(
+        self,
+        error_type: type[Exception],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ayris.actions.system.audio_devices import PolicyUnavailable, WasapiDevices
+
+        com = ExplodingCom(com_failure(error_type))
+        self._install(monkeypatch, com)
+        devices = WasapiDevices()
+        monkeypatch.setattr(devices, "_policy", lambda: com)
+        with pytest.raises(PolicyUnavailable) as excinfo:
+            devices.set_default("{0.0.0.00000000}.{deadbeef}", DeviceKind.OUTPUT)
+        assert "параметрах звука" in excinfo.value.user_message
+
+
+# --------------------------------------------------------------------------- #
+# The machine this runs on
+# --------------------------------------------------------------------------- #
+
+
+def skip_without_endpoint(kind: DeviceKind) -> None:
+    """Start from the real backends, and skip if this direction has no endpoint.
+
+    «Устройство не подключено» and «код сломан» have to look different in the
+    report, and until :data:`ayris.utils.winapi.COM_ERRORS` existed they could
+    not: a headset pulled out of the jack surfaced as a raw ``_ctypes.COMError``
+    from inside pycaw, which no ``except`` here could tell from a genuine bug.
+    Now the same machine raises :class:`ActionUnavailable`, so it can be turned
+    into an honest skip — which is why these tests run on every ``check.sh``
+    instead of waiting for somebody to type ``pytest -m hardware``.
+    """
+    set_audio_backend(None)
+    set_device_backend(None)
+    try:
+        default_device(kind)
+    except ActionUnavailable as exc:
+        pytest.skip(f"нет устройства: {exc.user_message}")
+
+
 @pytest.mark.hardware
 @pytest.mark.skipif(sys.platform != "win32", reason="needs a real sound stack")
 class TestLiveAudio:
     """Read-only against the machine's own WASAPI. Nothing here changes a setting.
 
-    Marked ``hardware`` because that is what it is: a runner has no sound card at
-    all, so «прочитал громкость» there means «наткнулся на отсутствие устройства».
-    The pycaw code path itself *is* checked in CI — by
+    Marked ``hardware`` because that is what it is: a CI runner has no sound card
+    at all, so «прочитал громкость» there means «наткнулся на отсутствие
+    устройства». The pycaw code path itself *is* checked in CI — by
     :meth:`TestBackendSeams.test_on_windows_the_real_backend_is_the_default`,
     which needs the library imported and not a speaker plugged in.
     """
 
     def test_the_master_volume_reads_back_as_a_percentage(self) -> None:
-        set_audio_backend(None)
+        skip_without_endpoint(DeviceKind.OUTPUT)
         state = get_audio_backend().get_master_volume()
         assert 0 <= state.level <= 100
         assert isinstance(state.muted, bool)
         assert state.device
 
     def test_the_microphone_reads_back_too(self) -> None:
-        set_audio_backend(None)
+        skip_without_endpoint(DeviceKind.INPUT)
         state = get_audio_backend().get_master_volume(DeviceKind.INPUT)
         assert 0 <= state.level <= 100
         assert state.kind is DeviceKind.INPUT
 
     def test_the_mixer_lists_sessions_with_names_and_levels(self) -> None:
-        set_audio_backend(None)
+        skip_without_endpoint(DeviceKind.OUTPUT)
         for session in get_audio_backend().list_sessions():
             assert 0 <= session.level <= 100
             assert session.label
             assert session.pid >= 0
 
     def test_the_default_output_is_active_and_listed_first(self) -> None:
-        set_device_backend(None)
+        skip_without_endpoint(DeviceKind.OUTPUT)
         listed = list_audio_devices()
         assert listed, "the machine has speakers"
         assert listed[0].is_default is True
@@ -1214,11 +1470,11 @@ class TestLiveAudio:
 
     def test_the_dead_endpoints_a_real_machine_remembers_are_filtered_out(self) -> None:
         """Forty NotPresent endpoints is normal; the user must not hear about them."""
-        set_device_backend(None)
+        skip_without_endpoint(DeviceKind.OUTPUT)
         raw = get_device_backend().list_devices(DeviceKind.OUTPUT)
         assert len(list_audio_devices(limit=1000)) <= len(raw)
 
     def test_matching_finds_the_default_device_by_its_own_name(self) -> None:
-        set_device_backend(None)
+        skip_without_endpoint(DeviceKind.OUTPUT)
         current = default_device()
         assert find_device(list_audio_devices(), current.name).device_id == current.device_id

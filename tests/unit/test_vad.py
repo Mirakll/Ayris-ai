@@ -976,21 +976,33 @@ class TestWorkerWiring:
 
 
 class TestLiveMicrophone:
-    """Excluded from CI: a runner has no microphone, and the sandbox has no timing."""
+    """Excluded from CI: a runner has no microphone, and the sandbox has no timing.
+
+    Runs on every ``check.sh`` on a machine that has one, in the quiet serial pass
+    — but only reports a failure when the microphone answered and the numbers came
+    out wrong. A missing, muted or busy device is a skip with the reason printed:
+    otherwise the red would mean «выдерни наушники», which is not a defect.
+    """
 
     @pytest.mark.hardware
     def test_calibration_against_a_real_room(self):
-        """Run with ``-m hardware`` and stay quiet for two seconds."""
+        """Stay quiet for two seconds while this one runs."""
         import time
 
         from ayris.audio.capture import AudioCapture, CaptureSettings
 
         capture = AudioCapture(CaptureSettings())
-        capture.start()
+        try:
+            capture.start()
+        except AudioError as exc:
+            pytest.skip(f"микрофон не открылся: {exc}")
         try:
             time.sleep(2.0)
-            report = calibrate_pcm(capture.read_recent(2000.0))
+            silence = capture.read_recent(2000.0)
         finally:
             capture.stop()
+        if not bytes(silence):
+            pytest.skip("микрофон открылся, но кадров не прислал — выключен или замьючен")
+        report = calibrate_pcm(silence)
         assert report.recommended.noise_floor_db < 0.0
         assert 0.0 <= report.recommended.vad_threshold <= 1.0

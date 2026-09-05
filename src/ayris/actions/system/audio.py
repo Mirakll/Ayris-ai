@@ -463,7 +463,7 @@ class WasapiAudio:
         try:
             scalar = float(volume.GetMasterVolumeLevelScalar())
             muted = bool(volume.GetMute())
-        except OSError as exc:
+        except winapi.COM_ERRORS as exc:
             raise _endpoint_failed(kind, exc) from exc
         return VolumeState(
             level=scalar_to_percent(scalar),
@@ -490,7 +490,7 @@ class WasapiAudio:
         volume, _ = endpoint_volume(kind, device_id)
         try:
             volume.SetMasterVolumeLevelScalar(_clamp_scalar(scalar), None)
-        except OSError as exc:
+        except winapi.COM_ERRORS as exc:
             raise _endpoint_failed(kind, exc) from exc
 
     def set_master_mute(
@@ -507,7 +507,7 @@ class WasapiAudio:
         volume, _ = endpoint_volume(kind, device_id)
         try:
             volume.SetMute(bool(muted), None)
-        except OSError as exc:
+        except winapi.COM_ERRORS as exc:
             raise _endpoint_failed(kind, exc) from exc
 
     def list_sessions(self) -> list[AudioSession]:
@@ -546,7 +546,7 @@ class WasapiAudio:
         initialize_com()
         try:
             raw = audio_utilities().GetAllSessions()
-        except OSError as exc:
+        except winapi.COM_ERRORS as exc:
             raise MixerUnavailable(f"IAudioSessionManager2 is unavailable: {exc}") from exc
         return list(raw or ())
 
@@ -559,7 +559,7 @@ class WasapiAudio:
             simple = raw.SimpleAudioVolume
             level = scalar_to_percent(float(simple.GetMasterVolume()))
             muted = bool(simple.GetMute())
-        except (OSError, AttributeError, TypeError, ValueError) as exc:
+        except _SESSION_ERRORS as exc:
             _log.debug("сессия микшера не читается: %s", exc)
             return None
         return AudioSession(
@@ -583,7 +583,7 @@ class WasapiAudio:
                 if int(getattr(raw, "ProcessId", 0) or 0) != pid:
                     continue
                 getattr(raw.SimpleAudioVolume, method)(value, None)
-            except (OSError, AttributeError, TypeError, ValueError) as exc:
+            except _SESSION_ERRORS as exc:
                 _log.debug("сессия pid %s не приняла %s: %s", pid, method, exc)
                 continue
             touched += 1
@@ -595,6 +595,22 @@ class WasapiAudio:
 #: running with nothing playing — it belongs in the mixer, just not at the top.
 _SESSION_ACTIVE: Final = 1
 
+#: What reading one mixer session can fail with. COM refusing is the interesting
+#: half; the other three are ``pycaw``'s own shapes — a session object it could
+#: not fill in has no ``SimpleAudioVolume`` on it at all. Spelled out as a
+#: constant rather than unpacked in place because ``mypy`` does not accept a
+#: starred tuple in an ``except``.
+_SESSION_ERRORS: Final[tuple[type[Exception], ...]] = (
+    *winapi.COM_ERRORS,
+    AttributeError,
+    TypeError,
+    ValueError,
+)
+
+#: What a read-back may fail with: the domain error a backend raises, or a COM
+#: error from one that does not translate.
+_READBACK_ERRORS: Final[tuple[type[Exception], ...]] = (ActionError, *winapi.COM_ERRORS)
+
 
 def _clamp_scalar(scalar: float) -> float:
     """A scalar brought inside 0.0..1.0.
@@ -605,7 +621,7 @@ def _clamp_scalar(scalar: float) -> float:
     return max(0.0, min(1.0, float(scalar)))
 
 
-def _endpoint_failed(kind: DeviceKind, exc: OSError) -> ActionError:
+def _endpoint_failed(kind: DeviceKind, exc: Exception) -> ActionError:
     """The error to raise when an endpoint stops answering mid-call."""
     from ayris.actions.system.audio_devices import DeviceUnavailable
 
@@ -715,7 +731,7 @@ def _read_state(
     """
     try:
         return backend.get_master_volume(kind, device_id)
-    except (ActionError, OSError) as exc:
+    except _READBACK_ERRORS as exc:
         _log.debug("не удалось перечитать громкость: %s", exc)
         return fallback
 

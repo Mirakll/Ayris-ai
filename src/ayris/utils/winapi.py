@@ -19,6 +19,12 @@ Three things this layer takes care of so callers do not have to:
   Each wrapper turns that into an exception carrying the numeric code and the
   system's own description, which is what ends up in the log.
 
+One thing here is not a WinAPI call: :data:`COM_ERRORS`. The audio and app-index
+actions talk to Windows through COM rather than through ``windll``, and what a
+failing COM call raises is the same kind of platform fact as the constants below
+— it belongs at the bottom of the graph, next to them, and not copied into each
+subsystem.
+
 Nothing here is imported from :mod:`ayris.core`: utilities sit at the bottom of
 the dependency graph, so :class:`WinApiError` is a plain ``RuntimeError`` and the
 action layer is the one that translates it into a Russian
@@ -46,6 +52,7 @@ __all__ = [
     "CF_HDROP",
     "CF_TIFF",
     "CF_UNICODETEXT",
+    "COM_ERRORS",
     "DWMWA_EXTENDED_FRAME_BOUNDS",
     "ELEVATION_TYPE_DEFAULT",
     "ELEVATION_TYPE_FULL",
@@ -172,6 +179,30 @@ __all__ = [
 ]
 
 _log = get_logger(__name__)
+
+# --- What a failing COM call raises. ---
+# ``COMError`` is **not** an ``OSError``: it derives straight from ``Exception``,
+# so ``except OSError`` around a ``comtypes`` method call catches nothing and the
+# raw ``_ctypes.COMError`` escapes to the caller. That is not theory — it is how
+# a bare «COMError: элемент не найден» came out of the endpoint lookup instead of
+# «Не нашла устройство ввода.», and why the tests that need a microphone were
+# taken out of the local run as «нет железа» when the hardware was fine. Both
+# types have to be caught, and the tuple lives here so no call site has to
+# remember why.
+#
+# The class exists only on Windows, hence the guard: on Linux, where the linters
+# and part of CI run, ``_ctypes`` has no such attribute and only ``OSError``
+# remains. ``mypy`` is pinned to ``platform = "win32"``, so it always sees the
+# import.
+_COM_ERRORS: tuple[type[Exception], ...] = ()
+if sys.platform == "win32":
+    from _ctypes import COMError
+
+    _COM_ERRORS = (COMError,)
+
+#: Every exception one COM call can fail with. Use it, not ``OSError``, in every
+#: ``except`` that wraps ``comtypes``/``pycaw``.
+COM_ERRORS: Final[tuple[type[Exception], ...]] = (OSError, *_COM_ERRORS)
 
 # --- ShowWindow commands. Only the ones a voice command can ask for. ---
 SW_HIDE: Final = 0

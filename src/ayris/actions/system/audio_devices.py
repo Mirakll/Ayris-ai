@@ -17,7 +17,10 @@ in Ayris touches ``IPolicyConfig``.
 This module is also where the COM plumbing for the whole audio subsystem lives:
 :func:`initialize_com` and :func:`device_enumerator` are what
 :mod:`ayris.actions.system.audio` reaches for too, so that one thread-local cache
-serves both and one call to :func:`invalidate_devices` empties it.
+serves both and one call to :func:`invalidate_devices` empties it. Every ``except``
+around a COM call here lists :data:`ayris.utils.winapi.COM_ERRORS` rather than
+``OSError``, because ``COMError`` is not one — with a bare ``except OSError`` all
+the Russian messages below were unreachable code.
 
 **Nothing survives a hot-plug except the enumerator.** Endpoint pointers go stale
 the moment a USB headset is unplugged, and a cached ``IMMDevice`` then fails in
@@ -48,6 +51,7 @@ from ayris.actions.registry import register
 from ayris.actions.result import ActionResult
 from ayris.core.errors import ActionError, ActionUnavailable
 from ayris.utils.logger import get_logger
+from ayris.utils.winapi import COM_ERRORS
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -338,7 +342,7 @@ def initialize_com() -> None:
         ) from exc
     try:
         comtypes.CoInitialize()
-    except OSError as exc:  # pragma: no cover - only on a hostile apartment
+    except COM_ERRORS as exc:  # pragma: no cover - only on a hostile apartment
         _log.debug("CoInitialize вернул %s", exc)
 
 
@@ -380,7 +384,7 @@ def device_enumerator() -> Any:
     initialize_com()
     try:
         enumerator = audio_utilities().GetDeviceEnumerator()
-    except OSError as exc:
+    except COM_ERRORS as exc:
         raise DeviceUnavailable(
             f"cannot create IMMDeviceEnumerator: {exc}",
             user_message="Не смогла добраться до звуковой подсистемы Windows.",
@@ -417,7 +421,7 @@ def endpoint_volume(
             else enumerator.GetDefaultAudioEndpoint(kind.flow, ROLE_MULTIMEDIA)
         )
         described = utilities.CreateDevice(raw)
-    except OSError as exc:
+    except COM_ERRORS as exc:
         raise DeviceUnavailable(
             f"no {kind} endpoint {device_id or '(default)'}: {exc}",
             user_message=kind.missing_ru,
@@ -429,7 +433,7 @@ def endpoint_volume(
         )
     try:
         volume = described.EndpointVolume
-    except OSError as exc:
+    except COM_ERRORS as exc:
         raise DeviceUnavailable(
             f"cannot activate IAudioEndpointVolume on {described.id!r}: {exc}",
             user_message=f"Не смогла управлять громкостью: {kind.noun_ru} не отвечает.",
@@ -496,7 +500,7 @@ class WasapiDevices:
         try:
             collection = enumerator.EnumAudioEndpoints(kind.flow, _STATE_MASK_ALL)
             count = int(collection.GetCount())
-        except OSError as exc:
+        except COM_ERRORS as exc:
             _log.warning("не удалось перечислить %s: %s", kind.noun_ru, exc)
             return []
         devices: list[AudioDevice] = []
@@ -520,7 +524,7 @@ class WasapiDevices:
             described = utilities.CreateDevice(
                 enumerator.GetDefaultAudioEndpoint(kind.flow, ROLE_MULTIMEDIA)
             )
-        except OSError as exc:
+        except COM_ERRORS as exc:
             raise DeviceUnavailable(
                 f"no default {kind} endpoint: {exc}",
                 user_message=kind.missing_ru,
@@ -549,7 +553,7 @@ class WasapiDevices:
         for role in _ROLES:
             try:
                 policy.SetDefaultEndpoint(device_id, role)
-            except OSError as exc:
+            except COM_ERRORS as exc:
                 raise PolicyUnavailable(
                     f"SetDefaultEndpoint({device_id!r}, role={role}) failed: {exc}",
                 ) from exc
@@ -567,7 +571,7 @@ class WasapiDevices:
         """One endpoint out of the collection, or ``None`` when it cannot be read."""
         try:
             described = utilities.CreateDevice(collection.Item(index))
-        except OSError as exc:
+        except COM_ERRORS as exc:
             _log.debug("устройство %s не читается: %s", index, exc)
             return None
         if described is None:
@@ -616,7 +620,7 @@ class WasapiDevices:
                 GUID(CLSID_POLICY_CONFIG),
                 interface=_policy_interface(),
             )
-        except OSError as exc:
+        except COM_ERRORS as exc:
             raise PolicyUnavailable(
                 f"IPolicyConfig {CLSID_POLICY_CONFIG} is not available: {exc}",
             ) from exc
@@ -680,6 +684,19 @@ def _policy_interface() -> Any:
     return IPolicyConfig
 
 
+#: What subscribing to — or unsubscribing from — hot-plug events can fail with.
+#: COM refusing is one half; the other is an older ``pycaw`` whose callback class
+#: does not have the shape this code expects, which arrives as an
+#: ``AttributeError`` or a ``TypeError``. A constant rather than a starred tuple
+#: in place because ``mypy`` does not accept the latter in an ``except``.
+_WATCH_ERRORS: Final[tuple[type[Exception], ...]] = (
+    ActionError,
+    *COM_ERRORS,
+    AttributeError,
+    TypeError,
+)
+
+
 class DeviceWatcher:
     """Registers for ``OnDefaultDeviceChanged`` and clears the caches on it.
 
@@ -734,7 +751,7 @@ class DeviceWatcher:
             enumerator = device_enumerator()
             client = _Client()
             enumerator.RegisterEndpointNotificationCallback(client)
-        except (ActionError, OSError, AttributeError, TypeError) as exc:
+        except _WATCH_ERRORS as exc:
             _log.debug("не удалось подписаться на события устройств: %s", exc)
             return False
         self._client = client
@@ -747,7 +764,7 @@ class DeviceWatcher:
             return
         try:
             self._enumerator.UnregisterEndpointNotificationCallback(self._client)
-        except (OSError, AttributeError) as exc:  # pragma: no cover - teardown only
+        except _WATCH_ERRORS as exc:  # pragma: no cover - teardown only
             _log.debug("не удалось отписаться от событий устройств: %s", exc)
         self._client = None
         self._enumerator = None
