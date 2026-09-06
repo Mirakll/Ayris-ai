@@ -484,8 +484,11 @@ _WRITERS: Final[Mapping[str, tuple[str, ...]]] = {
     "Try": ("error_var",),
     "ArrayPush": ("name",),
     "ArrayGet": ("into",),
+    "ArrayPop": ("into",),
+    "ArrayLength": ("into",),
     "DictSet": ("name",),
     "DictGet": ("into",),
+    "DictKeys": ("into",),
 }
 
 #: Blocks that name a variable in a parameter instead of in braces. Reading one
@@ -494,7 +497,10 @@ _WRITERS: Final[Mapping[str, tuple[str, ...]]] = {
 _READERS: Final[Mapping[str, tuple[str, ...]]] = {
     "GetVar": ("name",),
     "ArrayGet": ("name",),
+    "ArrayPop": ("name",),
+    "ArrayLength": ("name",),
     "DictGet": ("name",),
+    "DictKeys": ("name",),
 }
 
 

@@ -28,15 +28,17 @@ go onto the bus for the overlay and the debugger; the report goes back to the ca
 because it is too big for a bus that also carries audio levels and nobody but the
 caller wants all of it.
 
-Two things this module deliberately does not do. It does not evaluate expressions
-itself — :mod:`ayris.actions.macros.context` does, and task 32 replaces that half. And
-it does not play the sound bound to a block: nothing plays sounds yet, and when
-something does it will be an action like any other.
+Three things this module deliberately does not do. It does not evaluate expressions
+itself — :mod:`ayris.actions.macros.expressions` does. It does not implement the blocks
+that are not actions: :mod:`ayris.actions.macros.blocks` does, behind
+:class:`~ayris.actions.macros.blocks.BlockRuntime`, and what is left here is the walk
+those blocks run inside — the pool, the gate, the report, the budget. And it does not
+play the sound bound to a block: nothing plays sounds yet, and when something does it
+will be an action like any other.
 """
 
 from __future__ import annotations
 
-import json
 import threading
 import time
 import uuid
@@ -45,15 +47,14 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
+from ayris.actions.macros.blocks import BLOCK_HANDLERS, Flow, short
 from ayris.actions.macros.context import (
     ExecutionContext,
     MemoryVariables,
     RunInfo,
     TriggerSource,
-    format_value,
-    truthy,
 )
 from ayris.actions.macros.errors import (
     MacroBlockError,
@@ -76,7 +77,6 @@ from ayris.core.events import (
     MacroSkipped,
     MacroStarted,
 )
-from ayris.core.models import VariableScope
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -177,22 +177,6 @@ class ConcurrencyPolicy(StrEnum):
     PREEMPT = "preempt"
 
 
-class _Flow(StrEnum):
-    """What a block tells the walk above it to do next.
-
-    ``Break``, ``Continue`` and ``Return`` are returned rather than raised. Private
-    exceptions would read better in the walk, but every exception class in this project
-    is named ``...Error`` (ruff N818 says so, and it is right — an exception named
-    ``_Break`` reads like a failure in a traceback), and a control-flow signal that has
-    to be called an error to satisfy a linter is worse than a value.
-    """
-
-    NEXT = "next"
-    BREAK = "break"
-    CONTINUE = "continue"
-    RETURN = "return"
-
-
 @dataclass(slots=True)
 class MacroRun:
     """One run in flight: how to wait for it, and how to stop it.
@@ -255,18 +239,6 @@ def _run_id() -> str:
     return uuid.uuid4().hex[:12]
 
 
-def _matches(left: Any, right: Any) -> bool:
-    """Whether a ``Case`` value answers a ``Switch`` value.
-
-    Compared as values first and as text second, so ``50`` from a slot matches the
-    ``"50"`` a file spells, which is the same leniency
-    :func:`~ayris.actions.macros.context.substitute` gives everywhere else.
-    """
-    if left == right:
-        return True
-    return format_value(left) == format_value(right)
-
-
 class _Runner:
     """One command's tree, walked once, on one thread.
 
@@ -277,7 +249,13 @@ class _Runner:
     shared with another thread is :attr:`MacroRun.cancel`.
 
     A nested ``CallCommand`` builds a second runner over the same cancel event and the
-    same variable store, with its own context and its own report — see :meth:`_call`.
+    same variable store, with its own context and its own report — see :meth:`call`.
+
+    The blocks themselves are not here. This class is the
+    :class:`~ayris.actions.macros.blocks.BlockRuntime` the blocks of
+    :mod:`ayris.actions.macros.blocks` run behind: it satisfies that protocol
+    structurally, which is why the ``handler(self, ...)`` call in :meth:`_dispatch`
+    type-checks without either module importing the other's implementation.
     """
 
     __slots__ = ("_builder", "_command", "_context", "_engine", "_limits", "_run", "_value")
@@ -305,17 +283,53 @@ class _Runner:
         """What a ``Return`` block left behind, or ``None``. Goes into the report."""
         return self._value
 
-    def execute(self) -> _Flow:
+    @property
+    def context(self) -> ExecutionContext:
+        """The variables, slots and expression evaluator of this run."""
+        return self._context
+
+    @property
+    def report(self) -> ReportBuilder:
+        """Where a block writes down what it did, one record per block."""
+        return self._builder
+
+    @property
+    def limits(self) -> ExecutionLimits:
+        """The ceilings this run may not cross."""
+        return self._limits
+
+    @property
+    def reason(self) -> str:
+        """Why the run was stopped, when it was. What a cancellation message says."""
+        return self._run.reason
+
+    def execute(self) -> Flow:
         """Walk the command's top-level blocks. The whole run, in one call."""
         return self.walk(self._command.actions, "actions", 0)
 
-    def walk(self, blocks: Iterable[ActionBlock], prefix: str, depth: int) -> _Flow:
+    def walk(self, blocks: Iterable[ActionBlock], prefix: str, depth: int) -> Flow:
         """Run a list of blocks in order, stopping at the first one that redirects."""
         for index, block in enumerate(blocks):
-            flow = self._block(block, f"{prefix}[{index}]", depth)
-            if flow is not _Flow.NEXT:
+            flow = self.run_one(block, f"{prefix}[{index}]", depth)
+            if flow is not Flow.NEXT:
                 return flow
-        return _Flow.NEXT
+        return Flow.NEXT
+
+    def check(self) -> None:
+        """Ask whether the run may go on. The protocol's name for :meth:`_guard`."""
+        self._guard()
+
+    def pause(self, ms: int) -> bool:
+        """Sleep up to ``ms`` on the run's cancel event, answering whether it was set.
+
+        The event and not :func:`time.sleep`, so a stop word reaches a command waiting ten
+        seconds in the time it takes to schedule a thread.
+        """
+        return self._run.cancel.wait(ms / 1000)
+
+    def returned(self, value: Any) -> None:
+        """Remember what a ``Return`` block left for whoever called this command."""
+        self._value = value
 
     def _guard(self) -> None:
         """The three questions asked before every block: stopped, too long, too many.
@@ -333,14 +347,14 @@ class _Runner:
         if budget and self._builder.elapsed_ms > budget:
             raise MacroTimeoutError(self._limits.timeout_s)
 
-    def _block(self, block: ActionBlock, path: str, depth: int) -> _Flow:
+    def run_one(self, block: ActionBlock, path: str, depth: int) -> Flow:
         """Run one block: guard, record, dispatch, and decide what a failure means."""
         self._guard()
         if not block.enabled:
             self._builder.mark(
                 path, block.type, StepStatus.SKIPPED, depth=depth, message="выключен"
             )
-            return _Flow.NEXT
+            return Flow.NEXT
         if depth > self._limits.max_depth:
             raise MacroLimitError(
                 "depth", depth, user_message="Блоки команды вложены слишком глубоко."
@@ -353,14 +367,14 @@ class _Runner:
         except Exception as exc:
             return self._recover(block, path, exc)
 
-    def _dispatch(self, block: ActionBlock, path: str, depth: int) -> _Flow:
+    def _dispatch(self, block: ActionBlock, path: str, depth: int) -> Flow:
         """Hand the block to its handler, or to the registry when it has none."""
-        handler = _HANDLERS.get(block.type)
+        handler = BLOCK_HANDLERS.get(block.type)
         if handler is not None:
             return handler(self, block, path, depth)
         return self._action(block, path)
 
-    def _recover(self, block: ActionBlock, path: str, exc: Exception) -> _Flow:
+    def _recover(self, block: ActionBlock, path: str, exc: Exception) -> Flow:
         """What a broken block means for the chain: ``continue`` swallows, ``stop`` raises.
 
         Raises:
@@ -370,275 +384,11 @@ class _Runner:
         error = _as_block_error(block, path, exc)
         if block.on_error is OnError.CONTINUE:
             _log.warning("макрос %s: %s упал, продолжаю — %s", self._run.command, path, error)
-            return _Flow.NEXT
+            return Flow.NEXT
         _log.error("макрос %s: %s упал, останавливаю — %s", self._run.command, path, error)
         raise error
 
-    def _if(self, block: ActionBlock, path: str, depth: int) -> _Flow:
-        """``If``: evaluate the condition, run one branch, and record which one it was."""
-        taken = self._context.truth(block.params.get("condition", ""))
-        name = "then" if taken else "else"
-        self._builder.note(name)
-        branch = block.then if taken else block.else_
-        if not branch:
-            return _Flow.NEXT
-        return self.walk(branch, f"{path}.{name}", depth + 1)
-
-    def _switch(self, block: ActionBlock, path: str, depth: int) -> _Flow:
-        """``Switch``: run the first ``Case`` that matches, or ``Default``.
-
-        Every arm that is not chosen is recorded as skipped rather than left out of the
-        report: the debugger shows that the branch was considered and passed over, which
-        is exactly the question a user asks about a ``Switch`` that took the wrong turn.
-        That is why the loop runs to the end instead of stopping on the chosen arm — the
-        arms below it are as much a part of the answer as the arms above.
-        """
-        value = self._context.fill(block.params.get("value", ""))
-        chosen = self._arm(block, value)
-        self._builder.note(f"body[{chosen}]" if chosen >= 0 else "ни одна ветка не подошла")
-        flow = _Flow.NEXT
-        for index, arm in enumerate(block.body):
-            if index == chosen:
-                flow = self._block(arm, f"{path}.body[{index}]", depth + 1)
-                continue
-            self._builder.mark(
-                f"{path}.body[{index}]", arm.type, StepStatus.SKIPPED, depth=depth + 1
-            )
-        return flow
-
-    def _arm(self, block: ActionBlock, value: Any) -> int:
-        """Which arm of a ``Switch`` answers ``value``: a ``Case``, a ``Default``, or none."""
-        arms = tuple((index, arm) for index, arm in enumerate(block.body) if arm.enabled)
-        for index, arm in arms:
-            if arm.type == "Default":
-                continue
-            if _matches(self._context.fill(arm.params.get("value")), value):
-                return index
-        return next((index for index, arm in arms if arm.type == "Default"), -1)
-
-    def _case(self, block: ActionBlock, path: str, depth: int) -> _Flow:
-        """``Case`` and ``Default``: their body, once, when the ``Switch`` chose them."""
-        return self.walk(block.body, f"{path}.body", depth + 1)
-
-    def _while(self, block: ActionBlock, path: str, depth: int) -> _Flow:
-        """``While``: the body while the condition holds, and never more than the limit.
-
-        The limit is checked before the body and not after, so the error names the turn
-        that was refused. A block may lower the ceiling for itself but not raise it: a
-        hand-written ``max_iterations: 100000`` is the exact case the ceiling exists for.
-
-        Raises:
-            MacroLimitError: the condition was still true after the last allowed turn.
-        """
-        ceiling = self._limits.max_iterations
-        asked = _as_int(self._context.fill(block.params.get("max_iterations")), ceiling)
-        limit = min(asked, ceiling)
-        condition = block.params.get("condition", "")
-        turns = 0
-        while self._context.truth(condition):
-            if turns >= limit:
-                self._builder.note(f"{turns} итераций, предел")
-                raise MacroLimitError(
-                    "iterations",
-                    limit,
-                    user_message=f"Цикл в команде повторился {limit} раз и был остановлен.",
-                )
-            turns += 1
-            flow = self.walk(block.body, f"{path}.body", depth + 1)
-            if flow is _Flow.BREAK:
-                break
-            if flow is _Flow.RETURN:
-                self._builder.note(f"{turns} итераций, выход")
-                return flow
-            self._guard()
-        self._builder.note(f"{turns} итераций")
-        return _Flow.NEXT
-
-    def _for(self, block: ActionBlock, path: str, depth: int) -> _Flow:
-        """``For``: the body once per item, with the loop variable set on every turn.
-
-        The variable is an ordinary local, so a block after the loop still reads what the
-        last turn left in it — which is what a command counting attempts expects.
-
-        Raises:
-            MacroLimitError: the sequence is longer than the run may iterate.
-        """
-        name = format_value(self._context.fill(block.params.get("var", "item")))
-        values = self._sequence(block)
-        turns = 0
-        for value in values:
-            if turns >= self._limits.max_iterations:
-                raise MacroLimitError(
-                    "iterations",
-                    self._limits.max_iterations,
-                    user_message="Перебор в команде оказался слишком длинным.",
-                )
-            turns += 1
-            self._context.set(name, value)
-            flow = self.walk(block.body, f"{path}.body", depth + 1)
-            if flow is _Flow.BREAK:
-                break
-            if flow is _Flow.RETURN:
-                self._builder.note(f"{turns} итераций, выход")
-                return flow
-            self._guard()
-        self._builder.note(f"{turns} из {len(values)} итераций")
-        return _Flow.NEXT
-
-    def _sequence(self, block: ActionBlock) -> list[Any]:
-        """What a ``For`` walks: an explicit list, or an inclusive range of numbers.
-
-        Cut at one item past the iteration limit, so ``from: 1`` ``to: 1000000`` costs a
-        short list and a clear error instead of a gigabyte of integers nobody asked for.
-        """
-        cap = self._limits.max_iterations + 1
-        if "items" in block.params:
-            return _as_list(self._context.fill(block.params["items"]))[:cap]
-        start = _as_int(self._context.fill(block.params.get("from")))
-        stop = _as_int(self._context.fill(block.params.get("to")))
-        step = _as_int(self._context.fill(block.params.get("step")), 1) or 1
-        end = stop + 1 if step > 0 else stop - 1
-        return list(range(start, end, step)[:cap])
-
-    def _try(self, block: ActionBlock, path: str, depth: int) -> _Flow:
-        """``Try``: the body, and on a failure the ``catch`` branch with the error at hand.
-
-        Catches what a block's own ``on_error`` let through, including the failure of a
-        nested ``CallCommand``, and nothing else. A cancellation or a limit is not the
-        command's mistake to handle: a ``Try`` that swallowed the stop word would turn
-        the stop word into a suggestion.
-        """
-        name = format_value(self._context.fill(block.params.get("error_var", "error"))).strip()
-        try:
-            return self.walk(block.body, f"{path}.body", depth + 1)
-        except (MacroCancelledError, MacroLimitError):
-            raise
-        except Exception as exc:
-            text = _error_text(exc)
-            self._context.set(name or "error", text, VariableScope.LOCAL)
-            self._builder.note(f"поймано: {_short(text)}")
-            if not block.catch:
-                return _Flow.NEXT
-            return self.walk(block.catch, f"{path}.catch", depth + 1)
-
-    def _set_var(self, block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``SetVar``: fill the placeholders in the value, then write it where it belongs.
-
-        The value is substituted and not evaluated — ``{volume}`` becomes ``50``, and
-        ``{volume} + 10`` becomes the text ``50 + 10``. Arithmetic belongs to a condition,
-        which is the only place section 22 asks for it and the only place where refusing a
-        call or an attribute is enough to make evaluation safe.
-        """
-        name = self._name(block)
-        scope = _as_scope(block.params.get("scope"))
-        value = self._context.set(name, self._context.fill(block.params.get("value")), scope)
-        self._context.set_result(value)
-        self._builder.note(f"{name} = {_short(value)}")
-        return _Flow.NEXT
-
-    def _get_var(self, block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``GetVar``: read a variable into ``last_result``, and into ``into`` when given."""
-        name = self._name(block)
-        value = self._context.resolve(name)
-        self._store(block, value)
-        self._builder.note(f"{name} → {_short(value)}")
-        return _Flow.NEXT
-
-    def _array_push(self, block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``ArrayPush``: add one element, atomically for a shared array."""
-        name = self._name(block)
-        items = self._context.append(name, self._context.fill(block.params.get("value")))
-        self._context.set_result(items)
-        self._builder.note(f"{name}: {len(items)} элементов")
-        return _Flow.NEXT
-
-    def _array_get(self, block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``ArrayGet``: one element by index, negative indexes counted from the end."""
-        name = self._name(block)
-        index = _as_int(self._context.fill(block.params.get("index")))
-        value = _element(name, self._context.resolve(name), index)
-        self._store(block, value)
-        self._builder.note(f"{name}[{index}] → {_short(value)}")
-        return _Flow.NEXT
-
-    def _dict_set(self, block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``DictSet``: write one key, atomically for a shared dictionary."""
-        name = self._name(block)
-        key = format_value(self._context.fill(block.params.get("key", "")))
-        value = self._context.fill(block.params.get("value"))
-        self._context.set_result(self._context.put(name, key, value))
-        self._builder.note(f"{name}[{key}] = {_short(value)}")
-        return _Flow.NEXT
-
-    def _dict_get(self, block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``DictGet``: one key of a dictionary variable."""
-        name = self._name(block)
-        key = format_value(self._context.fill(block.params.get("key", "")))
-        value = _member(name, self._context.resolve(name), key)
-        self._store(block, value)
-        self._builder.note(f"{name}[{key}] → {_short(value)}")
-        return _Flow.NEXT
-
-    def _name(self, block: ActionBlock) -> str:
-        """The variable a block works on, placeholders filled.
-
-        Raises:
-            MacroBlockError: the block names no variable at all.
-        """
-        name = format_value(self._context.fill(block.params.get("name", ""))).strip()
-        if not name:
-            raise MacroBlockError(f"{block.type} without a variable name", block=block.type)
-        return name
-
-    def _store(self, block: ActionBlock, value: Any) -> None:
-        """Put what a reading block read into ``into``, when it names one, and last_result."""
-        into = format_value(self._context.fill(block.params.get("into", ""))).strip()
-        if into:
-            self._context.set(into, value)
-        self._context.set_result(value)
-
-    def _wait(self, block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``Wait`` and ``Sleep``: pause on the cancel event, never in :func:`time.sleep`.
-
-        Sleeping *on* the event is the whole reason a stop word reaches a command waiting
-        ten seconds in the time it takes to schedule a thread. The pause is also cut down
-        to whatever is left of the run's budget, so one ``Wait`` cannot outlive the
-        timeout that bounds the run around it.
-
-        Raises:
-            MacroCancelledError: the event was set while this block was waiting.
-            MacroLimitError: the block asks for a longer pause than one block may take.
-            MacroTimeoutError: the budget ran out inside the pause.
-        """
-        asked = _as_int(self._context.fill(block.params.get("ms")))
-        if asked > self._limits.max_wait_ms:
-            raise MacroLimitError("wait_ms", asked, user_message="Пауза в команде слишком длинная.")
-        budget = self._limits.budget_ms
-        left = budget - self._builder.elapsed_ms if budget else asked
-        pause = max(0, min(asked, left))
-        self._builder.note(f"{pause} мс")
-        if self._run.cancel.wait(pause / 1000):
-            raise MacroCancelledError(self._run.reason)
-        if pause < asked:
-            raise MacroTimeoutError(self._limits.timeout_s)
-        return _Flow.NEXT
-
-    def _return(self, block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``Return``: end the command here, with a value for whoever called it."""
-        self._value = self._context.fill(block.params.get("value"))
-        self._context.set_result(self._value)
-        self._builder.note(_short(self._value))
-        return _Flow.RETURN
-
-    def _break(self, _block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``Break``: leave the loop this block sits in."""
-        return _Flow.BREAK
-
-    def _continue(self, _block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``Continue``: go on to the next turn of the loop this block sits in."""
-        return _Flow.CONTINUE
-
-    def _action(self, block: ActionBlock, path: str) -> _Flow:
+    def _action(self, block: ActionBlock, path: str) -> Flow:
         """One action block: the registry runs it, and its result becomes ``last_result``.
 
         Invariant 5 in one method. The interpreter knows an action's name and its
@@ -663,7 +413,7 @@ class _Runner:
             command_id=self._run.command_id,
         )
         self._context.set_result(result.value, action=result)
-        self._builder.note(result.message_ru or _short(result.value))
+        self._builder.note(result.message_ru or short(result.value))
         if not result.ok:
             raise MacroBlockError(
                 result.detail or f"action {block.type} refused",
@@ -671,41 +421,39 @@ class _Runner:
                 block=block.type,
                 user_message=result.message_ru or None,
             )
-        return _Flow.NEXT
+        return Flow.NEXT
 
-    def _call(self, block: ActionBlock, _path: str, _depth: int) -> _Flow:
-        """``CallCommand``: another command, run inline when this one waits for it.
+    def call(self, name: str, args: Mapping[str, Any], *, wait: bool) -> None:
+        """``CallCommand``, the half only the engine can do: find the command and run it.
 
-        Inline and on this thread on purpose. A nested run handed to the pool would
-        deadlock the first time the policy is ``queue`` — the caller holding a worker while
-        it waits for a run that is waiting for the caller — and would cost a second worker
-        for nothing, because the caller has no work to do meanwhile. What the nested run
-        shares is this run's cancel event, so one stop word stops the whole stack; what it
-        gets of its own is a context, a report and its own pair of events, so the history
-        shows two commands and not one.
+        Inline and on this thread when the caller waits, on purpose. A nested run handed to
+        the pool would deadlock the first time the policy is ``queue`` — the caller holding
+        a worker while it waits for a run that is waiting for the caller — and would cost a
+        second worker for nothing, because the caller has no work to do meanwhile. What the
+        nested run shares is this run's cancel event, so one stop word stops the whole
+        stack; what it gets of its own is a context, a report and its own pair of events, so
+        the history shows two commands and not one.
 
         ``wait: false`` is the other half: the call goes to the engine as an independent
-        run, and this block is finished as soon as that run has been scheduled.
+        run, and the block is finished as soon as that run has been scheduled.
 
         Raises:
             MacroCallError: no such command, or the command is switched off.
         """
-        name = format_value(self._context.fill(block.params.get("command", ""))).strip()
         target = self._engine.find(name)
         if target is None:
             raise MacroCallError(name)
         if not target.enabled:
             raise MacroCallError(name, f"command {name!r} is switched off")
-        args = _as_dict(self._context.fill(block.params.get("args")))
-        if truthy(self._context.fill(block.params.get("wait", True))):
-            return self._nested(target, args)
+        if wait:
+            self._nested(target, args)
+            return
         started = self._engine.start(
             target, slots=args, trigger=TriggerSource.CALL, request_id=self._run.request_id
         )
         self._builder.note(f"«{name}» запущена отдельно: {started.run_id}")
-        return _Flow.NEXT
 
-    def _nested(self, target: CommandModel, args: Mapping[str, Any]) -> _Flow:
+    def _nested(self, target: CommandModel, args: Mapping[str, Any]) -> None:
         """Run a called command here and now, and fold its report into this one.
 
         The called command gets the arguments as its slots: a command reads what it was
@@ -750,7 +498,6 @@ class _Runner:
             raise MacroCancelledError(self._run.reason)
         if report.error is not None:
             raise report.error
-        return _Flow.NEXT
 
 
 def _as_block_error(block: ActionBlock, path: str, exc: Exception) -> MacroRuntimeError:
@@ -774,23 +521,6 @@ def _as_block_error(block: ActionBlock, path: str, exc: Exception) -> MacroRunti
     )
 
 
-def _error_text(exc: Exception) -> str:
-    """What a ``Try`` writes into its error variable: the Russian line where there is one.
-
-    Where there is not, it is the technical text and not the polite default: a ``Catch``
-    branch that shows «Шаг команды не выполнился» tells the person who wrote the command
-    nothing at all, while «нет доступа» tells them what to fix.
-    """
-    if isinstance(exc, MacroBlockError):
-        if isinstance(exc.cause, AyrisError):
-            return exc.cause.user_message
-        if exc.cause is not None:
-            return exc.technical
-    if isinstance(exc, AyrisError):
-        return exc.user_message
-    return str(exc) or type(exc).__name__
-
-
 def _as_macro_error(exc: AyrisError) -> MacroError:
     """Any Ayris failure as the macro failure a report can carry."""
     if isinstance(exc, MacroError):
@@ -798,159 +528,6 @@ def _as_macro_error(exc: AyrisError) -> MacroError:
     return MacroRuntimeError(
         exc.technical, user_message=exc.user_message, recoverable=exc.recoverable
     )
-
-
-def _short(value: object, limit: int = 60) -> str:
-    """A value as one short piece of text, for a step's message and for a log line."""
-    text = format_value(value).replace("\n", " ")
-    return text if len(text) <= limit else f"{text[: limit - 3]}..."
-
-
-def _as_int(value: Any, default: int = 0) -> int:
-    """A block parameter as a whole number: ``50``, ``"50"``, ``50.0``, or nothing at all.
-
-    Raises:
-        MacroBlockError: the parameter is there and is not a number.
-    """
-    if value is None or value == "":
-        return default
-    if isinstance(value, bool):
-        return int(value)
-    if isinstance(value, int | float):
-        return int(value)
-    try:
-        return int(float(format_value(value).strip().replace(",", ".")))
-    except ValueError as exc:
-        raise MacroBlockError(
-            f"expected a whole number, got {value!r}",
-            user_message=f"Ожидалось число, а не «{_short(value)}».",
-            cause=exc,
-        ) from exc
-
-
-def _as_list(value: Any) -> list[Any]:
-    """What a ``For`` walks when it was given ``items``.
-
-    A list is itself, a mapping is its keys, and text is either the JSON it looks like or
-    the comma-separated line a person types into the editor.
-    """
-    if isinstance(value, list):
-        return value
-    if isinstance(value, tuple):
-        return list(value)
-    if isinstance(value, Mapping):
-        return list(value)
-    if isinstance(value, str):
-        return _split_items(value)
-    return [] if value is None else [value]
-
-
-def _split_items(text: str) -> list[Any]:
-    """A line of items as a list: JSON when it is JSON, comma-separated otherwise."""
-    stripped = text.strip()
-    if not stripped:
-        return []
-    if not stripped.startswith("["):
-        return [part.strip() for part in stripped.split(",") if part.strip()]
-    try:
-        loaded = json.loads(stripped)
-    except ValueError as exc:
-        raise MacroBlockError(f"items is not a list: {stripped!r}", cause=exc) from exc
-    return loaded if isinstance(loaded, list) else [loaded]
-
-
-def _as_dict(value: Any) -> dict[str, Any]:
-    """A ``CallCommand`` argument bundle as a dictionary of names to values.
-
-    A mapping is taken as it is and anything else — the absent parameter included — as no
-    arguments at all: a called command reads what it was given the way it reads slots, and
-    a slot set has names.
-    """
-    if isinstance(value, Mapping):
-        return {format_value(key): item for key, item in value.items()}
-    return {}
-
-
-def _as_scope(value: Any) -> VariableScope | None:
-    """A ``scope`` parameter as a scope, or ``None`` when the block does not say.
-
-    Raises:
-        MacroBlockError: the block names a scope that does not exist.
-    """
-    if value is None or value == "":
-        return None
-    if isinstance(value, VariableScope):
-        return value
-    text = format_value(value).strip().lower()
-    try:
-        return VariableScope(text)
-    except ValueError as exc:
-        raise MacroBlockError(
-            f"unknown variable scope {text!r}",
-            user_message=f"Неизвестная область видимости переменной: {text}.",
-        ) from exc
-
-
-def _element(name: str, items: Any, index: int) -> Any:
-    """One element of an array variable, or a failure that names the index.
-
-    Raises:
-        MacroBlockError: the variable is not an array, or the index is outside it.
-    """
-    if not isinstance(items, list | tuple):
-        raise MacroBlockError(
-            f"{name!r} is not an array", user_message=f"Переменная {name} — не массив."
-        )
-    if -len(items) <= index < len(items):
-        return items[index]
-    raise MacroBlockError(
-        f"index {index} is outside {name!r} of {len(items)}",
-        user_message=f"В массиве {name} нет элемента с номером {index}.",
-    )
-
-
-def _member(name: str, mapping: Any, key: str) -> Any:
-    """One key of a dictionary variable, or a failure that names the key.
-
-    Raises:
-        MacroBlockError: the variable is not a dictionary, or it has no such key.
-    """
-    if not isinstance(mapping, Mapping):
-        raise MacroBlockError(
-            f"{name!r} is not a dictionary", user_message=f"Переменная {name} — не словарь."
-        )
-    if key in mapping:
-        return mapping[key]
-    raise MacroBlockError(
-        f"{name!r} has no key {key!r}", user_message=f"В словаре {name} нет ключа «{key}»."
-    )
-
-
-#: Which method runs which block. A table and not a chain of ``elif`` for one reason: the
-#: keys have to be exactly :data:`~ayris.actions.macros.schema.LOGIC_BLOCKS`, and a table
-#: can be compared with it — the test does, so a block added to the language without a
-#: handler fails a test instead of being quietly treated as the name of an action.
-_HANDLERS: Final[dict[str, Callable[[_Runner, ActionBlock, str, int], _Flow]]] = {
-    "If": _Runner._if,
-    "Switch": _Runner._switch,
-    "Case": _Runner._case,
-    "Default": _Runner._case,
-    "While": _Runner._while,
-    "For": _Runner._for,
-    "Try": _Runner._try,
-    "SetVar": _Runner._set_var,
-    "GetVar": _Runner._get_var,
-    "ArrayPush": _Runner._array_push,
-    "ArrayGet": _Runner._array_get,
-    "DictSet": _Runner._dict_set,
-    "DictGet": _Runner._dict_get,
-    "Wait": _Runner._wait,
-    "Sleep": _Runner._wait,
-    "CallCommand": _Runner._call,
-    "Return": _Runner._return,
-    "Break": _Runner._break,
-    "Continue": _Runner._continue,
-}
 
 
 def _ended_event(report: ExecutionReport) -> MacroEnded:
@@ -1201,6 +778,10 @@ class MacroEngine:
         uses directly: it takes the context and the limits it is given instead of making
         its own, so a called command inherits what is left of the caller's budget rather
         than starting a fresh minute.
+
+        The variable store is flushed once here, when the walk is over — not on every
+        ``SetVar``. A ``While`` that counts to a thousand in a ``persistent`` variable would
+        otherwise be a thousand writes to SQLite for one number nobody read in between.
         """
         builder = ReportBuilder(
             run_id=run.run_id,
@@ -1220,7 +801,7 @@ class MacroEngine:
             )
         )
         report = self._walk(run, command, context, builder, limits or self._limits)
-        run.report = report
+        self._store.flush()
         _log.info(
             "макрос «%s»: %s, %d шагов за %d мс",
             command.name,
@@ -1228,7 +809,12 @@ class MacroEngine:
             len(report.steps),
             report.duration_ms,
         )
+        # The event goes out before the report is published to whoever is waiting.
+        # ``MacroRun.wait`` returns the moment :attr:`MacroRun.report` is set, so the other
+        # order lets a caller act on a finished run before the bus has heard it ended — and
+        # a subscriber that redraws on the event would be a redraw behind.
         self._publish(_ended_event(report))
+        run.report = report
         return report
 
     def _walk(

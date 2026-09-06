@@ -538,8 +538,11 @@ def _logic_blocks() -> dict[str, LogicBlockSpec]:
         LogicBlockSpec("GetVar", required_params=("name",), optional_params=("into",)),
         LogicBlockSpec("ArrayPush", required_params=("name", "value")),
         LogicBlockSpec("ArrayGet", required_params=("name", "index"), optional_params=("into",)),
+        LogicBlockSpec("ArrayPop", required_params=("name",), optional_params=("index", "into")),
+        LogicBlockSpec("ArrayLength", required_params=("name",), optional_params=("into",)),
         LogicBlockSpec("DictSet", required_params=("name", "key", "value")),
         LogicBlockSpec("DictGet", required_params=("name", "key"), optional_params=("into",)),
+        LogicBlockSpec("DictKeys", required_params=("name",), optional_params=("into",)),
         LogicBlockSpec("Wait", required_params=("ms",)),
         LogicBlockSpec("Sleep", required_params=("ms",)),
         LogicBlockSpec(

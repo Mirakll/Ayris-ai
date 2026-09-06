@@ -49,13 +49,9 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from ayris.actions.macros.blocks import BLOCK_HANDLERS
 from ayris.actions.macros.context import MISSING, MemoryVariables, TriggerSource
-from ayris.actions.macros.engine import (
-    _HANDLERS,
-    ConcurrencyPolicy,
-    ExecutionLimits,
-    MacroEngine,
-)
+from ayris.actions.macros.engine import ConcurrencyPolicy, ExecutionLimits, MacroEngine
 from ayris.actions.macros.errors import (
     MacroBlockError,
     MacroCallError,
@@ -333,7 +329,7 @@ class TestBlocks:
         Otherwise it would be treated as the name of an action, and the user would be told
         that ``Repeat`` is not connected instead of that it is not implemented.
         """
-        assert set(_HANDLERS) == set(LOGIC_BLOCKS)
+        assert set(BLOCK_HANDLERS) == set(LOGIC_BLOCKS)
 
     def test_set_var_writes_to_the_scope_the_block_names(self, engine) -> None:
         report = engine.run(

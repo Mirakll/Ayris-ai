@@ -29,6 +29,7 @@ __all__ = [
     "MacroCancelledError",
     "MacroEngineStoppedError",
     "MacroExpressionError",
+    "MacroIndexError",
     "MacroLimitError",
     "MacroReferenceError",
     "MacroRuntimeError",
@@ -127,6 +128,27 @@ class MacroValueError(MacroRuntimeError):
         self.name = name
         self.value = value
         self.expected = expected
+
+
+class MacroIndexError(MacroRuntimeError):
+    """An array is read or emptied past its end.
+
+    Separate from :class:`MacroValueError` because the value is fine and the type is
+    fine: there simply is no fifth element. ``ArrayPop`` on an empty array and
+    ``ArrayGet`` with an index nobody checked are the two ways to get here, and both
+    deserve to say how long the array actually was.
+    """
+
+    default_user_message = "В списке нет такого элемента."
+
+    def __init__(self, name: str, index: object, length: int) -> None:
+        super().__init__(
+            f"index {index!r} is outside {name!r} of length {length}",
+            user_message=f"В списке {name} нет элемента {index} (длина {length}).",
+        )
+        self.name = name
+        self.index = index
+        self.length = length
 
 
 class MacroLimitError(MacroRuntimeError):
