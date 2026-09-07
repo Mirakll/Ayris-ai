@@ -51,6 +51,7 @@ import json
 import logging
 import sys
 import threading
+import types
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -71,6 +72,7 @@ from ayris.actions.system.app_index import (
     AppNotFound,
     IndexedApp,
     IndexSource,
+    _scan_uwp,
     dedupe,
     get_app_index,
     link_catalog,
@@ -1245,3 +1247,33 @@ class TestScanner:
         found = scan_installed(limit=200)
         keys = [app.dedupe_key for app in found]
         assert len(keys) == len(set(keys))
+
+    def test_a_broken_comtypes_cache_costs_the_store_apps_and_nothing_else(
+        self, monkeypatch: pytest.MonkeyPatch, ayris_log: pytest.LogCaptureFixture
+    ) -> None:
+        """The regression CI found: two workers generating one type library at once.
+
+        ``comtypes`` answers ``CreateObject`` by writing a python module for the type
+        library into ``site-packages`` and importing it. Under ``pytest -n`` on a machine
+        where nothing has asked yet, two processes ask at the same time and one imports
+        the half-written file — a ``SyntaxError`` out of the middle of a scan. The scan
+        has four other sources, so this is a warning and an empty half, not a red run.
+        """
+        fake = types.ModuleType("comtypes")
+        client = types.ModuleType("comtypes.client")
+        broken = SyntaxError("unmatched ')'")
+
+        def raise_broken(_moniker: str) -> object:
+            raise broken
+
+        monkeypatch.setattr(fake, "CoInitialize", lambda: None, raising=False)
+        monkeypatch.setattr(fake, "CoUninitialize", lambda: None, raising=False)
+        monkeypatch.setattr(client, "CreateObject", raise_broken, raising=False)
+        monkeypatch.setattr(fake, "client", client, raising=False)
+        monkeypatch.setitem(sys.modules, "comtypes", fake)
+        monkeypatch.setitem(sys.modules, "comtypes.client", client)
+
+        assert list(_scan_uwp()) == []
+        assert any(
+            "приложения Store не перечислены" in entry.message for entry in ayris_log.records
+        )

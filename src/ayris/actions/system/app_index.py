@@ -725,9 +725,21 @@ def _scan_path() -> Iterator[IndexedApp]:
 
 #: What enumerating Store applications can fail with. COM refusing is one half;
 #: the other is the shell handing back something without the properties this code
-#: reads. A constant rather than a starred tuple in place because ``mypy`` does
-#: not accept the latter in an ``except``.
-_UWP_ERRORS: Final[tuple[type[Exception], ...]] = (*COM_ERRORS, AttributeError, ValueError)
+#: reads. ``ImportError`` and ``SyntaxError`` are the third: ``comtypes`` answers
+#: ``CreateObject`` by generating a python module for the type library and
+#: importing it, and that module is written into ``site-packages`` the first time
+#: anything asks. Two processes asking at once — pytest under ``-n`` on a machine
+#: where nothing has asked yet — means one of them imports a half-written file.
+#: The scan has four other sources and a machine without Store apps is normal, so
+#: this is a warning, not a failure. A constant rather than a starred tuple in
+#: place because ``mypy`` does not accept the latter in an ``except``.
+_UWP_ERRORS: Final[tuple[type[Exception], ...]] = (
+    *COM_ERRORS,
+    AttributeError,
+    ImportError,
+    SyntaxError,
+    ValueError,
+)
 
 
 def _scan_uwp() -> Iterator[IndexedApp]:
