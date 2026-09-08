@@ -331,6 +331,10 @@ class _Runner:
         """Remember what a ``Return`` block left for whoever called this command."""
         self._value = value
 
+    def publish(self, event: object) -> None:
+        """Publish an event through the engine's guarded bus boundary."""
+        self._engine._publish(event)  # type: ignore[arg-type]
+
     def _guard(self) -> None:
         """The three questions asked before every block: stopped, too long, too many.
 

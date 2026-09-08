@@ -543,8 +543,11 @@ def _logic_blocks() -> dict[str, LogicBlockSpec]:
         LogicBlockSpec("DictSet", required_params=("name", "key", "value")),
         LogicBlockSpec("DictGet", required_params=("name", "key"), optional_params=("into",)),
         LogicBlockSpec("DictKeys", required_params=("name",), optional_params=("into",)),
-        LogicBlockSpec("Wait", required_params=("ms",)),
-        LogicBlockSpec("Sleep", required_params=("ms",)),
+        LogicBlockSpec(
+            "Wait",
+            optional_params=("ms", "seconds", "condition", "timeout_ms", "poll_ms"),
+        ),
+        LogicBlockSpec("Sleep", optional_params=("ms", "seconds")),
         LogicBlockSpec(
             "CallCommand",
             required_params=("command",),
@@ -554,6 +557,26 @@ def _logic_blocks() -> dict[str, LogicBlockSpec]:
         LogicBlockSpec("Return", optional_params=("value",)),
         LogicBlockSpec("Break"),
         LogicBlockSpec("Continue"),
+        LogicBlockSpec(
+            "WebRequest",
+            required_params=("url",),
+            optional_params=(
+                "method",
+                "headers",
+                "body",
+                "timeout_ms",
+                "json",
+                "json_path",
+                "into",
+                "max_bytes",
+            ),
+        ),
+        LogicBlockSpec(
+            "ToastNotify",
+            required_params=("title",),
+            optional_params=("message", "icon", "action", "level", "timeout_ms"),
+        ),
+        LogicBlockSpec("OverlayLog", required_params=("message",), optional_params=("level",)),
     )
     return {spec.name: spec for spec in specs}
 
@@ -575,9 +598,6 @@ DECLARED_BLOCKS: Final[frozenset[str]] = frozenset(
         "SetTTSVoice",
         "SetBrightness",
         "RunShell",
-        "WebRequest",
-        "ToastNotify",
-        "OverlayLog",
     }
 )
 

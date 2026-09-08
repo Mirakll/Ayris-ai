@@ -31,6 +31,7 @@ from ayris.actions.macros.blocks.logic import (
     short,
     split_items,
 )
+from ayris.actions.macros.blocks.notify import NOTIFY_HANDLERS
 from ayris.actions.macros.blocks.variables import (
     VARIABLE_HANDLERS,
     as_scope,
@@ -39,11 +40,14 @@ from ayris.actions.macros.blocks.variables import (
     store_read,
     variable_name,
 )
+from ayris.actions.macros.blocks.web import WEB_HANDLERS
 
 __all__ = [
     "BLOCK_HANDLERS",
     "LOGIC_HANDLERS",
+    "NOTIFY_HANDLERS",
     "VARIABLE_HANDLERS",
+    "WEB_HANDLERS",
     "BlockHandler",
     "BlockRuntime",
     "Flow",
@@ -65,4 +69,9 @@ __all__ = [
 #: Which function runs which block. A table and not a chain of ``elif`` for one reason: the
 #: keys have to be exactly :data:`~ayris.actions.macros.schema.LOGIC_BLOCKS`, and a table
 #: can be compared with it.
-BLOCK_HANDLERS: Final[dict[str, BlockHandler]] = {**LOGIC_HANDLERS, **VARIABLE_HANDLERS}
+BLOCK_HANDLERS: Final[dict[str, BlockHandler]] = {
+    **LOGIC_HANDLERS,
+    **VARIABLE_HANDLERS,
+    **WEB_HANDLERS,
+    **NOTIFY_HANDLERS,
+}

@@ -153,6 +153,10 @@ class BlockRuntime(Protocol):
         """Remember the value a ``Return`` block leaves for whoever called the command."""
         ...
 
+    def publish(self, event: object) -> None:
+        """Publish a UI-facing event without exposing the bus itself."""
+        ...
+
 
 #: One block's implementation: the runtime, the block, where it sits in the tree, and how
 #: deep. The path and the depth are passed rather than tracked because a block that runs a
@@ -427,7 +431,51 @@ def run_wait(rt: BlockRuntime, block: ActionBlock, _path: str, _depth: int) -> F
         MacroLimitError: the block asks for a longer pause than one block may take.
         MacroTimeoutError: the budget ran out inside the pause.
     """
-    asked = as_int(rt.context.fill(block.params.get("ms")))
+    condition = block.params.get("condition")
+    if condition not in (None, ""):
+        timeout = as_int(rt.context.fill(block.params.get("timeout_ms")), 30_000)
+        poll = as_int(rt.context.fill(block.params.get("poll_ms")), 50)
+        if timeout < 0 or poll <= 0:
+            raise MacroBlockError(
+                "invalid conditional wait interval",
+                user_message="Таймаут ожидания не может быть отрицательным, а шаг — нулевым.",
+            )
+        if timeout > rt.limits.max_wait_ms:
+            raise MacroLimitError(
+                "wait_ms", timeout, user_message="Пауза в команде слишком длинная."
+            )
+        elapsed = 0
+        while not rt.context.truth(condition):
+            if elapsed >= timeout:
+                raise MacroTimeoutError(timeout / 1000)
+            delay = min(poll, timeout - elapsed)
+            if rt.pause(delay):
+                raise MacroCancelledError(rt.reason)
+            elapsed += delay
+            rt.check()
+        rt.report.note(f"условие выполнено за {elapsed} мс")
+        return Flow.NEXT
+
+    milliseconds = block.params.get("ms")
+    seconds = block.params.get("seconds")
+    if milliseconds in (None, "") and seconds in (None, ""):
+        raise MacroBlockError(
+            "wait has no duration or condition",
+            user_message="Укажите длительность или условие ожидания.",
+        )
+    asked = as_int(rt.context.fill(milliseconds))
+    if milliseconds in (None, ""):
+        raw_seconds = rt.context.fill(seconds)
+        try:
+            asked = int(float(format_value(raw_seconds).replace(",", ".")) * 1000)
+        except ValueError as exc:
+            raise MacroBlockError(
+                f"expected seconds, got {raw_seconds!r}",
+                user_message="Длительность ожидания должна быть числом.",
+                cause=exc,
+            ) from exc
+    if asked < 0:
+        raise MacroBlockError("negative wait", user_message="Пауза не может быть отрицательной.")
     if asked > rt.limits.max_wait_ms:
         raise MacroLimitError("wait_ms", asked, user_message="Пауза в команде слишком длинная.")
     budget = rt.limits.budget_ms

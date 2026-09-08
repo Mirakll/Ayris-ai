@@ -656,6 +656,8 @@ class NotificationRequested(Event):
     message: str = ""
     level: str = "info"
     timeout_ms: int = 5000
+    icon: str = ""
+    action: str = ""
 
 
 @dataclass(frozen=True, slots=True)
