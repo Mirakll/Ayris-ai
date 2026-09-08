@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "sounds": [
+    {"id": "start", "name": "Запуск", "file": "start.wav", "duration_ms": 260, "category": "Команды"},
+    {"id": "success", "name": "Успех", "file": "success.wav", "duration_ms": 360, "category": "Команды"},
+    {"id": "error", "name": "Ошибка", "file": "error.wav", "duration_ms": 420, "category": "Команды"},
+    {"id": "cancel", "name": "Отмена", "file": "cancel.wav", "duration_ms": 300, "category": "Команды"},
+    {"id": "timer", "name": "Таймер", "file": "timer.wav", "duration_ms": 520, "category": "Системные"},
+    {"id": "volume_changed", "name": "Громкость изменена", "file": "volume_changed.wav", "duration_ms": 280, "category": "Системные"},
+    {"id": "wake_word", "name": "Активация Айрис", "file": "wake_word.wav", "duration_ms": 400, "category": "Активация"}
+  ]
+}

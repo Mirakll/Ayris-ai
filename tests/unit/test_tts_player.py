@@ -868,6 +868,35 @@ class TestVolume:
         wait_for_finish(observer, "req-1")
         assert peak(backend.written) == pytest.approx(4000, abs=2)
 
+    def test_request_gain_is_independent_from_tts_volume(
+        self, player: TtsPlayer, backend: FakeBackend, observer: Observer
+    ):
+        player.set_volume(0.1)
+        request = speech("sound", ms=40, level=8000)
+        request.gain = 0.5
+        player.speak(request)
+        wait_for_finish(observer, "sound")
+        assert peak(backend.written) == pytest.approx(4000, abs=2)
+
+    def test_mixable_requests_are_summed_in_the_same_output_block(
+        self, player: TtsPlayer, backend: FakeBackend, observer: Observer
+    ):
+        backend.start_blocked = True
+        player.speak(speech("speech", ms=60, level=1000))
+        wait_for_speaking(backend)
+        player.speak(
+            SpeechRequest(
+                text="sound",
+                chunks=(AudioChunk(tone(40, level=2000), DEVICE_RATE),),
+                request_id="sound",
+                gain=1.0,
+                mix=True,
+            )
+        )
+        backend.release()
+        wait_for_finish(observer, "speech")
+        assert any(peak(block) == 3000 for block in backend.stream.writes)
+
     def test_zero_volume_is_silence_not_a_skipped_phrase(
         self, player: TtsPlayer, backend: FakeBackend, observer: Observer
     ):

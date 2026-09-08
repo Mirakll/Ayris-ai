@@ -45,7 +45,13 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 from uuid import uuid4
 
-from ayris.audio.tts.base import DEFAULT_PITCH, DEFAULT_SPEED, clamp_pitch, clamp_speed
+from ayris.audio.tts.base import (
+    DEFAULT_PITCH,
+    DEFAULT_SPEED,
+    clamp_pitch,
+    clamp_speed,
+    concat_chunks,
+)
 from ayris.audio.tts.cloud_base import TtsAuthError, TtsQuotaError, is_cloud_engine
 from ayris.audio.tts.player import PlaybackReason, SpeechRequest
 from ayris.audio.tts.sentence_split import is_speakable, split_sentences
@@ -648,6 +654,19 @@ class TtsRouter:
         with self._lock:
             items = tuple(self._history)
         return items[-limit:] if limit > 0 else items
+
+    def synthesize(self, text: str, *, params: VoiceParams | None = None) -> AudioChunk:
+        """Synthesize without playback, for cached sounds that share this router."""
+        wanted = params or self._params
+        request = SpeechRequest(text=text, request_id=uuid4().hex)
+        handle = SpeechHandle(request.request_id, text)
+        chunks = list(self._speech(request, handle, wanted))
+        if not chunks:
+            raise TtsError(
+                "tts router produced no audio",
+                user_message="Синтез речи не вернул звук.",
+            )
+        return concat_chunks(chunks)
 
     # ----------------------------------------------------------------- routing
 

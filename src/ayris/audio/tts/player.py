@@ -42,6 +42,7 @@ Everything here talks to PortAudio through :class:`PlaybackBackend` from
 from __future__ import annotations
 
 import threading
+from array import array
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
@@ -129,6 +130,11 @@ class SpeechRequest:
     engine: str = ""
     priority: bool = False
     duration_estimate_ms: int = 0
+    gain: float | None = None
+    mix: bool = False
+    defer_while_speaking: bool = False
+    duck_gain: float = 1.0
+    on_finished: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +188,15 @@ class _Stream:
         return self.resampler
 
 
+@dataclass(slots=True)
+class _MixVoice:
+    """One materialised sound currently mixed into the output stream."""
+
+    request: SpeechRequest
+    pcm: bytes
+    offset: int = 0
+
+
 def _ignore_started(_request: SpeechRequest, _duration_ms: int) -> None:
     """Default :attr:`TtsPlayer` start callback."""
 
@@ -216,9 +231,12 @@ class TtsPlayer:
     __slots__ = (
         "_backend",
         "_cancel",
+        "_cancelled_mix",
         "_condition",
         "_current",
         "_device_spec",
+        "_mix_voices",
+        "_mixed",
         "_normal",
         "_on_finished",
         "_on_started",
@@ -247,6 +265,9 @@ class TtsPlayer:
         self._condition = threading.Condition()
         self._normal: deque[SpeechRequest] = deque()
         self._urgent: deque[SpeechRequest] = deque()
+        self._mixed: deque[SpeechRequest] = deque()
+        self._mix_voices: list[_MixVoice] = []
+        self._cancelled_mix: set[str] = set()
         self._current: SpeechRequest | None = None
         self._cancel = threading.Event()
         self._running = False
@@ -271,7 +292,7 @@ class TtsPlayer:
     def queued(self) -> int:
         """Phrases waiting to be spoken."""
         with self._condition:
-            return len(self._normal) + len(self._urgent)
+            return len(self._normal) + len(self._urgent) + len(self._mixed)
 
     @property
     def running(self) -> bool:
@@ -328,7 +349,10 @@ class TtsPlayer:
         if not self._running:
             self.start()
         with self._condition:
-            queue = self._urgent if request.priority else self._normal
+            if request.mix:
+                queue = self._mixed
+            else:
+                queue = self._urgent if request.priority else self._normal
             queue.append(request)
             self._condition.notify_all()
 
@@ -350,10 +374,23 @@ class TtsPlayer:
         """
         with self._condition:
             current = self._current
+            if (
+                request_id
+                and current is not None
+                and current.mix
+                and current.request_id == request_id
+            ):
+                self._cancel.set()
+                return True
+            if request_id and any(
+                voice.request.request_id == request_id for voice in self._mix_voices
+            ):
+                self._cancelled_mix.add(request_id)
+                return True
             if request_id and (current is None or current.request_id != request_id):
                 dropped = self._drop_locked(request_id)
                 return dropped > 0
-            pending = len(self._normal) + len(self._urgent)
+            pending = len(self._normal) + len(self._urgent) + len(self._mixed)
             self._clear_locked()
             speaking = current is not None
         if speaking:
@@ -403,7 +440,7 @@ class TtsPlayer:
         with self._condition:
             stream = self._stream
             return PlayerStats(
-                queued=len(self._normal) + len(self._urgent),
+                queued=len(self._normal) + len(self._urgent) + len(self._mixed),
                 speaking=self._current is not None,
                 played=self._stats.played,
                 cancelled=self._stats.cancelled,
@@ -423,6 +460,7 @@ class TtsPlayer:
                 break
             reason = self._play(request)
             self._finish(request, reason)
+            self._drain_mix_voices()
         self._close_stream()
 
     def _next_request(self) -> SpeechRequest | None:
@@ -433,12 +471,12 @@ class TtsPlayer:
             first, then in arrival order.
         """
         with self._condition:
-            while self._running and not self._urgent and not self._normal:
+            while self._running and not self._urgent and not self._normal and not self._mixed:
                 self._condition.wait(_IDLE_WAIT_S)
             if not self._running:
                 self._current = None
                 return None
-            queue = self._urgent if self._urgent else self._normal
+            queue = self._urgent if self._urgent else self._normal if self._normal else self._mixed
             request = queue.popleft()
             self._current = request
             self._cancel.clear()
@@ -465,7 +503,7 @@ class TtsPlayer:
                 if not started:
                     started = True
                     self._announce(request, chunk)
-                if not self._write_chunk(chunk):
+                if not self._write_chunk(chunk, request):
                     return PlaybackReason.CANCELLED
         except AudioError as exc:
             _log.warning("tts: воспроизведение прервано: %s", exc)
@@ -495,19 +533,24 @@ class TtsPlayer:
         """Clear the current phrase and report how it ended."""
         with self._condition:
             self._current = None
-            if reason == PlaybackReason.COMPLETED:
+            if request.mix:
+                pass
+            elif reason == PlaybackReason.COMPLETED:
                 self._stats.played += 1
             elif reason == PlaybackReason.CANCELLED:
                 self._stats.cancelled += 1
             else:
                 self._stats.failed += 1
         self._cancel.clear()
+        self._notify_private_finish(request, reason)
+        if request.mix:
+            return
         try:
             self._on_finished(request, reason)
         except Exception:
             _log.exception("tts: обработчик конца озвучки упал")
 
-    def _write_chunk(self, chunk: AudioChunk) -> bool:
+    def _write_chunk(self, chunk: AudioChunk, request: SpeechRequest) -> bool:
         """Write one sentence, in blocks, checking for cancel between them.
 
         Returns:
@@ -527,8 +570,11 @@ class TtsPlayer:
             if self._cancel.is_set():
                 return False
             piece = pcm[offset : offset + block]
+            gain = self._volume if request.gain is None else _clamp_volume(request.gain)
             try:
-                stream.stream.write(_with_volume(piece, self._volume))
+                stream.stream.write(
+                    self._mix_piece(_with_volume(piece, gain), stream, speech=not request.mix)
+                )
             except AudioError as exc:
                 if self._cancel.is_set():
                     # Writing into a stream that cancel() just aborted. Expected.
@@ -540,8 +586,94 @@ class TtsPlayer:
                 # continue on the built-in speakers, and the user would rather
                 # hear the rest of the answer there than lose it.
                 stream = self._ensure_stream(chunk)
-                stream.stream.write(_with_volume(piece, self._volume))
+                stream.stream.write(
+                    self._mix_piece(_with_volume(piece, gain), stream, speech=not request.mix)
+                )
         return True
+
+    def _mix_piece(self, base: bytes, stream: _Stream, *, speech: bool) -> bytes:
+        """Add all eligible macro sounds to one device block."""
+        self._activate_mix_voices(stream, allow_deferred=not speech)
+        if not self._mix_voices:
+            return base
+        mixed = array("h")
+        mixed.frombytes(base)
+        finished: list[_MixVoice] = []
+        for voice in self._mix_voices:
+            request = voice.request
+            if request.request_id in self._cancelled_mix:
+                finished.append(voice)
+                self._notify_private_finish(request, PlaybackReason.CANCELLED)
+                continue
+            end = min(len(voice.pcm), voice.offset + len(base))
+            part = voice.pcm[voice.offset : end]
+            voice.offset = end
+            gain = _clamp_volume(request.gain if request.gain is not None else 1.0)
+            if speech:
+                gain *= max(0.0, request.duck_gain)
+            samples = array("h")
+            samples.frombytes(_with_volume(part, gain))
+            for index, sample in enumerate(samples):
+                mixed[index] = max(-32768, min(32767, mixed[index] + sample))
+            if voice.offset >= len(voice.pcm):
+                finished.append(voice)
+                self._notify_private_finish(request, PlaybackReason.COMPLETED)
+        for voice in finished:
+            self._mix_voices.remove(voice)
+            self._cancelled_mix.discard(voice.request.request_id)
+        return mixed.tobytes()
+
+    def _activate_mix_voices(self, stream: _Stream, *, allow_deferred: bool) -> None:
+        """Materialise queued mixable requests that may start in this block."""
+        with self._condition:
+            selected = [
+                request
+                for request in self._mixed
+                if allow_deferred or not request.defer_while_speaking
+            ]
+            selected_ids = {id(request) for request in selected}
+            self._mixed = deque(
+                request for request in self._mixed if id(request) not in selected_ids
+            )
+        for request in selected:
+            try:
+                pcm = _materialise_for_stream(request, stream)
+            except Exception:
+                _log.exception("tts: не удалось подготовить звук для микширования")
+                self._notify_private_finish(request, PlaybackReason.ERROR)
+                continue
+            if pcm:
+                self._mix_voices.append(_MixVoice(request, pcm))
+            else:
+                self._notify_private_finish(request, PlaybackReason.COMPLETED)
+
+    @staticmethod
+    def _notify_private_finish(request: SpeechRequest, reason: str) -> None:
+        if request.on_finished is None:
+            return
+        try:
+            request.on_finished(reason)
+        except Exception:
+            _log.exception("tts: обработчик конца звука упал")
+
+    def _drain_mix_voices(self) -> None:
+        """Finish active sounds in silence, unless queued speech can carry them."""
+        while self._mix_voices and self._running:
+            with self._condition:
+                if self._urgent or self._normal:
+                    return
+                stream = self._stream
+            if stream is None:
+                return
+            silence = bytes(_block_bytes(stream.sample_rate, stream.channels))
+            try:
+                stream.stream.write(self._mix_piece(silence, stream, speech=False))
+            except AudioError:
+                _log.exception("tts: вывод смешанного звука прерван")
+                for voice in self._mix_voices:
+                    self._notify_private_finish(voice.request, PlaybackReason.ERROR)
+                self._mix_voices.clear()
+                return
 
     # ------------------------------------------------------------------ device
 
@@ -634,16 +766,17 @@ class TtsPlayer:
 
     def _clear_locked(self) -> None:
         """Drop every pending phrase. Caller holds the condition."""
-        for request in (*self._urgent, *self._normal):
+        for request in (*self._urgent, *self._normal, *self._mixed):
             self._stats.cancelled += 1
             self._report_dropped(request)
         self._urgent.clear()
         self._normal.clear()
+        self._mixed.clear()
 
     def _drop_locked(self, request_id: str) -> int:
         """Remove queued phrases with this identifier. Caller holds the condition."""
         removed = 0
-        for queue in (self._urgent, self._normal):
+        for queue in (self._urgent, self._normal, self._mixed):
             kept = [item for item in queue if item.request_id != request_id]
             removed += len(queue) - len(kept)
             for item in queue:
@@ -660,6 +793,9 @@ class TtsPlayer:
         Called with the condition held, so the callback must not call back into
         the player. It publishes an event, which is exactly that.
         """
+        self._notify_private_finish(request, PlaybackReason.CANCELLED)
+        if request.mix:
+            return
         try:
             self._on_finished(request, PlaybackReason.CANCELLED)
         except Exception:
@@ -686,6 +822,25 @@ def chunks_from(audio: AudioChunk) -> Iterator[AudioChunk]:
     :attr:`SpeechRequest.chunks` wants something iterable either way.
     """
     yield audio
+
+
+def _materialise_for_stream(request: SpeechRequest, stream: _Stream) -> bytes:
+    """Convert every chunk of a mixable request to the open stream format."""
+    result = bytearray()
+    resamplers: dict[int, Resampler] = {}
+    for chunk in request.chunks:
+        if chunk.empty:
+            continue
+        if chunk.channels != stream.channels:
+            raise AudioError("mixed audio channel count differs from output")
+        pcm = chunk.pcm
+        if chunk.sample_rate != stream.sample_rate:
+            converter = resamplers.setdefault(
+                chunk.sample_rate, Resampler(chunk.sample_rate, stream.sample_rate)
+            )
+            pcm = converter.process(pcm)
+        result.extend(pcm)
+    return bytes(result)
 
 
 def _rate_candidates(native: int) -> tuple[int, ...]:

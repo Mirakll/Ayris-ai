@@ -41,6 +41,7 @@ from enum import StrEnum
 from typing import Annotated, Any, ClassVar, Final, Literal, Self
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -178,6 +179,11 @@ class SoundBinding(MacroModel):
     source: SoundSource = SoundSource.BUILTIN
     value: str = Field(min_length=1, max_length=500)
     volume: int | None = Field(default=None, ge=0, le=100)
+    wait: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("wait", "wait_for_completion"),
+        serialization_alias="wait",
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -212,6 +218,20 @@ class SoundBinding(MacroModel):
         """The one-string spelling, the way a file carries it."""
         prefix = "custom" if self.source is SoundSource.FILE else self.source.value
         return f"{prefix}:{self.value}"
+
+    @property
+    def wait_for_completion(self) -> bool:
+        """Compatibility spelling used by the editor and plugin API."""
+        return self.wait
+
+    @model_serializer(mode="wrap")
+    def _drop_default_wait(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """Keep old .ayris files byte-stable unless waiting was explicitly enabled."""
+        data: dict[str, Any] = handler(self)
+        if not self.wait:
+            data.pop("wait", None)
+            data.pop("wait_for_completion", None)
+        return data
 
 
 def _check_portable_name(name: str) -> None:

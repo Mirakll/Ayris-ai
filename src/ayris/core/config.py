@@ -761,6 +761,28 @@ class CommandsConfig(ConfigSection):
         default=False,
         description="Проговаривать начало выполнения долгой команды",
     )
+    sound_volume: int = Field(
+        default=80,
+        ge=0,
+        le=100,
+        description="Громкость звуков команд, независимо от речи и системного микшера",
+    )
+    sound_policy: Literal["queue", "duck"] = Field(
+        default="queue",
+        description="Ставить звук после речи или приглушать его во время речи",
+    )
+    sound_duck_db: float = Field(
+        default=-12.0,
+        ge=-60.0,
+        le=0.0,
+        description="Ослабление звука команды во время речи, дБ",
+    )
+    sound_max_voices: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="Максимум одновременно поставленных звуков команд",
+    )
     followup_ttl_s: float = Field(
         default=30.0,
         ge=0.0,

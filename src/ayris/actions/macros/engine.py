@@ -66,7 +66,8 @@ from ayris.actions.macros.errors import (
     MacroTimeoutError,
 )
 from ayris.actions.macros.report import ExecutionReport, ReportBuilder, RunOutcome, StepStatus
-from ayris.actions.macros.schema import MAX_BLOCK_DEPTH, MAX_BLOCKS, OnError
+from ayris.actions.macros.schema import MAX_BLOCK_DEPTH, MAX_BLOCKS, OnError, SoundStage
+from ayris.actions.macros.sounds.binding import SoundBindingPlayer, bindings_for_stage
 from ayris.core.errors import AyrisError, MacroError
 from ayris.core.events import (
     CancelRequested,
@@ -364,11 +365,21 @@ class _Runner:
                 "depth", depth, user_message="Блоки команды вложены слишком глубоко."
             )
         try:
+            self._engine._play_sounds(
+                self._command, SoundStage.ON_START, block=block, owner=self._run.run_id
+            )
             with self._builder.measure(path, block.type, depth=depth):
-                return self._dispatch(block, path, depth)
+                flow = self._dispatch(block, path, depth)
+            self._engine._play_sounds(
+                self._command, SoundStage.ON_SUCCESS, block=block, owner=self._run.run_id
+            )
+            return flow
         except (MacroCancelledError, MacroLimitError):
             raise
         except Exception as exc:
+            self._engine._play_sounds(
+                self._command, SoundStage.ON_ERROR, block=block, owner=self._run.run_id
+            )
             return self._recover(block, path, exc)
 
     def _dispatch(self, block: ActionBlock, path: str, depth: int) -> Flow:
@@ -612,6 +623,7 @@ class MacroEngine:
         policy: ConcurrencyPolicy = ConcurrencyPolicy.PARALLEL,
         threads: int | None = None,
         clock: Callable[[], float] = time.monotonic,
+        sounds: SoundBindingPlayer | None = None,
     ) -> None:
         self.registry = registry
         self._bus = bus
@@ -620,6 +632,7 @@ class MacroEngine:
         self._limits = limits if limits is not None else ExecutionLimits()
         self._policy = policy
         self._clock = clock
+        self._sounds = sounds
         self._pool = ThreadPoolExecutor(
             max_workers=threads if threads is not None else _default_threads(),
             thread_name_prefix="macro",
@@ -804,6 +817,7 @@ class MacroEngine:
                 request_id=run.request_id,
             )
         )
+        self._play_sounds(command, SoundStage.ON_START, owner=run.run_id)
         report = self._walk(run, command, context, builder, limits or self._limits)
         self._store.flush()
         _log.info(
@@ -818,8 +832,32 @@ class MacroEngine:
         # order lets a caller act on a finished run before the bus has heard it ended — and
         # a subscriber that redraws on the event would be a redraw behind.
         self._publish(_ended_event(report))
+        stage = SoundStage.ON_SUCCESS if report.ok else SoundStage.ON_ERROR
+        self._play_sounds(command, stage, owner=run.run_id)
         run.report = report
         return report
+
+    def _play_sounds(
+        self,
+        command: CommandModel,
+        stage: SoundStage,
+        *,
+        block: ActionBlock | None = None,
+        owner: str = "",
+    ) -> None:
+        """Play effective bindings without allowing accompaniment to mask the command."""
+        if self._sounds is None:
+            return
+        for binding in bindings_for_stage(command, stage, block):
+            try:
+                self._sounds.play_binding(binding, owner=owner)
+            except Exception as exc:
+                _log.warning(
+                    "макрос «%s»: звук %s не проигран — %s",
+                    command.name,
+                    binding.reference,
+                    exc,
+                )
 
     def _walk(
         self,

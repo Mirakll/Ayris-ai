@@ -194,6 +194,14 @@ def test_the_special_markers_are_excluded_everywhere_and_run_somewhere() -> None
 
 
 @pytest.mark.unit
+def test_windows_full_check_enables_the_real_speaker_test_by_default() -> None:
+    """The pre-push/full check must not silently omit the audible hardware path."""
+    script = (PROJECT_ROOT / "scripts" / "check.sh").read_text(encoding="utf-8")
+    assert "export AYRIS_TEST_SPEAKERS=1" in script
+    assert "[[ -z ${AYRIS_TEST_SPEAKERS+x} ]]" in script
+
+
+@pytest.mark.unit
 def test_the_slow_marker_still_runs_somewhere() -> None:
     """``slow`` is excluded from the parallel passes, so some pass must keep it.
 
