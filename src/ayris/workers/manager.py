@@ -545,6 +545,8 @@ class WorkerManager:
             priority=spec.priority,
             log_level=spec.log_level,
             log_dir=spec.log_dir if spec.log_dir is not None else self._log_dir,
+            log_max_mb=spec.log_max_mb,
+            log_retention_days=spec.log_retention_days,
             python_path=spec.python_path,
             protocol_version=spec.protocol_version,
         )
@@ -1000,11 +1002,20 @@ class WorkerManager:
         level = logging.getLevelNamesMapping().get(level_name, logging.INFO)
         message = str(payload.get("message", ""))
         origin = str(payload.get("logger", "")) or f"{_WORKER_LOGGER}.{worker}"
-        logging.getLogger(origin).log(level, "%s", message)
+        request_id = str(payload.get("request_id", ""))
+        extra = {"request_id": request_id, "skip_log_bus": True}
+        logging.getLogger(origin).log(level, "%s", message, extra=extra)
         traceback_text = payload.get("traceback")
         if isinstance(traceback_text, str) and traceback_text:
-            logging.getLogger(origin).log(level, "%s", traceback_text)
-        self._bus.publish(LogLine(level=level_name, message=message, logger=origin))
+            logging.getLogger(origin).log(level, "%s", traceback_text, extra=extra)
+        self._bus.publish(
+            LogLine(
+                level=level_name,
+                message=message,
+                logger=origin,
+                request_id=request_id,
+            )
+        )
 
     # ------------------------------------------------------------------
     # monitoring

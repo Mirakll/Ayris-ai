@@ -49,7 +49,7 @@ from ayris.core.migrations import apply_migrations
 from ayris.core.paths import AppPaths, init_paths, reset_paths
 from ayris.core.repositories import Repositories
 from ayris.core.state import StateMachine
-from ayris.utils.logger import get_logger, setup_logging, shutdown_logging
+from ayris.utils.logger import bind_log_bus, get_logger, setup_logging, shutdown_logging
 
 if TYPE_CHECKING:
     from typing import TextIO
@@ -769,6 +769,9 @@ class AyrisApp:
                     else self._options.console_log
                 ),
                 log_dir=self.paths.logs_dir,
+                max_mb=settings.devtools.log_max_mb,
+                retention_days=settings.devtools.log_retention_days,
+                buffer_lines=settings.devtools.log_buffer_lines,
             )
         if self._state is not None:
             self._state.apply_settings(settings)
@@ -891,9 +894,11 @@ class AyrisApp:
         # Whoever starts the application owns the UI thread; from here on every
         # handler runs there, whatever thread published the event.
         self._bus.bind_to_thread()
+        bind_log_bus(self._bus, capacity=self.settings.devtools.log_buffer_lines)
         _log.debug("шина событий привязана к потоку %s", self._bus.thread_id)
 
     def _stop_event_bus(self) -> None:
+        bind_log_bus(None)
         # One last pass so a shutdown notification published by a component that
         # already stopped still reaches the tray before it goes away.
         delivered = self._bus.drain(limit=0)

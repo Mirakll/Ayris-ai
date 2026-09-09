@@ -270,6 +270,8 @@ class WorkerBootstrap:
     log_level: str = "INFO"
     log_dir: Path | None = None
     log_forward_level: str = "WARNING"
+    log_max_mb: int = 10
+    log_retention_days: int = 7
     python_path: tuple[str, ...] = ()
     protocol_version: int = PROTOCOL_VERSION
 
@@ -520,6 +522,7 @@ class _PipeLogHandler(logging.Handler):
                 "level": record.levelname,
                 "logger": record.name,
                 "message": record.getMessage(),
+                "request_id": str(getattr(record, "request_id", "")),
             }
             if record.exc_info is not None:
                 payload["traceback"] = self.format(record)
@@ -873,6 +876,8 @@ class _WorkerRuntime:
                 file_handler = DailySizedRotatingFileHandler(
                     self._bootstrap.log_dir,
                     f"worker_{self._bootstrap.name}",
+                    max_bytes=self._bootstrap.log_max_mb * 1024 * 1024,
+                    retention_days=self._bootstrap.log_retention_days,
                 )
             except OSError:
                 pass

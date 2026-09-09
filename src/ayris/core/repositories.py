@@ -897,6 +897,8 @@ class AuditRepository(_Repository):
     )
 
     def add(self, entry: AuditEntry) -> AuditEntry:
+        from ayris.utils.redaction import redact_text
+
         ts = entry.ts if entry.ts is not None else utc_now()
         entry_id = self._db.insert(
             """
@@ -907,7 +909,7 @@ class AuditRepository(_Repository):
             (
                 to_db_timestamp(ts),
                 entry.command_name,
-                dump_json(entry.params),
+                redact_text(dump_json(entry.params)),
                 str(entry.result),
                 int(entry.require_admin),
                 int(entry.elevated),
@@ -923,6 +925,107 @@ class AuditRepository(_Repository):
         sql.append("ORDER BY ts DESC, id DESC LIMIT ?")
         rows = self._db.query_all(" ".join(sql), (limit,))
         return [AuditEntry.from_row(row) for row in rows]
+
+    def query(
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        command: str = "",
+        result: ExecutionResult | str | None = None,
+        require_admin: bool | None = None,
+        elevated: bool | None = None,
+        confirmed: bool | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AuditEntry]:
+        """Read a filtered page for the audit UI."""
+        where, params = self._where(
+            since=since,
+            until=until,
+            command=command,
+            result=result,
+            require_admin=require_admin,
+            elevated=elevated,
+            confirmed=confirmed,
+        )
+        params.extend((max(0, limit), max(0, offset)))
+        rows = self._db.query_all(
+            f"SELECT {self._COLUMNS} FROM audit{where} "
+            "ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?",
+            params,
+        )
+        return [AuditEntry.from_row(row) for row in rows]
+
+    def count_filtered(
+        self,
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        command: str = "",
+        result: ExecutionResult | str | None = None,
+        require_admin: bool | None = None,
+        elevated: bool | None = None,
+        confirmed: bool | None = None,
+    ) -> int:
+        where, params = self._where(
+            since=since,
+            until=until,
+            command=command,
+            result=result,
+            require_admin=require_admin,
+            elevated=elevated,
+            confirmed=confirmed,
+        )
+        return int(self._db.query_value(f"SELECT COUNT(*) FROM audit{where}", params, 0))
+
+    def top_commands(
+        self, *, since: datetime | None = None, limit: int = 10
+    ) -> list[tuple[str, int]]:
+        where, params = self._where(since=since)
+        params.append(max(0, limit))
+        rows = self._db.query_all(
+            f"SELECT command_name, COUNT(*) AS uses FROM audit{where} "
+            "GROUP BY command_name ORDER BY uses DESC, command_name LIMIT ?",
+            params,
+        )
+        return [(str(row["command_name"]), int(row["uses"])) for row in rows]
+
+    @staticmethod
+    def _where(
+        *,
+        since: datetime | None = None,
+        until: datetime | None = None,
+        command: str = "",
+        result: ExecutionResult | str | None = None,
+        require_admin: bool | None = None,
+        elevated: bool | None = None,
+        confirmed: bool | None = None,
+    ) -> tuple[str, list[object]]:
+        clauses: list[str] = []
+        params: list[object] = []
+        if since is not None:
+            clauses.append("ts >= ?")
+            params.append(to_db_timestamp(since))
+        if until is not None:
+            clauses.append("ts <= ?")
+            params.append(to_db_timestamp(until))
+        if command:
+            clauses.append("command_name LIKE ? ESCAPE '\\'")
+            escaped = command.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            params.append(f"%{escaped}%")
+        if result is not None:
+            clauses.append("result = ?")
+            params.append(str(result))
+        for column, value in (
+            ("require_admin", require_admin),
+            ("elevated", elevated),
+            ("confirmed", confirmed),
+        ):
+            if value is not None:
+                clauses.append(f"{column} = ?")
+                params.append(int(value))
+        return (" WHERE " + " AND ".join(clauses) if clauses else ""), params
 
     def count(self) -> int:
         return int(self._db.query_value("SELECT COUNT(*) FROM audit", default=0))

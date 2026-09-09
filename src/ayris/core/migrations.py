@@ -410,6 +410,11 @@ _MACRO_DEBUG_SESSIONS: Final = (
     """,
 )
 
+_AUDIT_UI_INDEXES: Final = (
+    "CREATE INDEX idx_audit_command_ts ON audit (command_name, ts DESC)",
+    "CREATE INDEX idx_audit_result_ts ON audit (result, ts DESC)",
+)
+
 
 #: Every migration ever released, in order. Append only.
 MIGRATIONS: Final[tuple[Migration, ...]] = (
@@ -442,6 +447,11 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
         version=6,
         description="последняя сессия отладки макроса",
         statements=_MACRO_DEBUG_SESSIONS,
+    ),
+    Migration(
+        version=7,
+        description="индексы выборок журнала аудита",
+        statements=_AUDIT_UI_INDEXES,
     ),
 )
 

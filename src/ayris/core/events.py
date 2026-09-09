@@ -747,6 +747,7 @@ class LogLine(Event):
     level: str
     message: str
     logger: str = ""
+    request_id: str = ""
 
 
 # ----------------------------------------------------------------------

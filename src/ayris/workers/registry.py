@@ -153,6 +153,8 @@ class WorkerSpec:
     restart_scope: RestartScope = RestartScope.NONE
     log_dir: Path | None = None
     log_level: str = "INFO"
+    log_max_mb: int = 10
+    log_retention_days: int = 7
     protocol_version: int = PROTOCOL_VERSION
 
     @property
@@ -594,6 +596,8 @@ def plan_workers(
             params=params,
             log_dir=log_dir,
             log_level=str(params.get("log_level", "INFO")),
+            log_max_mb=settings.devtools.log_max_mb,
+            log_retention_days=settings.devtools.log_retention_days,
         )
 
         preferred = entry.is_preferred(settings)

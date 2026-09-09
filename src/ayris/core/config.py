@@ -1692,6 +1692,12 @@ class DevtoolsConfig(ConfigSection):
         le=500,
         description="Размер файла журнала, после которого он делится на части",
     )
+    log_buffer_lines: int = Field(
+        default=1000,
+        ge=100,
+        le=100_000,
+        description="Число последних строк журнала в памяти для DevTools",
+    )
     repl_enabled: bool = Field(
         default=False,
         description="Встроенная консоль Python в окне настроек",

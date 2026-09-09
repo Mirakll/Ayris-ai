@@ -23,13 +23,20 @@ from __future__ import annotations
 
 import logging
 import logging.handlers
+import queue
 import re
 import sys
 import threading
 import time
+from collections import deque
+from contextlib import suppress
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Final, Literal, get_args
+from typing import TYPE_CHECKING, Final, Literal, get_args
+
+if TYPE_CHECKING:
+    from ayris.core.events import EventBus
 
 from ayris.core.paths import get_paths
 
@@ -41,14 +48,22 @@ __all__ = [
     "ROOT_LOGGER_NAME",
     "SECRET_PLACEHOLDER",
     "DailySizedRotatingFileHandler",
+    "LogBufferEntry",
     "LogLevel",
     "SecretFilter",
+    "bind_log_bus",
+    "dropped_log_lines",
     "forget_secret",
+    "get_level_state",
+    "get_log_buffer",
     "get_logger",
     "get_pipeline_logger",
     "guard_secret",
     "guarded_secret_count",
     "redact",
+    "reset_module_level",
+    "set_level",
+    "set_module_level",
     "setup_logging",
     "shutdown_logging",
 ]
@@ -67,13 +82,110 @@ BACKUP_DAYS: Final = 7
 
 _STAMP_FORMAT: Final = "%Y%m%d"
 _FILE_FORMAT: Final = (
-    "%(asctime)s.%(msecs)03d | %(levelname)-8s | %(name)s:%(lineno)d | %(message)s"
+    "%(asctime)s.%(msecs)03d | %(levelname)-8s | %(request_id)s | "
+    "%(name)s:%(lineno)d | %(message)s"
 )
 _CONSOLE_FORMAT: Final = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 _PIPELINE_FORMAT: Final = "%(asctime)s.%(msecs)03d | %(request_id)s | %(message)s"
 _DATE_FORMAT: Final = "%Y-%m-%d %H:%M:%S"
 
 _configured = False
+_current_level = "INFO"
+_module_levels: dict[str, str] = {}
+_buffer_lock = threading.Lock()
+_log_buffer: deque[LogBufferEntry] = deque(maxlen=1000)
+_bus_bridge: _BusBridge | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LogBufferEntry:
+    """One already-redacted log line retained for the DevTools view."""
+
+    created: float
+    level: str
+    logger: str
+    message: str
+    request_id: str = ""
+
+
+class _RequestIdFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not hasattr(record, "request_id"):
+            setattr(record, "request_id", "")  # noqa: B010
+        return True
+
+
+class _RingBufferHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        entry = LogBufferEntry(
+            created=record.created,
+            level=record.levelname,
+            logger=record.name,
+            message=redact(record.getMessage()),
+            request_id=str(getattr(record, "request_id", "")),
+        )
+        with _buffer_lock:
+            _log_buffer.append(entry)
+
+
+class _BusBridge(logging.Handler):
+    """Move main-process records to the bus without blocking their producers."""
+
+    def __init__(self, bus: EventBus, *, capacity: int) -> None:
+        super().__init__(logging.NOTSET)
+        self._bus = bus
+        self._queue: queue.Queue[LogBufferEntry | None] = queue.Queue(maxsize=max(1, capacity))
+        self._dropped = 0
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, name="ayris-log-bus", daemon=True)
+        self._thread.start()
+
+    @property
+    def dropped(self) -> int:
+        with self._lock:
+            return self._dropped
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if getattr(record, "skip_log_bus", False):
+            return
+        item = LogBufferEntry(
+            created=record.created,
+            level=record.levelname,
+            logger=record.name,
+            message=redact(record.getMessage()),
+            request_id=str(getattr(record, "request_id", "")),
+        )
+        try:
+            self._queue.put_nowait(item)
+        except queue.Full:
+            with self._lock:
+                self._dropped += 1
+
+    def _run(self) -> None:
+        from ayris.core.events import LogLine
+
+        while True:
+            item = self._queue.get()
+            if item is None:
+                return
+            try:
+                self._bus.publish(
+                    LogLine(
+                        level=item.level,
+                        message=item.message,
+                        logger=item.logger,
+                        request_id=item.request_id,
+                    )
+                )
+            except Exception:
+                with self._lock:
+                    self._dropped += 1
+
+    def close(self) -> None:
+        with suppress(queue.Full):
+            self._queue.put_nowait(None)
+        self._thread.join(timeout=1.0)
+        super().close()
 
 
 class DailySizedRotatingFileHandler(logging.handlers.BaseRotatingHandler):
@@ -266,14 +378,17 @@ def redact(text: str) -> str:
     Longest values first, so a password that happens to contain a shorter one
     does not leave the tail of itself behind.
     """
-    if not _secrets or not text:
-        return text
-    with _secrets_lock:
-        values = sorted(_secrets, key=len, reverse=True)
-    for value in values:
-        if value in text:
-            text = text.replace(value, SECRET_PLACEHOLDER)
-    return text
+    if _secrets and text:
+        with _secrets_lock:
+            values = sorted(_secrets, key=len, reverse=True)
+        for value in values:
+            if value in text:
+                text = text.replace(value, SECRET_PLACEHOLDER)
+    # Import lazily: redaction imports this module to layer pattern matching on
+    # top of the exact-value registry. The private switch prevents recursion.
+    from ayris.utils.redaction import redact_patterns
+
+    return redact_patterns(text)
 
 
 class SecretFilter(logging.Filter):
@@ -291,8 +406,6 @@ class SecretFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if not _secrets:
-            return True
         message = str(record.msg)
         if record.args:
             try:
@@ -320,21 +433,27 @@ def _install_filters(handler: logging.Handler, *extra: logging.Filter) -> loggin
     return handler
 
 
-def _build_file_handler(directory: Path, prefix: str, level: int) -> logging.Handler:
-    handler = DailySizedRotatingFileHandler(directory, prefix)
-    handler.setLevel(level)
+def _build_file_handler(
+    directory: Path, prefix: str, *, max_bytes: int, retention_days: int
+) -> logging.Handler:
+    handler = DailySizedRotatingFileHandler(
+        directory, prefix, max_bytes=max_bytes, retention_days=retention_days
+    )
+    handler.setLevel(logging.NOTSET)
     handler.setFormatter(logging.Formatter(_FILE_FORMAT, datefmt=_DATE_FORMAT))
-    return _install_filters(handler)
+    return _install_filters(handler, _RequestIdFilter())
 
 
-def _build_console_handler(level: int) -> logging.Handler:
+def _build_console_handler() -> logging.Handler:
     handler = logging.StreamHandler(sys.stderr)
-    handler.setLevel(level)
+    handler.setLevel(logging.NOTSET)
     handler.setFormatter(logging.Formatter(_CONSOLE_FORMAT, datefmt=_DATE_FORMAT))
     return _install_filters(handler)
 
 
-def _configure_pipeline_logger(directory: Path, level: int) -> None:
+def _configure_pipeline_logger(
+    directory: Path, level: int, *, max_bytes: int, retention_days: int
+) -> None:
     """Separate channel for ``STT -> NLU -> Action -> Result`` timing traces.
 
     Kept in its own file so DEBUG-level pipeline traces never drown the main log,
@@ -347,8 +466,13 @@ def _configure_pipeline_logger(directory: Path, level: int) -> None:
 
     _clear_handlers(pipeline)
 
-    handler = DailySizedRotatingFileHandler(directory, PIPELINE_LOG_PREFIX)
-    handler.setLevel(level)
+    handler = DailySizedRotatingFileHandler(
+        directory,
+        PIPELINE_LOG_PREFIX,
+        max_bytes=max_bytes,
+        retention_days=retention_days,
+    )
+    handler.setLevel(logging.NOTSET)
     handler.setFormatter(logging.Formatter(_PIPELINE_FORMAT, datefmt=_DATE_FORMAT))
     _install_filters(handler, _PipelineFilter())
     pipeline.addHandler(handler)
@@ -376,6 +500,9 @@ def setup_logging(
     *,
     console: bool = True,
     log_dir: Path | None = None,
+    max_mb: int = 10,
+    retention_days: int = BACKUP_DAYS,
+    buffer_lines: int = 1000,
 ) -> logging.Logger:
     """Configure the ``ayris`` logger tree. Idempotent.
 
@@ -390,9 +517,10 @@ def setup_logging(
     Returns:
         The configured ``ayris`` logger.
     """
-    global _configured
+    global _configured, _current_level, _log_buffer
 
     numeric_level = _resolve_level(str(level))
+    _current_level = logging.getLevelName(numeric_level)
     directory = log_dir if log_dir is not None else get_paths().logs_dir
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -403,14 +531,37 @@ def setup_logging(
 
     if _configured:
         _apply_level(numeric_level)
+        _resize_log_buffer(buffer_lines)
+        for handler in (*root.handlers, *logging.getLogger(PIPELINE_LOGGER_NAME).handlers):
+            if isinstance(handler, DailySizedRotatingFileHandler):
+                handler.max_bytes = max_mb * 1024 * 1024
+                handler.retention_days = retention_days
+                handler.purge_expired()
         return root
 
     _clear_handlers(root)
-    root.addHandler(_build_file_handler(directory, MAIN_LOG_PREFIX, numeric_level))
+    root.addHandler(
+        _build_file_handler(
+            directory,
+            MAIN_LOG_PREFIX,
+            max_bytes=max_mb * 1024 * 1024,
+            retention_days=retention_days,
+        )
+    )
     if console:
-        root.addHandler(_build_console_handler(numeric_level))
+        root.addHandler(_build_console_handler())
 
-    _configure_pipeline_logger(directory, numeric_level)
+    ring = _install_filters(_RingBufferHandler(), _RequestIdFilter())
+    ring.setLevel(logging.NOTSET)
+    root.addHandler(ring)
+    _resize_log_buffer(buffer_lines)
+
+    _configure_pipeline_logger(
+        directory,
+        numeric_level,
+        max_bytes=max_mb * 1024 * 1024,
+        retention_days=retention_days,
+    )
     logging.captureWarnings(True)
 
     _configured = True
@@ -428,7 +579,82 @@ def _apply_level(numeric_level: int) -> None:
         logger = logging.getLogger(name)
         logger.setLevel(numeric_level)
         for handler in logger.handlers:
-            handler.setLevel(numeric_level)
+            handler.setLevel(logging.NOTSET)
+    for name, level_name in _module_levels.items():
+        logging.getLogger(name).setLevel(_resolve_level(level_name))
+
+
+def set_level(level: LogLevel | str) -> str:
+    """Change the common threshold immediately and return its canonical name."""
+    global _current_level
+    numeric = _resolve_level(str(level))
+    _current_level = logging.getLevelName(numeric)
+    _apply_level(numeric)
+    return _current_level
+
+
+def set_module_level(name: str, level: LogLevel | str) -> str:
+    """Override one logger subtree without changing the common threshold."""
+    logger = get_logger(name)
+    canonical = logging.getLevelName(_resolve_level(str(level)))
+    logger.setLevel(canonical)
+    _module_levels[logger.name] = canonical
+    return canonical
+
+
+def reset_module_level(name: str) -> bool:
+    logger = get_logger(name)
+    existed = _module_levels.pop(logger.name, None) is not None
+    logger.setLevel(logging.NOTSET)
+    return existed
+
+
+def get_level_state() -> tuple[str, dict[str, str]]:
+    return _current_level, dict(_module_levels)
+
+
+def _resize_log_buffer(size: int) -> None:
+    global _log_buffer
+    with _buffer_lock:
+        _log_buffer = deque(_log_buffer, maxlen=max(1, size))
+
+
+def get_log_buffer(
+    *, level: LogLevel | str | None = None, module: str = ""
+) -> tuple[LogBufferEntry, ...]:
+    numeric = _resolve_level(str(level)) if level is not None else logging.NOTSET
+    module_name = get_logger(module).name if module else ""
+    with _buffer_lock:
+        entries = tuple(_log_buffer)
+    return tuple(
+        item
+        for item in entries
+        if logging.getLevelNamesMapping().get(item.level, logging.NOTSET) >= numeric
+        and (
+            not module_name
+            or item.logger == module_name
+            or item.logger.startswith(module_name + ".")
+        )
+    )
+
+
+def bind_log_bus(bus: EventBus | None, *, capacity: int = 1000) -> None:
+    """Mirror main-process log records onto ``bus`` through a bounded queue."""
+    global _bus_bridge
+    root = logging.getLogger(ROOT_LOGGER_NAME)
+    if _bus_bridge is not None:
+        root.removeHandler(_bus_bridge)
+        _bus_bridge.close()
+        _bus_bridge = None
+    if bus is not None:
+        bridge = _BusBridge(bus, capacity=capacity)
+        _install_filters(bridge, _RequestIdFilter())
+        root.addHandler(bridge)
+        _bus_bridge = bridge
+
+
+def dropped_log_lines() -> int:
+    return _bus_bridge.dropped if _bus_bridge is not None else 0
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -459,7 +685,8 @@ def shutdown_logging() -> None:
     leaving it off would silently drop every later record instead of letting it
     reach whoever is listening — which between tests is ``caplog``.
     """
-    global _configured
+    global _configured, _bus_bridge
+    bind_log_bus(None)
     for name in (PIPELINE_LOGGER_NAME, ROOT_LOGGER_NAME):
         logger = logging.getLogger(name)
         for handler in logger.handlers:
@@ -467,4 +694,10 @@ def shutdown_logging() -> None:
         _clear_handlers(logger)
         logger.propagate = True
     logging.captureWarnings(False)
+    for name in tuple(_module_levels):
+        logging.getLogger(name).setLevel(logging.NOTSET)
+    _module_levels.clear()
+    with _buffer_lock:
+        _log_buffer.clear()
+    _bus_bridge = None
     _configured = False
