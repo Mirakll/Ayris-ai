@@ -1366,11 +1366,10 @@ def _switch_wifi_via_netsh(*, on: bool) -> RadioState:
     else:
         try:
             run = admin.run_elevated("netsh", arguments)
-        except admin.ElevationDeclined as exc:
-            raise ActionError(
-                "user declined UAC for netsh interface set",
-                user_message="Без прав администратора адаптер Wi-Fi не переключить",
-            ) from exc
+        except admin.ElevationDeclined:
+            # Preserve the typed refusal: the registry maps it to CANCELLED and
+            # writes the UAC decline into the audit trail.
+            raise
         except admin.ElevationUnavailable as exc:
             raise ActionUnavailable(
                 f"cannot elevate: {exc}",

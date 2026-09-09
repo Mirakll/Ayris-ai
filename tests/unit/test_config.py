@@ -107,6 +107,7 @@ class TestDefaults:
         assert settings.general.language == "ru"
         assert settings.general.theme == "dark_purple"
         assert settings.general.autostart is False
+        assert settings.general.always_run_as_admin is False
         assert settings.voice.stt.mode == "auto"
         assert settings.voice.audio_input.vad_threshold == pytest.approx(0.5)
         assert settings.performance.audio_priority == "high"

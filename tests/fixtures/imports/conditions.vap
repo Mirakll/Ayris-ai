@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Profile>
+  <Name>Переменные и звук</Name>
+  <Commands>
+    <Command>
+      <Name>Режим боя</Name>
+      <Phrase>боевой режим</Phrase>
+      <StartSound>ready.wav</StartSound>
+      <Actions>
+        <Action><Type>SetVariable</Type><Name>level</Name><VarType>integer</VarType><Value>3</Value></Action>
+        <Action><Type>Condition</Type><Condition>level &gt; 1</Condition></Action>
+        <Action><Type>PlaySound</Type><File>ready.wav</File></Action>
+      </Actions>
+    </Command>
+  </Commands>
+</Profile>

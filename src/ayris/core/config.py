@@ -244,6 +244,14 @@ class GeneralConfig(ConfigSection):
         default=False,
         description="Запускать Ayris вместе с Windows",
     )
+    always_run_as_admin: bool = Field(
+        default=False,
+        description=(
+            "Всегда запускать Ayris с правами администратора. Опасно: плагины получают "
+            "те же права, перехват ввода расширяется, drag-and-drop из Проводника ломается"
+        ),
+        json_schema_extra=_restart(RestartScope.APP),
+    )
     start_minimized: bool = Field(
         default=False,
         description="Стартовать свёрнутым в трей",

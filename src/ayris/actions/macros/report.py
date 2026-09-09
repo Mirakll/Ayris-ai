@@ -106,6 +106,8 @@ class StepRecord:
     depth: int = 0
     message: str = ""
     error: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
+    result: Any = None
 
     @property
     def ok(self) -> bool:
@@ -135,6 +137,8 @@ class StepDraft:
     status: StepStatus = StepStatus.OK
     message: str = ""
     error: str = ""
+    params: dict[str, Any] = field(default_factory=dict)
+    result: Any = None
 
     def fail(self, error: BaseException | str) -> None:
         """Mark the step failed, taking the message from ``error``."""
@@ -386,6 +390,8 @@ class ReportBuilder:
             depth=draft.depth,
             message=draft.message,
             error=draft.error,
+            params=draft.params,
+            result=draft.result,
         )
         self._steps.append(record)
         if self._on_step is not None:

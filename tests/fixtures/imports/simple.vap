@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Profile>
+  <ProfileName>Космос</ProfileName>
+  <Commands>
+    <Command>
+      <CommandString>Открыть карту</CommandString>
+      <SpokenPhrase>открой [звёздную|] карту;покажи карту</SpokenPhrase>
+      <Prefix>Альфа</Prefix>
+      <Category>Навигация/Карты</Category>
+      <Hotkey>[LCONTROL][LMENU][M]</Hotkey>
+      <Enabled>true</Enabled>
+      <Actions>
+        <Action><ActionType>RunApplication</ActionType><Path>C:\Apps\map.exe</Path><Arguments>--quick</Arguments></Action>
+        <Action><ActionType>Pause</ActionType><Milliseconds>250</Milliseconds></Action>
+        <Action><ActionType>TypeText</ActionType><Text>готово</Text></Action>
+      </Actions>
+    </Command>
+  </Commands>
+</Profile>

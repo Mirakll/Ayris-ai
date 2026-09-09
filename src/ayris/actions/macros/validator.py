@@ -543,7 +543,9 @@ def _check_text(
     problems: list[Problem],
 ) -> None:
     """One string's placeholders, each of which needs somewhere to come from."""
-    for found in SLOT_PATTERN.finditer(text):
+    # Doubled braces are literals in the macro template language, not references.
+    reference_text = text.replace("{{", "  ").replace("}}", "  ")
+    for found in SLOT_PATTERN.finditer(reference_text):
         name = found["name"]
         if name in available:
             continue

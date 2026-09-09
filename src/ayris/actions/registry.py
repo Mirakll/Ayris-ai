@@ -100,9 +100,44 @@ __all__ = [
     "RegisteredAction",
     "register",
     "registered_actions",
+    "require_admin_rights",
 ]
 
 _log = get_logger(__name__)
+
+
+def require_admin_rights(
+    required: bool,
+    what: str,
+    *,
+    is_elevated: Callable[[], bool] | None = None,
+    status: Callable[[], Any] | None = None,
+) -> None:
+    """The shared rights gate for action metadata and whole commands."""
+    if not required:
+        return
+    check = _process_is_elevated if is_elevated is None else is_elevated
+    try:
+        elevated = bool(check())
+    except OSError:
+        _log.exception("elevation check failed; assuming no rights")
+        elevated = False
+    if elevated:
+        return
+    from ayris.utils.admin import AdminCapability, admin_status
+
+    answer = admin_status() if status is None else status()
+    if answer.state is AdminCapability.ELEVATED:
+        # An injected registry seam said "not elevated".  Keep the refusal
+        # internally consistent instead of claiming this process already has rights.
+        message = "Повышение возможно: Windows покажет диалог UAC."
+    else:
+        message = answer.message_ru
+    raise ActionRequiresAdmin(
+        f"{what} requires elevation ({answer.state})",
+        user_message=f"«{what}» требует прав администратора. {message}",
+    )
+
 
 #: Package autodiscovery walks. Every module under it is imported for its side
 #: effect of declaring actions.
@@ -654,17 +689,18 @@ class ActionRegistry:
         """
         action = self.get(name)
         validated = self._validate(action, params or {})
-        if action.meta.require_admin and not self._elevated():
+        try:
+            require_admin_rights(
+                action.meta.require_admin, action.meta.title_ru, is_elevated=self._is_elevated
+            )
+        except ActionRequiresAdmin as error:
             raise self._refuse(
                 action,
                 validated,
-                ActionRequiresAdmin(
-                    f"{name} requires elevation",
-                    user_message=(f"«{action.meta.title_ru}» требует прав администратора."),
-                ),
+                error,
                 request_id=request_id,
                 log="action %s denied: not elevated",
-            )
+            ) from error
         confirmed = False
         if action.meta.is_dangerous:
             verdict = self._ask(action, validated, request_id=request_id)
@@ -919,6 +955,13 @@ def _as_action_error(action: Action, exc: BaseException, *, undo: bool) -> Actio
         return ActionUnavailable(
             f"{action.meta.name} is not implemented on this platform: {exc}",
             user_message=f"«{what}» здесь недоступно.",
+        )
+    from ayris.utils.admin import ElevationDeclined
+
+    if isinstance(exc, ElevationDeclined):
+        return ActionNotConfirmed(
+            f"{action.meta.name}: UAC was declined",
+            user_message=f"Не выполняю «{what}»: вы отменили запрос UAC.",
         )
     if isinstance(exc, PermissionError):
         return ActionRequiresAdmin(f"{action.meta.name} was denied: {exc}")

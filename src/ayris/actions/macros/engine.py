@@ -68,7 +68,7 @@ from ayris.actions.macros.errors import (
 from ayris.actions.macros.report import ExecutionReport, ReportBuilder, RunOutcome, StepStatus
 from ayris.actions.macros.schema import MAX_BLOCK_DEPTH, MAX_BLOCKS, OnError, SoundStage
 from ayris.actions.macros.sounds.binding import SoundBindingPlayer, bindings_for_stage
-from ayris.core.errors import AyrisError, MacroError
+from ayris.core.errors import ActionRequiresAdmin, AyrisError, MacroError
 from ayris.core.events import (
     CancelRequested,
     MacroBlockFinished,
@@ -82,6 +82,7 @@ from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from ayris.actions.macros.context import VariableStore
+    from ayris.actions.macros.debugger import DebugController
     from ayris.actions.macros.report import StepRecord
     from ayris.actions.macros.schema import ActionBlock, CommandModel
     from ayris.actions.result import ActionResult
@@ -259,7 +260,16 @@ class _Runner:
     type-checks without either module importing the other's implementation.
     """
 
-    __slots__ = ("_builder", "_command", "_context", "_engine", "_limits", "_run", "_value")
+    __slots__ = (
+        "_builder",
+        "_command",
+        "_context",
+        "_debug",
+        "_engine",
+        "_limits",
+        "_run",
+        "_value",
+    )
 
     def __init__(
         self,
@@ -270,6 +280,7 @@ class _Runner:
         context: ExecutionContext,
         builder: ReportBuilder,
         limits: ExecutionLimits,
+        debug: DebugController | None = None,
     ) -> None:
         self._engine = engine
         self._run = run
@@ -277,6 +288,7 @@ class _Runner:
         self._context = context
         self._builder = builder
         self._limits = limits
+        self._debug = debug
         self._value: Any = None
 
     @property
@@ -293,6 +305,11 @@ class _Runner:
     def report(self) -> ReportBuilder:
         """Where a block writes down what it did, one record per block."""
         return self._builder
+
+    @property
+    def run(self) -> MacroRun:
+        """Current run handle for debugger-owned action dispatch."""
+        return self._run
 
     @property
     def limits(self) -> ExecutionLimits:
@@ -354,7 +371,11 @@ class _Runner:
 
     def run_one(self, block: ActionBlock, path: str, depth: int) -> Flow:
         """Run one block: guard, record, dispatch, and decide what a failure means."""
+        if self._debug is not None and self._debug.should_skip(path):
+            return Flow.NEXT
         self._guard()
+        if self._debug is not None:
+            self._debug.before_block(self, block, path, depth)
         if not block.enabled:
             self._builder.mark(
                 path, block.type, StepStatus.SKIPPED, depth=depth, message="выключен"
@@ -368,8 +389,10 @@ class _Runner:
             self._engine._play_sounds(
                 self._command, SoundStage.ON_START, block=block, owner=self._run.run_id
             )
-            with self._builder.measure(path, block.type, depth=depth):
+            with self._builder.measure(path, block.type, depth=depth) as draft:
+                draft.params = dict(self._context.fill(block.params))
                 flow = self._dispatch(block, path, depth)
+                draft.result = self._context.last_result
             self._engine._play_sounds(
                 self._command, SoundStage.ON_SUCCESS, block=block, owner=self._run.run_id
             )
@@ -421,12 +444,16 @@ class _Runner:
                 block=block.type,
                 user_message=f"Действие «{block.type}» не подключено.",
             )
-        result = self._engine.registry.execute(
-            block.type,
-            self._context.fill(block.params),
-            request_id=self._run.request_id,
-            command_id=self._run.command_id,
-        )
+        params = self._context.fill(block.params)
+        if self._debug is None:
+            result = self._engine.registry.execute(
+                block.type,
+                params,
+                request_id=self._run.request_id,
+                command_id=self._run.command_id,
+            )
+        else:
+            result = self._debug.execute_action(self, block, path, params)
         self._context.set_result(result.value, action=result)
         self._builder.note(result.message_ru or short(result.value))
         if not result.ok:
@@ -506,7 +533,13 @@ class _Runner:
             admitted=True,
         )
         context = self._context.child(nested, slots=args, variables=target.variables)
-        report = self._engine.perform(run, target, context, limits=limits)
+        if self._debug is not None:
+            self._debug.enter_call(target.name, context)
+        try:
+            report = self._engine.perform(run, target, context, limits=limits, debug=self._debug)
+        finally:
+            if self._debug is not None:
+                self._debug.leave_call()
         self._builder.note(f"«{target.name}»: {report.outcome} за {report.duration_ms} мс")
         self._context.set_result(report.value)
         if report.cancelled:
@@ -660,6 +693,11 @@ class MacroEngine:
         """Where ``profile`` and ``global`` variables live, shared by every run."""
         return self._store
 
+    def replace_variables(self, store: VariableStore) -> None:
+        """Use a fresh profile store for new runs; active runs retain their own."""
+        with self._lock:
+            self._store = store
+
     @property
     def running(self) -> bool:
         """Whether the engine still takes new runs."""
@@ -710,6 +748,12 @@ class MacroEngine:
         )
         if not command.enabled:
             return self._refuse(run, command, RunOutcome.DISABLED, "Команда выключена.")
+        try:
+            from ayris.actions.registry import require_admin_rights
+
+            require_admin_rights(command.require_admin, command.name)
+        except ActionRequiresAdmin as denied:
+            return self._refuse(run, command, RunOutcome.DISABLED, denied.user_message)
         left = self._cooldown_left(command)
         if left > 0:
             return self._refuse(
@@ -788,6 +832,7 @@ class MacroEngine:
         context: ExecutionContext,
         *,
         limits: ExecutionLimits | None = None,
+        debug: DebugController | None = None,
     ) -> ExecutionReport:
         """Walk one command's tree to the end and produce its report.
 
@@ -806,7 +851,7 @@ class MacroEngine:
             command_id=command.id,
             trigger=str(run.trigger),
             request_id=run.request_id,
-            on_step=partial(self._on_step, run),
+            on_step=partial(self._on_step, run, debug),
         )
         self._publish(
             MacroStarted(
@@ -818,8 +863,8 @@ class MacroEngine:
             )
         )
         self._play_sounds(command, SoundStage.ON_START, owner=run.run_id)
-        report = self._walk(run, command, context, builder, limits or self._limits)
-        self._store.flush()
+        report = self._walk(run, command, context, builder, limits or self._limits, debug)
+        context.store.flush()
         _log.info(
             "макрос «%s»: %s, %d шагов за %d мс",
             command.name,
@@ -866,6 +911,7 @@ class MacroEngine:
         context: ExecutionContext,
         builder: ReportBuilder,
         limits: ExecutionLimits,
+        debug: DebugController | None = None,
     ) -> ExecutionReport:
         """Run the tree and turn however it ended into one outcome.
 
@@ -884,6 +930,7 @@ class MacroEngine:
             context=context,
             builder=builder,
             limits=limits,
+            debug=debug,
         )
         try:
             runner.execute()
@@ -1003,8 +1050,10 @@ class MacroEngine:
             self._cooldown[key] = now
         return 0
 
-    def _on_step(self, run: MacroRun, record: StepRecord) -> None:
+    def _on_step(self, run: MacroRun, debug: DebugController | None, record: StepRecord) -> None:
         """Announce one finished block, so a timeline can be drawn as the command runs."""
+        if debug is not None:
+            debug.step_finished(record)
         self._publish(
             MacroBlockFinished(
                 run_id=run.run_id,
@@ -1017,6 +1066,38 @@ class MacroEngine:
                 request_id=run.request_id,
             )
         )
+
+    def debug_perform(
+        self,
+        run: MacroRun,
+        command: CommandModel,
+        context: ExecutionContext,
+        controller: DebugController,
+    ) -> ExecutionReport:
+        """Run through a debugger controller without exposing the private runner."""
+        return self.perform(run, command, context, debug=controller)
+
+    def submit_debug(
+        self,
+        run: MacroRun,
+        command: CommandModel,
+        context: ExecutionContext,
+        controller: DebugController,
+    ) -> Future[ExecutionReport]:
+        """Schedule a debugger-controlled walk on the engine's worker pool."""
+        if not self._running:
+            raise MacroEngineStoppedError(f"engine is stopped, cannot debug {command.name!r}")
+        return self._pool.submit(self._debug_task, run, command, context, controller)
+
+    def _debug_task(
+        self,
+        run: MacroRun,
+        command: CommandModel,
+        context: ExecutionContext,
+        controller: DebugController,
+    ) -> ExecutionReport:
+        report = self.debug_perform(run, command, context, controller)
+        return controller.finished(report)
 
     def _publish(self, event: Event) -> None:
         """Put an event on the bus when there is one, and never let it break a run.

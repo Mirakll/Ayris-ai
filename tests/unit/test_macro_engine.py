@@ -710,6 +710,24 @@ class TestCooldownAndRefusal:
         assert heard.one(MacroSkipped).reason == "disabled"
         assert heard.of(MacroStarted) == []
 
+    def test_an_admin_command_uses_the_registry_rights_gate(
+        self, engine, registry, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        checked: list[tuple[bool, str]] = []
+
+        def refuse(required: bool, what: str, **_kwargs: object) -> None:
+            checked.append((required, what))
+            from ayris.core.errors import ActionRequiresAdmin
+
+            raise ActionRequiresAdmin("not elevated", user_message="Нужны права администратора.")
+
+        monkeypatch.setattr("ayris.actions.registry.require_admin_rights", refuse)
+        report = engine.run(command(block("Run"), name="Служба", require_admin=True))
+        assert report.execution is ExecutionResult.DENIED
+        assert "администратора" in report.user_message
+        assert checked == [(True, "Служба")]
+        assert registry.calls == []
+
     def test_two_presses_in_the_same_instant_let_exactly_one_through(self, engine) -> None:
         """Asking and marking happen under one lock, so the race has one winner.
 
@@ -1412,3 +1430,15 @@ class TestEngineLifecycle:
             assert first.run(command(block("SetVar", name="kept", value="да", scope="global"))).ok
         with MacroEngine(registry, bus=bus, store=store) as second:
             assert second.variables.read(VariableScope.GLOBAL, "kept") == "да"
+
+    def test_replacing_variables_affects_new_runs(self, engines) -> None:
+        first = MemoryVariables()
+        second = MemoryVariables()
+        engine = engines(store=first)
+
+        engine.replace_variables(second)
+        report = engine.run(command(block("SetVar", name="active", value="new", scope="profile")))
+
+        assert report.ok
+        assert first.read(VariableScope.PROFILE, "active") is MISSING
+        assert second.read(VariableScope.PROFILE, "active") == "new"

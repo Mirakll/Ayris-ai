@@ -277,6 +277,9 @@ def _run_application(options: CliOptions) -> int:
         return EXIT_ALREADY_RUNNING
 
     with ayris:
+        from ayris.triggers import install_triggers
+
+        install_triggers(ayris)
         bridge = _QtBridge(ayris)
         window = MainWindow()
 

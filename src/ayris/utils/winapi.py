@@ -126,6 +126,7 @@ __all__ = [
     "clipboard_set_text",
     "console_output_codepage",
     "current_thread_id",
+    "current_user_is_admin",
     "cursor_position",
     "display_device",
     "dpi_for_monitor",
@@ -1365,6 +1366,39 @@ def process_elevation() -> ElevationInfo:
     finally:
         _close_handle(token)
     return ElevationInfo(elevated=elevated, elevation_type=kind, integrity_level=integrity)
+
+
+def current_user_is_admin() -> bool:
+    """Whether the effective user belongs to the built-in Administrators group.
+
+    ``CheckTokenMembership(NULL, ...)`` checks the effective token.  A filtered
+    UAC token contains the Administrators SID as deny-only, so the API returns
+    false for it; in that case ``TokenElevationTypeLimited`` is the documented
+    proof that the account is an administrator and has a linked elevated token.
+    """
+    create_sid = _require("advapi32", "CreateWellKnownSid")
+    check = _require("advapi32", "CheckTokenMembership")
+    # WELL_KNOWN_SID_TYPE.WinBuiltinAdministratorsSid. SECURITY_MAX_SID_SIZE
+    # is documented as 68 bytes and avoids a first call made only to size it.
+    sid = ctypes.create_string_buffer(68)
+    size = ctypes.c_ulong(len(sid))
+    create_sid.restype = ctypes.c_bool
+    create_sid.argtypes = [
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_ulong),
+    ]
+    if not create_sid(26, None, sid, ctypes.byref(size)):
+        raise _last_error("CreateWellKnownSid(WinBuiltinAdministratorsSid)")
+    member = ctypes.c_bool(False)
+    check.restype = ctypes.c_bool
+    check.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_bool)]
+    if not check(None, sid, ctypes.byref(member)):
+        raise _last_error("CheckTokenMembership(Administrators)")
+    if member.value:
+        return True
+    return process_elevation().elevation_type == ELEVATION_TYPE_LIMITED
 
 
 def enable_privilege(name: str) -> bool:

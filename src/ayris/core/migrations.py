@@ -397,6 +397,19 @@ _AUDIT_CONFIRMED: Final = (
     "CHECK (confirmed IN (0, 1))",
 )
 
+_MACRO_DEBUG_SESSIONS: Final = (
+    """
+    CREATE TABLE macro_debug_sessions (
+        command_id       INTEGER PRIMARY KEY REFERENCES commands (id) ON DELETE CASCADE,
+        breakpoints_json TEXT NOT NULL DEFAULT '[]',
+        watches_json     TEXT NOT NULL DEFAULT '[]',
+        slots_json       TEXT NOT NULL DEFAULT '{}',
+        report_json      TEXT NOT NULL DEFAULT '',
+        updated_at       TEXT NOT NULL
+    )
+    """,
+)
+
 
 #: Every migration ever released, in order. Append only.
 MIGRATIONS: Final[tuple[Migration, ...]] = (
@@ -424,6 +437,11 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
         version=5,
         description="отметка подтверждения в журнале аудита",
         statements=_AUDIT_CONFIRMED,
+    ),
+    Migration(
+        version=6,
+        description="последняя сессия отладки макроса",
+        statements=_MACRO_DEBUG_SESSIONS,
     ),
 )
 

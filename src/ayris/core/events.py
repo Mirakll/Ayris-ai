@@ -72,9 +72,13 @@ __all__ = [
     "CancelRequested",
     "CommandsChanged",
     "ConfigChanged",
+    "DebugFinished",
+    "DebugPaused",
+    "DebugStepFinished",
     "Event",
     "EventBus",
     "Handler",
+    "HotkeyTriggered",
     "IntentMatched",
     "LogLine",
     "MacroBlockFinished",
@@ -84,6 +88,7 @@ __all__ = [
     "MacroFinished",
     "MacroSkipped",
     "MacroStarted",
+    "MicToggleRequested",
     "MicToggled",
     "ModeChanged",
     "ModelDownloadFailed",
@@ -93,7 +98,10 @@ __all__ = [
     "ModelRemoved",
     "NotificationRequested",
     "OnlineStatusChanged",
+    "OverlayToggleRequested",
     "PipelineStateChanged",
+    "PttPressed",
+    "PttReleased",
     "SpeechEnded",
     "SpeechStarted",
     "TimerFired",
@@ -101,6 +109,7 @@ __all__ = [
     "TtsFinished",
     "TtsStarted",
     "Unsubscribe",
+    "WakeToggleRequested",
     "WakeUp",
     "WakeWordDetected",
     "WorkerCrashed",
@@ -219,6 +228,13 @@ class IntentMatched(Event):
     source: str = "exact"
     slots: JsonObject = field(default_factory=dict)
     request_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class HotkeyTriggered(Event):
+    """A registered command hotkey fired; the dispatcher decides what runs."""
+
+    command_id: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -359,6 +375,37 @@ class MacroSkipped(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class DebugPaused(Event):
+    """A debugger worker stopped immediately before one block."""
+
+    command_id: int | None
+    block_path: str
+    state: str = "paused"
+    call_stack: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class DebugStepFinished(Event):
+    """A debugger completed a block and its execution record is available."""
+
+    command_id: int | None
+    block_path: str
+    block: str
+    duration_ms: int = 0
+    status: str = "ok"
+
+
+@dataclass(frozen=True, slots=True)
+class DebugFinished(Event):
+    """The debug run finished, failed or was stopped."""
+
+    command_id: int | None
+    outcome: str
+    duration_ms: int = 0
+    steps: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class TtsStarted(Event):
     """Sound began coming out of the speakers.
 
@@ -408,6 +455,39 @@ class CancelRequested(Event):
     """
 
     reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class PttPressed(Event):
+    """The push-to-talk key went down and recording may begin."""
+
+    hotkey: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class PttReleased(Event):
+    """The push-to-talk key went up; a long enough utterance may be processed."""
+
+    hotkey: str = ""
+    duration_ms: int = 0
+    accepted: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class WakeToggleRequested(Event):
+    """A hotkey asked the wake-word subsystem to toggle its armed state."""
+
+    enabled: bool | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OverlayToggleRequested(Event):
+    """A hotkey asked the overlay to switch between shown and hidden."""
+
+
+@dataclass(frozen=True, slots=True)
+class MicToggleRequested(Event):
+    """A hotkey asked the state owner to mute or unmute the microphone."""
 
 
 # ----------------------------------------------------------------------
