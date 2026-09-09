@@ -101,6 +101,7 @@ __all__ = [
     "VoiceConfig",
     "WakeConfig",
     "WakePhrase",
+    "WindowConfig",
     "diff_settings",
     "dump_settings",
     "get_config_manager",
@@ -1709,6 +1710,16 @@ class DevtoolsConfig(ConfigSection):
     )
 
 
+class WindowConfig(ConfigSection):
+    """Persisted state of the settings window, separate from user-facing tabs."""
+
+    x: int = Field(default=-1, description="Позиция окна по горизонтали; -1 — по центру")
+    y: int = Field(default=-1, description="Позиция окна по вертикали; -1 — по центру")
+    width: int = Field(default=1100, ge=640, le=16384, description="Ширина окна")
+    height: int = Field(default=760, ge=480, le=16384, description="Высота окна")
+    section: str = Field(default="general", description="Последний открытый раздел")
+
+
 class Settings(BaseSettings):
     """Every Ayris setting, one attribute per settings tab.
 
@@ -1750,6 +1761,10 @@ class Settings(BaseSettings):
     )
     updates: UpdatesConfig = Field(default_factory=UpdatesConfig, description="Обновления")
     devtools: DevtoolsConfig = Field(default_factory=DevtoolsConfig, description="Логи / DevTools")
+    window: WindowConfig = Field(
+        default_factory=WindowConfig,
+        description="Состояние окна настроек",
+    )
 
     def secret_refs(self) -> dict[str, str]:
         """Credential reference per subsystem, skipping the empty ones.
@@ -1780,6 +1795,7 @@ _SECTION_TITLES: Final[tuple[tuple[str, str], ...]] = (
     ("performance", "Производительность: приоритеты, память, потоки"),
     ("updates", "Обновления программы и моделей"),
     ("devtools", "Логи и инструменты разработчика"),
+    ("window", "Состояние окна настроек"),
 )
 
 _FILE_HEADER: Final[tuple[str, ...]] = (

@@ -1,3 +1,15 @@
-"""Settings window pages, one module per section of the settings window."""
+"""Settings window pages and their shared registration API."""
 
-from __future__ import annotations
+from ayris.gui.tabs.base import SearchEntry, SettingsTab
+from ayris.gui.tabs.placeholder import PlaceholderTab
+from ayris.gui.tabs.registry import SECTIONS, TabSpec, register_tab, tab_spec
+
+__all__ = [
+    "SECTIONS",
+    "PlaceholderTab",
+    "SearchEntry",
+    "SettingsTab",
+    "TabSpec",
+    "register_tab",
+    "tab_spec",
+]

@@ -239,6 +239,7 @@ def _run_application(options: CliOptions) -> int:
     from PySide6.QtWidgets import QApplication
 
     from ayris.gui.main_window import MainWindow
+    from ayris.gui.theme import ThemeManager
 
     # PassThrough keeps fractional scaling (125%, 150%) instead of rounding it,
     # which the overlay needs to stay pixel-aligned. Must precede QApplication.
@@ -252,9 +253,10 @@ def _run_application(options: CliOptions) -> int:
     app.setApplicationDisplayName(__app_name__)
     app.setApplicationVersion(__version__)
     app.setOrganizationName(__app_name__)
-    # Task 44 adds the tray icon; until then the window is the only way to quit,
-    # so the process must exit when it closes.
-    app.setQuitOnLastWindowClosed(True)
+    # Closing settings only hides them; the tray or an explicit action owns exit.
+    app.setQuitOnLastWindowClosed(False)
+    theme = ThemeManager(app)
+    theme.set_mode("system")
 
     # Everything below the window belongs to the lifecycle. Startup binds the
     # event bus to this thread, so a handler that publishes from the UI thread
@@ -281,11 +283,10 @@ def _run_application(options: CliOptions) -> int:
 
         install_triggers(ayris)
         bridge = _QtBridge(ayris)
-        window = MainWindow()
+        window = MainWindow(theme=theme, manager=ayris.config, bus=ayris.bus)
 
         def close_window() -> None:
-            # QWidget.close returns a bool; the lifecycle wants None.
-            window.close()
+            window.exit()
 
         ayris.add_component(
             Component(

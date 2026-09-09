@@ -1,86 +1,231 @@
-"""Main settings window.
-
-Task 01 only needs a window that opens and closes cleanly, so this is the bare
-shell: title, icon-less, sensible minimum size, geometry centred on the screen
-the cursor is on. Task 43 replaces the body with the sidebar navigation and the
-eleven settings sections; the class name and constructor signature stay, so the
-entry point does not need to change.
-"""
+"""Main settings window with lazy navigation and persisted state."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QCloseEvent, QCursor, QGuiApplication
-from PySide6.QtWidgets import QLabel, QMainWindow, QVBoxLayout, QWidget
+from collections.abc import Iterable
+
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QGuiApplication, QKeyEvent, QMoveEvent, QResizeEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QMainWindow,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ayris import __app_name__, __version__
-from ayris.utils.logger import get_logger
+from ayris.core.config import ConfigManager, WindowConfig
+from ayris.core.events import EventBus
+from ayris.gui.nav_sidebar import NavSidebar
+from ayris.gui.settings_search import SettingsSearch, SettingsSearchIndex, highlight_widget
+from ayris.gui.tabs import SECTIONS, PlaceholderTab, SearchEntry, SettingsTab, tab_spec
+from ayris.gui.theme import ThemeManager
+from ayris.gui.widgets import SearchField
 
-__all__ = ["MainWindow"]
+__all__ = ["MainWindow", "restored_geometry"]
 
-_log = get_logger(__name__)
+_STATE_DEBOUNCE_MS = 500
 
-_MIN_WIDTH = 900
-_MIN_HEIGHT = 620
 
-_PLACEHOLDER_TEXT = (
-    "Ayris запущен.\n\n"
-    "Настройки появятся здесь после выполнения задачи 43.\n"
-    "Закройте окно, чтобы завершить работу."
-)
+def restored_geometry(state: WindowConfig, screens: Iterable[QRect], primary: QRect) -> QRect:
+    """Return visible saved geometry, or centre it on the primary screen."""
+    size = QSize(state.width, state.height)
+    if state.x >= 0 and state.y >= 0:
+        saved = QRect(QPoint(state.x, state.y), size)
+        if any(saved.intersects(screen) for screen in screens):
+            return saved
+    fallback = QRect(QPoint(), size)
+    fallback.moveCenter(primary.center())
+    return fallback
 
 
 class MainWindow(QMainWindow):
-    """Settings window shell."""
+    # Settings window whose normal close action only hides it.
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        theme: ThemeManager | None = None,
+        manager: ConfigManager | None = None,
+        bus: EventBus | None = None,
+    ) -> None:
         super().__init__(parent)
+        application = QApplication.instance()
+        if theme is None:
+            if not isinstance(application, QApplication):
+                raise RuntimeError("MainWindow требует QApplication")
+            theme = ThemeManager(application, parent=self)
+            theme.apply()
+        self._theme = theme
+        self._manager = manager or ConfigManager()
+        self._bus = bus
+        self._pages: dict[str, SettingsTab] = {}
+        self._current_section = "general"
+        self._allow_close = False
+        self._restoring = True
+        self._search_index = SettingsSearchIndex()
+
         self.setWindowTitle(f"{__app_name__} {__version__} — Настройки")
-        self.setMinimumSize(_MIN_WIDTH, _MIN_HEIGHT)
+        self.setMinimumSize(theme.metric("window_min_width"), theme.metric("window_min_height"))
         self.setCentralWidget(self._build_central_widget())
-        self._centre_on_current_screen()
 
-    @staticmethod
-    def _build_central_widget() -> QWidget:
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(32, 32, 32, 32)
+        self._state_timer = QTimer(self)
+        self._state_timer.setSingleShot(True)
+        self._state_timer.setInterval(_STATE_DEBOUNCE_MS)
+        self._state_timer.timeout.connect(self._save_window_state)
+        self._restore_window_state()
+        self._restoring = False
 
-        label = QLabel(_PLACEHOLDER_TEXT)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setWordWrap(True)
-        layout.addWidget(label)
+    @property
+    def created_sections(self) -> tuple[str, ...]:
+        return tuple(self._pages)
 
-        return container
+    @property
+    def current_section(self) -> str:
+        return self._current_section
 
-    def _centre_on_current_screen(self) -> None:
-        """Centre on the screen the cursor is currently on.
+    @property
+    def search_index(self) -> SettingsSearchIndex:
+        return self._search_index
 
-        On a multi-monitor setup this opens the window where the user is
-        looking instead of always on the primary display. Task 43 replaces this
-        with geometry restored from the config.
-        """
-        screen = QGuiApplication.screenAt(QCursor.pos()) or QGuiApplication.primaryScreen()
-        if screen is None:
-            # The PySide6 stubs say primaryScreen() always returns a QScreen, so
-            # mypy calls this branch dead. At runtime it returns None on a
-            # headless session, and reading availableGeometry() would crash.
-            _log.warning(  # type: ignore[unreachable]
-                "no screen reported by Qt; leaving window at default position"
+    def open_section(self, key: str) -> SettingsTab:
+        # Create a section page only on its first visit.
+        spec = tab_spec(key)
+        page = self._pages.get(key)
+        if page is None:
+            page = (
+                spec.factory(self._manager, self._theme, self._bus)
+                if spec.factory is not None
+                else PlaceholderTab(spec, self._manager, self._theme, self._bus)
             )
-            return
-        available = screen.availableGeometry()
+            self._pages[key] = page
+            self._stack.addWidget(page)
+            page.search_entries_changed.connect(lambda page=page: self._index_page(page))
+            self._index_page(page)
+        self._current_section = key
+        self._stack.setCurrentWidget(page)
+        self._sidebar.select_section(key)
+        self._schedule_state_save()
+        return page
 
-        geometry = self.frameGeometry()
-        geometry.setSize(self.minimumSize())
-        geometry.moveCenter(available.center())
-        self.move(geometry.topLeft())
+    def exit(self) -> None:
+        # Closing is accepted only during explicit application shutdown.
+        self._allow_close = True
+        self._state_timer.stop()
+        self._save_window_state()
+        for page in self._pages.values():
+            page.dispose()
+        self.close()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
-        """Log the shutdown request.
+        self._save_window_state()
+        if self._allow_close:
+            event.accept()
+            return
+        self.hide()
+        event.ignore()
 
-        Task 44 turns this into "hide to tray" once a tray icon exists to bring
-        the window back; until then closing the window really does exit.
-        """
-        _log.info("main window closed by user")
-        super().closeEvent(event)
+    def moveEvent(self, event: QMoveEvent) -> None:  # noqa: N802
+        super().moveEvent(event)
+        self._schedule_state_save()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._schedule_state_save()
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if watched is self._search_field and event.type() == QEvent.Type.KeyPress:
+            key_event = event if isinstance(event, QKeyEvent) else None
+            if key_event is not None and self._search_popup.isVisible():
+                if key_event.key() in (Qt.Key.Key_Down, Qt.Key.Key_Up):
+                    step = 1 if key_event.key() == Qt.Key.Key_Down else -1
+                    row = (self._search_popup.currentRow() + step) % self._search_popup.count()
+                    self._search_popup.setCurrentRow(row)
+                    return True
+                if key_event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    item = self._search_popup.currentItem()
+                    if item is not None:
+                        self._search_popup.activate_current()
+                    return True
+                if key_event.key() == Qt.Key.Key_Escape:
+                    self._search_popup.hide()
+                    return True
+        return super().eventFilter(watched, event)
+
+    def _build_central_widget(self) -> QWidget:
+        container = QWidget(self)
+        outer = QVBoxLayout(container)
+        margin = self._theme.metric("spacing_lg")
+        outer.setContentsMargins(margin, margin, margin, margin)
+        outer.setSpacing(self._theme.metric("spacing_lg"))
+
+        self._search_field = SearchField(
+            container, placeholder="Найти настройку", theme=self._theme
+        )
+        self._search_field.installEventFilter(self)
+        outer.addWidget(self._search_field)
+
+        content = QHBoxLayout()
+        content.setSpacing(self._theme.metric("spacing_lg"))
+        self._sidebar = NavSidebar(SECTIONS, self._theme, container)
+        self._stack = QStackedWidget(container)
+        content.addWidget(self._sidebar)
+        content.addWidget(self._stack, 1)
+        outer.addLayout(content, 1)
+
+        self._search_popup = SettingsSearch(self._search_index, self._theme, self)
+        self._search_field.search_changed.connect(
+            lambda query: self._search_popup.update_query(query, self._search_field)
+        )
+        self._search_popup.chosen.connect(self._open_search_result)
+        self._sidebar.section_selected.connect(self.open_section)
+        return container
+
+    def _index_page(self, page: SettingsTab) -> None:
+        for entry in page.search_entries:
+            self._search_index.add(entry)
+
+    def _open_search_result(self, entry: object) -> None:
+        if not isinstance(entry, SearchEntry):
+            return
+        self.open_section(entry.section_key)
+        if entry.scroll_area is not None:
+            entry.scroll_area.ensureWidgetVisible(entry.widget)
+        highlight_widget(entry.widget, self._theme)
+        self._search_field.clear()
+
+    def _restore_window_state(self) -> None:
+        state = self._manager.settings.window
+        screens = tuple(screen.availableGeometry() for screen in QGuiApplication.screens())
+        primary_screen = QGuiApplication.primaryScreen()
+        if primary_screen is not None:
+            primary = primary_screen.availableGeometry()
+            self.setGeometry(restored_geometry(state, screens, primary))
+        else:  # pragma: no cover - Qt stubs claim this headless branch is impossible
+            self.resize(state.width, state.height)  # type: ignore[unreachable]
+        key = state.section if any(spec.key == state.section for spec in SECTIONS) else "general"
+        self.open_section(key)
+
+    def _schedule_state_save(self) -> None:
+        if not self._restoring and hasattr(self, "_state_timer"):
+            self._state_timer.start()
+
+    def _save_window_state(self) -> None:
+        geometry = self.normalGeometry()
+        values = {
+            "window.x": geometry.x(),
+            "window.y": geometry.y(),
+            "window.width": geometry.width(),
+            "window.height": geometry.height(),
+            "window.section": self._current_section,
+        }
+        current = self._manager.settings.window
+        if all(
+            getattr(current, path.removeprefix("window.")) == value
+            for path, value in values.items()
+        ):
+            return
+        self._manager.apply(values)
