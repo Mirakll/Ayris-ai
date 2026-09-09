@@ -71,6 +71,7 @@ winrt-Windows.Media.Ocr==3.2.1; sys_platform == 'win32'
 # действия отвечают понятным отказом, а не трейсбеком.
 winrt-Windows.Media.Control==3.2.1; sys_platform == 'win32'
 winrt-Windows.Storage.Streams==3.2.1; sys_platform == 'win32'
+winrt-Windows.Security.Credentials.UI==3.2.1; sys_platform == 'win32'
 
 # --- Инструменты проверок ---
 ruff==0.9.6

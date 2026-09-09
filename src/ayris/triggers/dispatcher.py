@@ -259,6 +259,17 @@ def install_triggers(app: AyrisApp) -> TriggerDispatcher:
         audit_enabled=lambda: app.settings.privacy.audit_commands,
     )
     registry.discover()
+    from ayris.security.confirmation import ConfirmationManager, windows_dialog_prompt
+    from ayris.security.pin import PinManager
+
+    registry.set_confirmation(
+        ConfirmationManager(
+            lambda: app.settings.privacy,
+            action=lambda name: registry.get(name) if registry.has(name) else None,
+            pin=PinManager(),
+            dialog=windows_dialog_prompt,
+        )
+    )
 
     def command_by_name(name: str) -> CommandModel | None:
         row = app.repositories.commands.get_by_name(dispatcher.profile_id, name)

@@ -702,7 +702,7 @@ class ActionRegistry:
                 log="action %s denied: not elevated",
             ) from error
         confirmed = False
-        if action.meta.is_dangerous:
+        if action.meta.is_dangerous or self._confirmation_required(action):
             verdict = self._ask(action, validated, request_id=request_id)
             if not verdict.confirmed:
                 raise self._refuse(
@@ -721,6 +721,17 @@ class ActionRegistry:
                 )
             confirmed = True
         return action, validated, confirmed
+
+    def _confirmation_required(self, action: Action) -> bool:
+        """Apply the manager's editable action list through the same barrier."""
+        check = getattr(self._confirm, "requires_confirmation", None)
+        if not callable(check):
+            return False
+        try:
+            return bool(check(action))
+        except AyrisError:
+            _log.exception("could not resolve confirmation policy for %s", action.meta.name)
+            return True
 
     def _refuse(
         self,

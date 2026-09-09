@@ -1603,9 +1603,32 @@ class PrivacyConfig(ConfigSection):
         default=True,
         description="Спрашивать подтверждение перед опасными действиями",
     )
-    confirmation_method: Literal["voice", "dialog", "both"] = Field(
+    confirmation_method: Literal["voice", "dialog", "both", "pin", "hello"] = Field(
         default="both",
         description="Как спрашивать подтверждение",
+    )
+    confirmation_fallback: Literal["voice", "dialog", "pin"] = Field(
+        default="dialog",
+        description="Резервный способ, если Windows Hello недоступен",
+    )
+    confirmation_timeout_sec: float = Field(
+        default=10.0, ge=1.0, le=60.0, description="Время ожидания подтверждения"
+    )
+    confirmation_fuzzy_threshold: float = Field(
+        default=0.82, ge=0.5, le=1.0, description="Порог голосового да или нет"
+    )
+    confirmation_pin_attempts: int = Field(
+        default=3, ge=1, le=10, description="Лимит попыток ПИН-кода"
+    )
+    confirmation_pin_delay_sec: float = Field(
+        default=1.0, ge=0.0, le=30.0, description="Задержка после неверного ПИН-кода"
+    )
+    confirmation_by_category: dict[str, str] = Field(
+        default_factory=lambda: {"power": "hello", "files": "hello"},
+        description="Способ подтверждения по категории действия",
+    )
+    confirmation_actions: tuple[str, ...] = Field(
+        default=(), description="Дополнительные действия с подтверждением"
     )
     clear_on_exit: bool = Field(
         default=False,

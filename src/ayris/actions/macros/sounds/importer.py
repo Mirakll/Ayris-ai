@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import math
 import tempfile
 import wave
@@ -120,7 +121,7 @@ def _decode(source: Path, decoder: SoundDecoder | None) -> AudioChunk:
     if decoder is not None:
         return decoder.decode(source)
     try:
-        import av
+        av = importlib.import_module("av")
     except ImportError as exc:
         raise SoundImportError(
             "compressed decoder unavailable",
@@ -132,10 +133,7 @@ def _decode(source: Path, decoder: SoundDecoder | None) -> AudioChunk:
         if not frames:
             raise ValueError("no audio stream")
         rate = int(frames[0].sample_rate)
-        arrays = [
-            np.asarray(frame.to_ndarray(format="s16"), dtype=np.int16)  # type: ignore[call-arg]
-            for frame in frames
-        ]
+        arrays = [np.asarray(frame.to_ndarray(format="s16"), dtype=np.int16) for frame in frames]
         data = np.concatenate(arrays, axis=-1)
     except Exception as exc:
         raise SoundImportError(

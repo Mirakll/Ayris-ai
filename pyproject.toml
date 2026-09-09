@@ -101,6 +101,7 @@ dependencies = [
     # управления музыкой, поэтому зависимость, а не extra.
     "winrt-Windows.Media.Control==3.2.1; sys_platform == 'win32'",
     "winrt-Windows.Storage.Streams==3.2.1; sys_platform == 'win32'",
+    "winrt-Windows.Security.Credentials.UI==3.2.1; sys_platform == 'win32'",
     # --- Web ---
     "requests==2.32.3",
     # Windows не носит с собой базу таймзон IANA, поэтому `zoneinfo` там
