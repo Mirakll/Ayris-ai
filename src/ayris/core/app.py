@@ -44,9 +44,16 @@ from ayris.core.config import ConfigChanged as SettingsDiff
 from ayris.core.config import ConfigManager, RestartScope, init_config, reset_config_manager
 from ayris.core.database import Database, init_database, reset_database
 from ayris.core.errors import AyrisError
-from ayris.core.events import ConfigChanged, EventBus, NotificationRequested
+from ayris.core.events import (
+    ConfigChanged,
+    EventBus,
+    MicModeRequested,
+    NotificationRequested,
+    ProfileSwitchRequested,
+)
 from ayris.core.migrations import apply_migrations
 from ayris.core.paths import AppPaths, init_paths, reset_paths
+from ayris.core.profile import ProfileManager
 from ayris.core.repositories import Repositories
 from ayris.core.state import StateMachine
 from ayris.utils.logger import bind_log_bus, get_logger, setup_logging, shutdown_logging
@@ -67,7 +74,10 @@ __all__ = [
     "Component",
     "LifecycleStage",
     "RestartHandler",
+    "register_main_window",
+    "register_show_window_message",
     "signal_existing_instance",
+    "unregister_main_window",
 ]
 
 _log = get_logger(__name__)
@@ -84,6 +94,7 @@ MUTEX_NAME: Final = "AyrisSingleInstanceMutex"
 #: Registered window message the second launch broadcasts to raise the first
 #: instance's window. The first instance answers it from task 43 onwards.
 SHOW_WINDOW_MESSAGE: Final = "AyrisShowWindow"
+MAIN_WINDOW_PROPERTY: Final = "AyrisMainWindow"
 
 #: Where faulthandler writes a native crash dump, inside the logs directory.
 FAULT_LOG_NAME: Final = "crash.log"
@@ -96,6 +107,7 @@ DEFAULT_PROFILE_NAME: Final = "По умолчанию"
 
 _ERROR_ALREADY_EXISTS: Final = 183
 _HWND_BROADCAST: Final = 0xFFFF
+_ASFW_ANY: Final = -1
 
 #: Signatures of the hooks saved and restored around startup.
 ExceptHook = Callable[[type[BaseException], BaseException, TracebackType | None], None]
@@ -182,6 +194,7 @@ class AppOptions:
     minimized: bool = False
     watch_config: bool = True
     single_instance: bool | None = None
+    single_instance_name: str = MUTEX_NAME
 
 
 class _SingleInstanceGuard:
@@ -195,10 +208,11 @@ class _SingleInstanceGuard:
     second process would be.
     """
 
-    __slots__ = ("_handle", "_lock_file", "_lock_path")
+    __slots__ = ("_handle", "_lock_file", "_lock_path", "_mutex_name")
 
-    def __init__(self, lock_path: Path) -> None:
+    def __init__(self, lock_path: Path, mutex_name: str = MUTEX_NAME) -> None:
         self._lock_path = lock_path
+        self._mutex_name = mutex_name
         self._handle: int | None = None
         self._lock_file: TextIO | None = None
 
@@ -243,7 +257,7 @@ class _SingleInstanceGuard:
         try:
             kernel32.CreateMutexW.restype = ctypes.c_void_p
             kernel32.CreateMutexW.argtypes = (ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p)
-            handle = kernel32.CreateMutexW(None, True, MUTEX_NAME)
+            handle = kernel32.CreateMutexW(None, True, self._mutex_name)
             # Read through ctypes rather than kernel32.GetLastError: the DLL was
             # opened with use_last_error, so this is the value from that call and
             # not from whatever ran in between.
@@ -304,11 +318,88 @@ def _win_dll(name: str) -> Any | None:
         return None
 
 
+def register_show_window_message() -> int:
+    """Return the Windows identifier shared by both Ayris instances."""
+    user32 = _win_dll("user32")
+    if user32 is None:
+        return 0
+    try:
+        register_message = user32.RegisterWindowMessageW
+        register_message.argtypes = [ctypes.c_wchar_p]
+        register_message.restype = ctypes.c_uint
+        return int(register_message(SHOW_WINDOW_MESSAGE))
+    except (AttributeError, OSError):
+        return 0
+
+
+def register_main_window(handle: int) -> bool:
+    """Mark the native Ayris window so a later launch can find it reliably."""
+    user32 = _win_dll("user32")
+    if user32 is None or not handle:
+        return False
+    try:
+        set_property = user32.SetPropW
+        set_property.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_void_p]
+        set_property.restype = ctypes.c_bool
+        return bool(set_property(handle, MAIN_WINDOW_PROPERTY, ctypes.c_void_p(1)))
+    except (AttributeError, OSError):
+        _log.debug("не удалось зарегистрировать главное окно Ayris")
+        return False
+
+
+def unregister_main_window(handle: int) -> None:
+    """Remove the native marker installed by :func:`register_main_window`."""
+    user32 = _win_dll("user32")
+    if user32 is None or not handle:
+        return
+    try:
+        remove_property = user32.RemovePropW
+        remove_property.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+        remove_property.restype = ctypes.c_void_p
+        remove_property(handle, MAIN_WINDOW_PROPERTY)
+    except (AttributeError, OSError):
+        _log.debug("не удалось снять регистрацию главного окна Ayris")
+
+
+def _signal_registered_window(user32: Any, message: int) -> bool:
+    """Post the restore request to the marked Qt top-level window."""
+    get_property = user32.GetPropW
+    get_property.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p]
+    get_property.restype = ctypes.c_void_p
+    post_message = user32.PostMessageW
+    post_message.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_uint,
+        ctypes.c_size_t,
+        ctypes.c_ssize_t,
+    ]
+    post_message.restype = ctypes.c_bool
+
+    found = False
+
+    def visit(handle: int, _parameter: int) -> bool:
+        nonlocal found
+        if not get_property(handle, MAIN_WINDOW_PROPERTY):
+            return True
+        found = bool(post_message(handle, message, 0, 0))
+        return False
+
+    callback_factory = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)
+    callback_type = callback_factory(ctypes.c_bool, ctypes.c_void_p, ctypes.c_ssize_t)
+    callback = callback_type(visit)
+    enum_windows = user32.EnumWindows
+    enum_windows.argtypes = [callback_type, ctypes.c_ssize_t]
+    enum_windows.restype = ctypes.c_bool
+    enum_windows(callback, 0)
+    return found
+
+
 def signal_existing_instance() -> bool:
     """Ask an already running Ayris to show its window.
 
-    Broadcasts a registered window message; the main window subscribes to it from
-    task 43 onwards. Until then the second launch simply exits quietly.
+    Posts a registered message to the marked Qt window, whose UI thread restores
+    the complete widget hierarchy. Broadcasting is a fallback for the short
+    interval before the native window has been marked.
 
     Returns:
         Whether the message was posted.
@@ -317,10 +408,29 @@ def signal_existing_instance() -> bool:
     if user32 is None:
         return False
     try:
-        message = int(user32.RegisterWindowMessageW(SHOW_WINDOW_MESSAGE))
+        # The new process still owns the foreground permission granted by the
+        # shell. Pass it to the existing GUI before asking that process to
+        # restore its window; otherwise Windows may only flash the taskbar.
+        allow_foreground = getattr(user32, "AllowSetForegroundWindow", None)
+        if allow_foreground is not None:
+            allow_foreground.argtypes = [ctypes.c_uint]
+            allow_foreground.restype = ctypes.c_bool
+            allow_foreground(_ASFW_ANY)
+        message = register_show_window_message()
         if not message:
             return False
-        user32.PostMessageW(_HWND_BROADCAST, message, 0, 0)
+        if _signal_registered_window(user32, message):
+            return True
+        post_message = user32.PostMessageW
+        post_message.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_uint,
+            ctypes.c_size_t,
+            ctypes.c_ssize_t,
+        ]
+        post_message.restype = ctypes.c_bool
+        if not post_message(_HWND_BROADCAST, message, 0, 0):
+            return False
     except (AttributeError, OSError):
         _log.debug("не удалось отправить сообщение работающему экземпляру")
         return False
@@ -360,12 +470,14 @@ class AyrisApp:
         "_previous_excepthook",
         "_previous_thread_excepthook",
         "_profile",
+        "_profile_manager",
         "_repositories",
         "_restart_handlers",
         "_running",
         "_stages_started",
         "_started_components",
         "_state",
+        "_state_unsubscribers",
         "_unsubscribe_config",
         "_unsubscribe_event",
     )
@@ -389,7 +501,9 @@ class AyrisApp:
         self._database: Database | None = None
         self._repositories: Repositories | None = None
         self._state: StateMachine | None = None
+        self._state_unsubscribers: tuple[Callable[[], None], ...] = ()
         self._profile: Profile | None = None
+        self._profile_manager: ProfileManager | None = None
         self._guard: _SingleInstanceGuard | None = None
         self._fault_log: TextIO | None = None
         self._unsubscribe_config: Callable[[], None] | None = None
@@ -455,6 +569,11 @@ class AyrisApp:
     def profile(self) -> Profile:
         """The active profile."""
         return _require(self._profile, "активный профиль")
+
+    @property
+    def profile_manager(self) -> ProfileManager:
+        """Live profile operations shared by settings, tray and triggers."""
+        return _require(self._profile_manager, "менеджер профилей")
 
     @property
     def pending_restarts(self) -> frozenset[RestartScope]:
@@ -736,6 +855,10 @@ class AyrisApp:
         self._config = init_config(self.paths.config_file, watch=self._options.watch_config)
         self._unsubscribe_config = self._config.subscribe(self._on_settings_changed)
         self._apply_live_settings(self._config.settings, initial=True)
+        if sys.platform == "win32":
+            from ayris.utils.autostart import reconcile
+
+            reconcile(self._config)
 
     def _stop_config(self) -> None:
         if self._unsubscribe_config is not None:
@@ -753,6 +876,10 @@ class AyrisApp:
         diff = event.diff
         _log.info("настройки изменились: %s", diff.summary())
         self._apply_live_settings(diff.settings)
+        if sys.platform == "win32" and diff.touches("general.autostart"):
+            from ayris.utils.autostart import disable, enable
+
+            (enable if diff.settings.general.autostart else disable)()
         scopes = diff.restart_scopes - {RestartScope.NONE}
         if scopes:
             self._pending_restarts.update(scopes)
@@ -816,7 +943,9 @@ class AyrisApp:
             _log.info("защита от второго экземпляра выключена")
             return
 
-        guard = _SingleInstanceGuard(self.paths.root / LOCK_FILE_NAME)
+        guard = _SingleInstanceGuard(
+            self.paths.root / LOCK_FILE_NAME, self._options.single_instance_name
+        )
         if not guard.acquire():
             _log.warning("Ayris уже запущен, показываем окно работающего экземпляра")
             signal_existing_instance()
@@ -859,6 +988,10 @@ class AyrisApp:
             _log.info("создан профиль «%s»", profile.name)
         self._repositories = repositories
         self._profile = profile
+        self._profile_manager = ProfileManager(
+            repositories, paths=self.paths, bus=self._bus, config=self.config
+        )
+        self._profile = self._profile_manager.active
         _log.info("активный профиль: %s", profile.name)
 
         # Variables from a previous run that were never meant to outlive it. A
@@ -882,6 +1015,7 @@ class AyrisApp:
         if limit:
             self._guarded("очистка истории", partial(self._trim_history, limit))
         self._repositories = None
+        self._profile_manager = None
         self._profile = None
 
     def _trim_history(self, limit: int) -> None:
@@ -913,7 +1047,24 @@ class AyrisApp:
         self._state = StateMachine(self._bus)
         self._state.apply_settings(self.settings)
 
+        def set_mic_mode(event: MicModeRequested) -> None:
+            self.state.set_mic_mode(event.mode)
+            self.config.apply({"voice.wake.mic_mode": event.mode.value})
+
+        def switch_profile(event: ProfileSwitchRequested) -> None:
+            target = self.repositories.profiles.get(event.profile_id)
+            if target is not None:
+                self._profile = self.profile_manager.switch(target)
+
+        self._state_unsubscribers = (
+            self._bus.subscribe(MicModeRequested, set_mic_mode, weak=False),
+            self._bus.subscribe(ProfileSwitchRequested, switch_profile, weak=False),
+        )
+
     def _stop_state(self) -> None:
+        for unsubscribe in self._state_unsubscribers:
+            unsubscribe()
+        self._state_unsubscribers = ()
         self._state = None
 
     def __repr__(self) -> str:

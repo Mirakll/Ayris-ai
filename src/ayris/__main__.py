@@ -37,6 +37,9 @@ from ayris.core.app import (
     AyrisApp,
     Component,
     LifecycleStage,
+    register_main_window,
+    register_show_window_message,
+    unregister_main_window,
 )
 from ayris.core.errors import AyrisError
 from ayris.core.paths import AppPaths, init_paths
@@ -238,8 +241,9 @@ def _run_application(options: CliOptions) -> int:
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication
 
-    from ayris.gui.main_window import MainWindow
+    from ayris.gui.main_window import MainWindow, ShowWindowNativeEventFilter
     from ayris.gui.theme import ThemeManager
+    from ayris.gui.tray import TrayController
 
     # PassThrough keeps fractional scaling (125%, 150%) instead of rounding it,
     # which the overlay needs to stay pixel-aligned. Must precede QApplication.
@@ -284,6 +288,17 @@ def _run_application(options: CliOptions) -> int:
         install_triggers(ayris)
         bridge = _QtBridge(ayris)
         window = MainWindow(theme=theme, manager=ayris.config, bus=ayris.bus)
+        tray = TrayController(ayris, window, theme, parent=app)
+        tray.start()
+        native_window_handle = int(window.winId()) if sys.platform == "win32" else 0
+        if native_window_handle:
+            register_main_window(native_window_handle)
+        show_window_filter: ShowWindowNativeEventFilter | None = None
+        if sys.platform == "win32":
+            message_id = register_show_window_message()
+            if message_id:
+                show_window_filter = ShowWindowNativeEventFilter(window, message_id)
+                app.installNativeEventFilter(show_window_filter)
 
         def close_window() -> None:
             window.exit()
@@ -295,12 +310,12 @@ def _run_application(options: CliOptions) -> int:
                 stop=close_window,
             )
         )
+        ayris.add_component(
+            Component(name="system_tray", stage=LifecycleStage.GUI, stop=tray.close)
+        )
 
-        if options.minimized:
-            _log.info(
-                "started minimized; no tray icon exists yet (task 44), "
-                "so the only way out is Ctrl+C or terminating the process"
-            )
+        if options.minimized or ayris.settings.general.start_minimized:
+            _log.info("запущено свёрнутым в трей")
         else:
             window.show()
 
@@ -316,6 +331,10 @@ def _run_application(options: CliOptions) -> int:
         try:
             exit_code = app.exec()
         finally:
+            if show_window_filter is not None:
+                app.removeNativeEventFilter(show_window_filter)
+            if native_window_handle:
+                unregister_main_window(native_window_handle)
             bridge.disconnect()
 
     _log.info("Qt event loop finished with code %d", exit_code)

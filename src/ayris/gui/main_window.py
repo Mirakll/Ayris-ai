@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+import ctypes
 from collections.abc import Iterable
+from typing import Final, Protocol, cast
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer
+from PySide6.QtCore import (
+    QAbstractNativeEventFilter,
+    QByteArray,
+    QEvent,
+    QObject,
+    QPoint,
+    QRect,
+    QSize,
+    Qt,
+    QTimer,
+)
 from PySide6.QtGui import QCloseEvent, QGuiApplication, QKeyEvent, QMoveEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -24,9 +36,53 @@ from ayris.gui.tabs import SECTIONS, PlaceholderTab, SearchEntry, SettingsTab, t
 from ayris.gui.theme import ThemeManager
 from ayris.gui.widgets import SearchField
 
-__all__ = ["MainWindow", "restored_geometry"]
+__all__ = ["MainWindow", "ShowWindowNativeEventFilter", "restored_geometry"]
 
 _STATE_DEBOUNCE_MS = 500
+_WINDOWS_EVENT_TYPE: Final = b"windows_generic_MSG"
+
+
+class _NativeMessage(ctypes.Structure):
+    """Prefix of WinAPI ``MSG``; only the message identifier is inspected."""
+
+    _fields_ = (
+        ("hwnd", ctypes.c_void_p),
+        ("message", ctypes.c_uint),
+    )
+
+
+class _NativeMessagePointer(Protocol):
+    def __int__(self) -> int: ...
+
+
+class ShowWindowNativeEventFilter(QAbstractNativeEventFilter):
+    """Restore the settings window when another Ayris instance is launched."""
+
+    def __init__(self, window: MainWindow, message_id: int) -> None:
+        super().__init__()
+        self._window = window
+        self._message_id = message_id
+
+    def nativeEventFilter(  # noqa: N802
+        self,
+        event_type: QByteArray | bytes | bytearray | memoryview[int],
+        message: int | object,
+    ) -> tuple[bool, int]:
+        event_name = event_type.data() if isinstance(event_type, QByteArray) else bytes(event_type)
+        if not self._message_id or event_name != _WINDOWS_EVENT_TYPE or not message:
+            return False, 0
+        address = int(cast(_NativeMessagePointer, message))
+        native_message = ctypes.cast(address, ctypes.POINTER(_NativeMessage)).contents
+        if native_message.message == self._message_id:
+            self.show_window()
+        return False, 0
+
+    def show_window(self) -> None:
+        """Restore, raise and focus the existing window on the Qt UI thread."""
+        self._window.showNormal()
+        self._window.show()
+        self._window.raise_()
+        self._window.activateWindow()
 
 
 def restored_geometry(state: WindowConfig, screens: Iterable[QRect], primary: QRect) -> QRect:

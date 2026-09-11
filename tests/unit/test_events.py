@@ -10,11 +10,14 @@ signal only replaces the wake-up.
 from __future__ import annotations
 
 import gc
+import hashlib
 import threading
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
+from ayris.core import app as app_module
 from ayris.core.app import (
     AlreadyRunningError,
     AppOptions,
@@ -52,12 +55,14 @@ class Collector:
 
 def _options(tmp_path: Path, **overrides: object) -> AppOptions:
     """Application options pointed at an isolated profile."""
+    instance_digest = hashlib.sha256(str(tmp_path.resolve()).encode()).hexdigest()[:16]
     defaults: dict[str, object] = {
         "profile": tmp_path / "profile",
         "log_level": "DEBUG",
         "console_log": False,
         "watch_config": False,
         "single_instance": False,
+        "single_instance_name": f"AyrisTest-{instance_digest}",
     }
     defaults.update(overrides)
     return AppOptions(**defaults)  # type: ignore[arg-type]
@@ -607,15 +612,29 @@ class TestLifecycle:
 
 @pytest.mark.xdist_group("single-instance")
 class TestSingleInstance:
-    """The token is a named mutex on Windows, and a name is machine-wide.
+    """Each test shares one mutex namespace, isolated from production Ayris."""
 
-    That makes these tests the second resource in the suite that cannot be shared
-    (the first is the clipboard): two of them starting an app on two xdist workers
-    at once, and one gets ``AlreadyRunningError`` where it expected a clean start —
-    a red run that says nothing about the code. ``xdist_group`` keeps the class on
-    one worker, where the mutex is free between tests; the run passes
-    ``--dist=loadgroup`` for the mark to mean anything.
-    """
+    def test_production_mutex_name_is_the_default(self) -> None:
+        assert AppOptions().single_instance_name == app_module.MUTEX_NAME
+
+    def test_existing_native_window_is_signalled_on_its_qt_thread(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        user32 = Mock()
+        user32.GetPropW.return_value = 1
+        user32.RegisterWindowMessageW.return_value = 0xC123
+
+        def enumerate_windows(callback: object, parameter: int) -> bool:
+            assert callable(callback)
+            callback(1234, parameter)
+            return True
+
+        user32.EnumWindows.side_effect = enumerate_windows
+        monkeypatch.setattr(app_module, "_win_dll", lambda _name: user32)
+
+        assert app_module.signal_existing_instance() is True
+        user32.PostMessageW.assert_called_once_with(1234, 0xC123, 0, 0)
+        user32.AllowSetForegroundWindow.assert_called_once_with(app_module._ASFW_ANY)
 
     def test_a_second_instance_is_refused(self, tmp_path: Path) -> None:
         first = AyrisApp(_options(tmp_path, single_instance=True)).startup()

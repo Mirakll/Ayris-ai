@@ -2,18 +2,78 @@
 
 from __future__ import annotations
 
+import ctypes
 from pathlib import Path
+from unittest.mock import Mock, call
 
 import pytest
 from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QApplication, QLineEdit
 
 from ayris.core.config import ConfigManager, WindowConfig
-from ayris.gui.main_window import MainWindow, restored_geometry
+from ayris.gui.main_window import (
+    MainWindow,
+    ShowWindowNativeEventFilter,
+    restored_geometry,
+)
 from ayris.gui.tabs import SECTIONS, SettingsTab
 from ayris.gui.theme import ThemeManager
 
 pytestmark = pytest.mark.unit
+
+
+class _NativeMessage(ctypes.Structure):
+    _fields_ = (("hwnd", ctypes.c_void_p), ("message", ctypes.c_uint))
+
+
+def test_second_launch_message_restores_and_focuses_existing_window() -> None:
+    window = Mock()
+    event_filter = ShowWindowNativeEventFilter(window, 0xC123)
+    message = _NativeMessage(None, 0xC123)
+
+    assert event_filter.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message)) == (
+        False,
+        0,
+    )
+    assert window.method_calls == [
+        call.showNormal(),
+        call.show(),
+        call.raise_(),
+        call.activateWindow(),
+    ]
+
+
+def test_second_launch_filter_ignores_other_native_messages() -> None:
+    window = Mock()
+    event_filter = ShowWindowNativeEventFilter(window, 0xC123)
+    message = _NativeMessage(None, 0xC124)
+
+    assert event_filter.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(message)) == (
+        False,
+        0,
+    )
+    assert window.method_calls == []
+
+
+def test_second_launch_restores_visible_widget_hierarchy(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    window = MainWindow(theme=ThemeManager(app), manager=manager)
+    window.show()
+    app.processEvents()
+    window.hide()
+    app.processEvents()
+
+    ShowWindowNativeEventFilter(window, 0xC123).show_window()
+    app.processEvents()
+
+    assert window.isVisible()
+    assert window.centralWidget().isVisible()
+    assert window._search_field.isVisible()
+    assert window._sidebar.isVisible()
+    assert window._stack.isVisible()
+    assert window._stack.currentWidget().isVisible()
+    window.exit()
 
 
 @pytest.fixture

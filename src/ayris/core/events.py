@@ -88,6 +88,7 @@ __all__ = [
     "MacroFinished",
     "MacroSkipped",
     "MacroStarted",
+    "MicModeRequested",
     "MicToggleRequested",
     "MicToggled",
     "ModeChanged",
@@ -99,7 +100,9 @@ __all__ = [
     "NotificationRequested",
     "OnlineStatusChanged",
     "OverlayToggleRequested",
+    "OverlayVisibilityRequested",
     "PipelineStateChanged",
+    "ProfileSwitchRequested",
     "PttPressed",
     "PttReleased",
     "SpeechEnded",
@@ -488,6 +491,27 @@ class OverlayToggleRequested(Event):
 @dataclass(frozen=True, slots=True)
 class MicToggleRequested(Event):
     """A hotkey asked the state owner to mute or unmute the microphone."""
+
+
+@dataclass(frozen=True, slots=True)
+class MicModeRequested(Event):
+    """The UI asked the state owner to select a microphone mode."""
+
+    mode: MicMode
+
+
+@dataclass(frozen=True, slots=True)
+class OverlayVisibilityRequested(Event):
+    """The UI asked the overlay owner for an explicit visibility state."""
+
+    visible: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileSwitchRequested(Event):
+    """The UI asked the profile owner to activate a stored profile."""
+
+    profile_id: int
 
 
 # ----------------------------------------------------------------------
