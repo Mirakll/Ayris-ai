@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from dataclasses import replace
@@ -28,6 +29,7 @@ from ayris.utils.hotkey_backends.winapi import (
     ERROR_HOTKEY_ALREADY_REGISTERED,
     HotkeyBackendUnavailable,
     HotkeyRegistrationError,
+    WinApiBackend,
 )
 from ayris.utils.hotkey_manager import HotkeyBinding, HotkeyManager, detect_conflicts
 from ayris.utils.hotkeys import Hotkey, parse_hotkey
@@ -86,6 +88,19 @@ class FakeBackend:
     def key(self, name: str, pressed: bool = True) -> None:
         assert self.capture_callback is not None
         self.capture_callback(KEYS[name].vk, pressed)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="нужен настоящий WinAPI")
+def test_winapi_backend_creates_and_stops_real_message_window() -> None:
+    backend = WinApiBackend()
+    thread = threading.Thread(target=backend.run, args=(lambda _identifier: None,), daemon=True)
+    thread.start()
+    try:
+        assert backend.wait_ready(2)
+    finally:
+        backend.stop()
+        thread.join(2)
+    assert not thread.is_alive()
 
 
 class FakeCommands:

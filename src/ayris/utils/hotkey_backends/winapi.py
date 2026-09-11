@@ -156,8 +156,6 @@ class WinApiBackend:
         self._window_proc = None
 
     def _create_message_window(self) -> None:
-        hinstance = self._kernel32.GetModuleHandleW(None)
-
         def window_proc(hwnd: int, message: int, wparam: int, lparam: int) -> int:
             if message == WM_HOTKEY and self._callback is not None:
                 self._callback(int(wparam))
@@ -175,6 +173,33 @@ class WinApiBackend:
             return int(self._user32.DefWindowProcW(hwnd, message, wparam, lparam))
 
         self._window_proc = WindowProc(window_proc)
+        self._kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        self._kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+        self._user32.RegisterClassExW.argtypes = [ctypes.POINTER(WNDCLASSEXW)]
+        self._user32.RegisterClassExW.restype = wintypes.ATOM
+        self._user32.DefWindowProcW.argtypes = [
+            wintypes.HWND,
+            wintypes.UINT,
+            wintypes.WPARAM,
+            wintypes.LPARAM,
+        ]
+        self._user32.DefWindowProcW.restype = wintypes.LPARAM
+        self._user32.CreateWindowExW.argtypes = [
+            wintypes.DWORD,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_int,
+            wintypes.HWND,
+            wintypes.HMENU,
+            wintypes.HINSTANCE,
+            wintypes.LPVOID,
+        ]
+        self._user32.CreateWindowExW.restype = wintypes.HWND
+        hinstance = self._kernel32.GetModuleHandleW(None)
         window_class = WNDCLASSEXW(
             cbSize=ctypes.sizeof(WNDCLASSEXW),
             lpfnWndProc=self._window_proc,
@@ -186,7 +211,6 @@ class WinApiBackend:
                 f"RegisterClassExW failed: {ctypes.get_last_error()}",
                 user_message="Не удалось создать обработчик глобальных горячих клавиш.",
             )
-        self._user32.CreateWindowExW.restype = wintypes.HWND
         window = self._user32.CreateWindowExW(
             0,
             self._window_class,
@@ -196,7 +220,7 @@ class WinApiBackend:
             0,
             0,
             0,
-            ctypes.c_void_p(HWND_MESSAGE),
+            wintypes.HWND(HWND_MESSAGE),
             None,
             hinstance,
             None,
