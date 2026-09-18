@@ -896,7 +896,11 @@ class TestValidation:
     def test_ensure_valid_returns_the_report_when_only_warnings_were_found(
         self, registry: ActionRegistry
     ) -> None:
-        report = ensure_valid(_example("work_mode.ayris"), registry=registry)
+        # A command with no triggers stays saveable but earns the "manual only"
+        # warning — a source of warnings that does not depend on which blocks
+        # happen to be registered.
+        command = _example("work_mode.ayris").model_copy(update={"triggers": []})
+        report = ensure_valid(command, registry=registry)
         assert report.warnings
         assert report.ok
 
