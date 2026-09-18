@@ -8,6 +8,7 @@ from ayris.gui.widgets.notice import InlineNotice, Toast
 from ayris.gui.widgets.search_field import SearchField
 from ayris.gui.widgets.setting_card import SettingCard
 from ayris.gui.widgets.slider_field import SliderField
+from ayris.gui.widgets.sphere import SphereState, SphereWidget
 from ayris.gui.widgets.toggle import ToggleSwitch
 
 __all__ = [
@@ -19,6 +20,8 @@ __all__ = [
     "SearchField",
     "SettingCard",
     "SliderField",
+    "SphereState",
+    "SphereWidget",
     "Toast",
     "ToggleSwitch",
 ]
