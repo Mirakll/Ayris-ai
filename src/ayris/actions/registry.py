@@ -152,9 +152,12 @@ INPUT_PACKAGE: Final = "ayris.actions.input"
 #: web protocol, and neither belongs next to window management.
 MEDIA_PACKAGE: Final = "ayris.actions.media"
 
+#: Timers, reminders and alarms: the scheduler and the actions that feed it.
+TIMERS_PACKAGE: Final = "ayris.actions.timers"
+
 #: Everything :meth:`ActionRegistry.discover` walks when asked for no package in
 #: particular. Order is the order actions appear in a fresh registry.
-ACTION_PACKAGES: Final = (SYSTEM_PACKAGE, INPUT_PACKAGE, MEDIA_PACKAGE)
+ACTION_PACKAGES: Final = (SYSTEM_PACKAGE, INPUT_PACKAGE, MEDIA_PACKAGE, TIMERS_PACKAGE)
 
 #: How many synchronous actions may run at once. Section 12 lets the user size the
 #: macro thread pool; this is the floor the registry keeps for itself.

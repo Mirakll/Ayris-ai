@@ -96,6 +96,7 @@ __all__ = [
     "ScreenshotActionsConfig",
     "Settings",
     "SttConfig",
+    "TimersConfig",
     "TtsConfig",
     "UpdatesConfig",
     "VoiceConfig",
@@ -1479,6 +1480,42 @@ class HotkeysConfig(ConfigSection):
         return self
 
 
+class TimersConfig(ConfigSection):
+    """Tab «Таймеры» — timers, reminders, alarms and optional calendar sync."""
+
+    missed_policy: Literal["fire_now", "mark_missed", "skip"] = Field(
+        default="mark_missed",
+        description=(
+            "Что делать с пропущенными за время выключения записями: "
+            "сработать сразу / сработать с пометкой «пропущено» / пропустить"
+        ),
+    )
+    missed_grace_min: int = Field(
+        default=15,
+        ge=0,
+        le=1440,
+        description="Пропускать записи старше этого числа минут при запуске",
+    )
+    default_snooze_min: int = Field(
+        default=5,
+        ge=1,
+        le=180,
+        description="На сколько минут «отложить» по умолчанию",
+    )
+    sound: str = Field(
+        default="",
+        description="Звук по умолчанию для срабатывания; пусто — звук из записи",
+    )
+    sync_enabled: bool = Field(
+        default=False,
+        description="Синхронизация напоминаний с внешним календарём. Выключено по умолчанию",
+    )
+    sync_provider: Literal["", "ms_todo", "google", "caldav"] = Field(
+        default="",
+        description="Провайдер синхронизации, когда она включена",
+    )
+
+
 class OverlayConfig(ConfigSection):
     """Tab «Оверлей» — the single always-on-top panel with the dotted sphere.
 
@@ -1765,6 +1802,7 @@ class Settings(BaseSettings):
     actions: ActionsConfig = Field(default_factory=ActionsConfig, description="Действия")
     ai: AiConfig = Field(default_factory=AiConfig, description="ИИ / LLM")
     hotkeys: HotkeysConfig = Field(default_factory=HotkeysConfig, description="Горячие клавиши")
+    timers: TimersConfig = Field(default_factory=TimersConfig, description="Таймеры")
     overlay: OverlayConfig = Field(default_factory=OverlayConfig, description="Оверлей")
     plugins: PluginsConfig = Field(default_factory=PluginsConfig, description="Плагины")
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig, description="Приватность")
@@ -1802,6 +1840,7 @@ _SECTION_TITLES: Final[tuple[tuple[str, str], ...]] = (
     ("actions", "Действия: шаг громкости и прочие настройки системных действий"),
     ("ai", "ИИ / LLM: режимы, поставщик, промпты, память"),
     ("hotkeys", "Горячие клавиши помощника"),
+    ("timers", "Таймеры: пропущенные срабатывания, отложить, синхронизация"),
     ("overlay", "Оверлей: положение, вид, анимации"),
     ("plugins", "Плагины"),
     ("privacy", "Приватность: телеметрия выключена по умолчанию"),
