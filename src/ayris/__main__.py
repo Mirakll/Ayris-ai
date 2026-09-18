@@ -242,6 +242,7 @@ def _run_application(options: CliOptions) -> int:
     from PySide6.QtWidgets import QApplication
 
     from ayris.gui.main_window import MainWindow, ShowWindowNativeEventFilter
+    from ayris.gui.overlay import OverlayController
     from ayris.gui.theme import ThemeManager
     from ayris.gui.tray import TrayController
 
@@ -290,6 +291,15 @@ def _run_application(options: CliOptions) -> int:
         window = MainWindow(theme=theme, manager=ayris.config, bus=ayris.bus)
         tray = TrayController(ayris, window, theme, parent=app)
         tray.start()
+        overlay = OverlayController(
+            ayris.bus,
+            theme,
+            lambda: ayris.settings.overlay,
+            show_settings=tray.show_settings,
+            snapshot=ayris.state.snapshot,
+            parent=app,
+        )
+        overlay.start()
         native_window_handle = int(window.winId()) if sys.platform == "win32" else 0
         if native_window_handle:
             register_main_window(native_window_handle)
@@ -313,6 +323,7 @@ def _run_application(options: CliOptions) -> int:
         ayris.add_component(
             Component(name="system_tray", stage=LifecycleStage.GUI, stop=tray.close)
         )
+        ayris.add_component(Component(name="overlay", stage=LifecycleStage.GUI, stop=overlay.close))
 
         if options.minimized or ayris.settings.general.start_minimized:
             _log.info("запущено свёрнутым в трей")

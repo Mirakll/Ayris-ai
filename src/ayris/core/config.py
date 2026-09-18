@@ -1480,18 +1480,31 @@ class HotkeysConfig(ConfigSection):
 
 
 class OverlayConfig(ConfigSection):
-    """Tab «Оверлей» — the always-on-top window with the dotted sphere."""
+    """Tab «Оверлей» — the single always-on-top panel with the dotted sphere.
+
+    There is exactly one overlay: the main panel is either shown or hidden.
+    A separate compact mode is deferred to task 76, so nothing here selects a
+    «mini / expanded» layout.
+    """
 
     enabled: bool = Field(default=True, description="Показывать оверлей")
-    mode: Literal["mini", "expanded"] = Field(
-        default="mini",
-        description="Режим при запуске: капсула со сферой или развёрнутая панель",
-    )
     position: Literal[
-        "top_left", "top_right", "bottom_left", "bottom_right", "center", "custom"
-    ] = Field(default="bottom_right", description="Где показывать окно")
-    custom_x: int = Field(default=0, description="Координата X при позиции «custom»")
-    custom_y: int = Field(default=0, description="Координата Y при позиции «custom»")
+        "top_left",
+        "top_right",
+        "bottom_left",
+        "bottom_right",
+        "top_center",
+        "bottom_center",
+        "custom",
+    ] = Field(default="bottom_right", description="Где показывать панель")
+    custom_x: int = Field(
+        default=0,
+        description="Смещение X относительно монитора при позиции «custom», в логических пикселях",
+    )
+    custom_y: int = Field(
+        default=0,
+        description="Смещение Y относительно монитора при позиции «custom», в логических пикселях",
+    )
     monitor: int = Field(
         default=0,
         ge=0,
