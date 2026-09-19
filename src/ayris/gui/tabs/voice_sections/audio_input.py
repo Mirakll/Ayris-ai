@@ -85,7 +85,10 @@ class AudioInputSection:
         refresh_button.setToolTip("Перечитать список устройств после подключения микрофона")
         refresh_button.clicked.connect(self._rescan_devices)
         device_layout.addWidget(refresh_button)
-        tab.add_card(
+        # A block (stacked), not a card (side-by-side): the body is a combo + a
+        # button in a row, which side by side with the text column doubles the
+        # card's minimum width and forces a horizontal scrollbar on a narrow page.
+        tab.add_block(
             "Устройство записи",
             "Микрофон для распознавания. «Обновить» перечитывает список после hot-plug.",
             device_body,

@@ -158,6 +158,33 @@ def _copy_filter(directory: str, names: list[str]) -> set[str]:
     return skipped
 
 
+def _tree_size(root: Path) -> int:
+    """Bytes a move would copy — everything under ``root`` bar the skipped parts.
+
+    Caches, logs and the WAL sidecars are excluded to match :func:`_copy_filter`,
+    so the free-space estimate reflects what actually lands in the destination.
+    """
+    total = 0
+    for item in root.rglob("*"):
+        parts = set(item.relative_to(root).parts)
+        if parts & _SKIPPED_ON_MOVE or item.name.endswith((".db-wal", ".db-shm")):
+            continue
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def _human_mb(size: int) -> str:
+    """Rough size for a user message; kept local so this module stays light."""
+    mb = size / (1024 * 1024)
+    if mb >= 1024:
+        return f"{mb / 1024:.1f} ГБ"
+    return f"{mb:.0f} МБ"
+
+
 # ----------------------------------------------------------------------
 # manager
 # ----------------------------------------------------------------------
@@ -860,6 +887,101 @@ class ProfileManager:
         shutil.rmtree(source, ignore_errors=True)
         if source.exists():
             _log.warning("старая папка профиля удалена не полностью: %s", source)
+
+    def stage_root_change(self, target: Path) -> Path:
+        """Copy the profile to ``target`` and point the *next* launch at it.
+
+        Unlike :meth:`change_root`, the running process is left exactly where it
+        is: nothing is re-pointed, no worker is asked to reload, and the source
+        is not deleted. The copy is verified and the pointer written last, so a
+        failure leaves the installation untouched. The new location takes effect
+        on the next start, when :func:`resolve_root_with_source` reads the
+        pointer.
+
+        This is the safe, restart-based half of section 17 — moving the models
+        off the system disk without live-swapping the database out from under
+        the workers that have models open, which is what makes it usable from a
+        settings tab while everything is running.
+
+        Args:
+            target: New root. Must be empty or not exist.
+
+        Returns:
+            The absolute destination that was recorded.
+
+        Raises:
+            ProfileError: The target is unusable, there is not enough room, the
+                copy failed, or the copied database failed its integrity check.
+        """
+        destination = target.expanduser().resolve()
+        source = self._paths.root
+        if destination == source:
+            raise ProfileError(
+                f"{destination} is already the current root",
+                user_message="Это уже текущая папка данных.",
+            )
+        self._check_destination(destination, source)
+        self._require_space(source, destination)
+
+        # Fold the write-ahead log into the file so the copy is a complete
+        # snapshot. The database stays open: the process keeps running on the
+        # old root until it is restarted.
+        self._repositories.database.checkpoint()
+
+        try:
+            shutil.copytree(source, destination, ignore=_copy_filter, dirs_exist_ok=True)
+        except (OSError, shutil.Error) as exc:
+            raise ProfileError(
+                f"cannot copy profile {source} -> {destination}: {exc}",
+                user_message=(
+                    f"Не удалось скопировать данные профиля в:\n{destination}\n"
+                    "Папка осталась на прежнем месте."
+                ),
+            ) from exc
+
+        self._verify_staged_copy(destination)
+        if destination == default_root():
+            # Back to the standard location: a pointer would be redundant and a
+            # stale one is how a later move ends up somewhere unexpected.
+            clear_configured_root()
+        else:
+            write_configured_root(destination)
+        _log.info("папка профиля подготовлена к переезду: %s -> %s", source, destination)
+        return destination
+
+    def _require_space(self, source: Path, destination: Path) -> None:
+        """Refuse a copy that cannot fit on the destination volume.
+
+        ``destination`` already exists here — :meth:`_check_destination` created
+        it — so the free-space probe reads the right volume directly.
+        """
+        needed = _tree_size(source)
+        try:
+            free = shutil.disk_usage(destination).free
+        except OSError:
+            return  # cannot tell; let the copy try and fail loudly if it must
+        if free < needed:
+            raise ProfileError(
+                f"need {needed} bytes, only {free} free at {destination}",
+                user_message=(
+                    "Недостаточно места в выбранной папке.\n"
+                    f"Нужно примерно {_human_mb(needed)}, свободно {_human_mb(free)}."
+                ),
+            )
+
+    def _verify_staged_copy(self, destination: Path) -> None:
+        """Open the copied database read-only and refuse a corrupt copy."""
+        copied = Database.open(destination / self._paths.database_file.name, migrate=False)
+        try:
+            ok = copied.integrity_check()
+        finally:
+            copied.close()
+        if not ok:
+            shutil.rmtree(destination, ignore_errors=True)
+            raise ProfileError(
+                f"copied database at {destination} failed its integrity check",
+                user_message=("Скопированная база данных повреждена.\nПапка данных не изменена."),
+            )
 
 
 __all__ = [

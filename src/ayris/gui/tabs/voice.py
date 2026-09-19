@@ -270,6 +270,7 @@ class VoiceTab(SettingsTab):
         layout.setSpacing(self._theme.metric("spacing_sm"))
         heading = QLabel(title)
         heading.setProperty("role", "h2")
+        heading.setWordWrap(True)  # a long heading must fold, not widen the page
         layout.addWidget(heading)
         if description:
             caption = QLabel(description)

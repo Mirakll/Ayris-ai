@@ -1353,6 +1353,56 @@ class TestRoot:
         )
         assert manager.paths.database_file.is_file()
 
+    def test_stage_root_change_copies_but_stays_put(
+        self, manager: ProfileManager, repos: Repositories, tmp_path: Path
+    ) -> None:
+        source_id = manager.active.id
+        assert source_id is not None
+        seed(repos, source_id)
+        old_root = manager.paths.root
+
+        target = tmp_path / "sync" / "Ayris"
+        result = manager.stage_root_change(target)
+
+        assert result == target.resolve()
+        # The copy is complete and the next launch is pointed at it...
+        assert (target / "ayris.db").is_file()
+        assert paths_module.read_configured_root() == target.resolve()
+        # ...but the running process has not moved: the source is intact and
+        # the process-wide paths still name the old root.
+        assert manager.paths.root == old_root
+        assert paths_module.get_paths().root == old_root
+        assert (old_root / "ayris.db").is_file()
+        # The manager keeps working on the old handle.
+        assert manager.create("Всё ещё работает").id is not None
+
+    def test_stage_root_change_refuses_the_current_root(self, manager: ProfileManager) -> None:
+        with pytest.raises(ProfileError, match="already the current root"):
+            manager.stage_root_change(manager.paths.root)
+
+    def test_stage_root_change_refuses_a_non_empty_folder(
+        self, manager: ProfileManager, tmp_path: Path
+    ) -> None:
+        occupied = tmp_path / "занято"
+        occupied.mkdir()
+        (occupied / "чужое.txt").write_text("не трогать", encoding="utf-8")
+        with pytest.raises(ProfileError, match="not empty"):
+            manager.stage_root_change(occupied)
+        assert (occupied / "чужое.txt").is_file()
+
+    def test_stage_root_change_leaves_caches_and_logs_behind(
+        self, manager: ProfileManager, tmp_path: Path
+    ) -> None:
+        manager.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+        (manager.paths.logs_dir / "ayris.log").write_text("шум", encoding="utf-8")
+        manager.paths.cache_dir.mkdir(parents=True, exist_ok=True)
+        (manager.paths.cache_dir / "мусор.tmp").write_text("шум", encoding="utf-8")
+
+        target = tmp_path / "sync" / "Ayris"
+        manager.stage_root_change(target)
+        assert not (target / "logs" / "ayris.log").exists()
+        assert not (target / "cache" / "мусор.tmp").exists()
+
     def test_open_folder_refuses_a_path_that_is_not_there(
         self, manager: ProfileManager, tmp_path: Path
     ) -> None:
