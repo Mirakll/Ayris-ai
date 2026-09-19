@@ -117,6 +117,9 @@ claude-egress.reg
 *.reg
 CLAUDE.md
 
+# Общая память Codex ⇄ Claude Code: локальный журнал на этой машине, не в репо.
+.ai/
+
 # hookify-правила (локальные, не для репозитория)
 .claude/*.local.md
 .claude/settings.local.json

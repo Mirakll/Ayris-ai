@@ -142,7 +142,26 @@
     `TimerProvider` (реализует задача 28); текстовые команды роутятся колбэком
     `submit_text` (подключается, когда пайплайн окажется в приложении). Конфиг
     оверлея больше не знает про «мини/расширенный».
-- [ ] **48** — [Вкладка Общие](tasks/48_tab_general.md) — зависит от: 43, 44
+- [x] **47** — [Пайплайн и воркеры в приложении](tasks/47_pipeline_workers_in_app.md) — зависит от: 18, 05, 46, 48
+  - Появилось: `install_workers` в `__main__` внутри `with ayris:` — старт воркеров
+    ушёл на фоновый поток (`ayris-workers-startup`), UI не блокируется; после старта
+    `set_active_worker_control(manager)`, а GUI-компонент `worker_control` снимает
+    супервизор на выходе (до остановки воркеров). Кнопка перезапуска (48) и строки
+    воркеров в мониторе ресурсов ожили — `active_worker_control()` отдаёт менеджер.
+    Новый `core/pipeline_app.py::install_pipeline`: `Matcher` строится из голосовых
+    триггеров профиля (`trigger_from_db` + `TriggerIndex.bind` на `CommandsChanged`,
+    перестройка на `ProfileSwitched`, `apply_settings` на `ConfigChanged`), пайплайн
+    поднят с `actions=None` под этапом `NLU`. `submit_text` оверлея подключён к
+    `run_text` (на отдельном потоке). Стадия `_execute` пайплайна: без исполнителя
+    совпавшая команда не рапортует отказ, а передаётся диспетчеру триггеров (он и
+    выполняет по `IntentMatched`) — без двойного запуска. `WorkerControl` в
+    `resource_monitor.py` стал `Protocol` (слой воркеров не импортирует GUI, поэтому
+    структурное соответствие, а не наследование). Тесты: `test_pipeline_app.py` (5) +
+    правка `test_pipeline.py` под новую семантику `_execute`. Голосовой путь
+    (STT/TTS через воркеры) намеренно не `attach()`-ится — адаптеров воркер→
+    `SttSource`/`SpeechOutput` ещё нет, отдельная задача.
+- [x] **48** — [Вкладка Общие](tasks/48_tab_general.md) — зависит от: 43, 44
+  - Появилось: `gui/tabs/general.py` (`GeneralTab` — язык `ru` заблокирован с пояснением; тема применяется мгновенно через `ThemeManager.set_mode`; автозапуск синхронизируется с реальным состоянием реестра; старт свёрнутым и свернуть/закрыть в трей; приоритет процесса вживую через `apply_priority`; приоритет захвата звука с подтверждением на «Реальное время» и revert при отказе; лимит RAM из `RAM_LIMIT_CHOICES`; пулы STT/TTS/LLM/макросы слайдерами; экономный режим с живым объяснением отложенных движков; плашки `_RestartBar` по `pending_restarts` с кнопкой перезапуска нужной области), `gui/widgets/resource_monitor.py` (`ResourceMonitor` — RAM/ЦП по процессам, таймер только между showEvent/hideEvent, подсветка превышения лимита; `PsutilSampler`; `WorkerControl` + `set_active_worker_control`/`active_worker_control`, супервизор регистрируется сам), `utils/process_priority.py` (`apply_priority` — класс приоритета главного процесса вживую, POSIX-фоллбек через `nice` для CI). Зависимость `psutil==7.2.2`. Тесты `tests/unit/test_tab_general.py`.
 - [ ] **49** — [Вкладка Голос](tasks/49_tab_voice.md) — зависит от: 43, 09, 11, 13
 - [ ] **50** — [UI менеджера моделей](tasks/50_ui_model_manager.md) — зависит от: 43, 14
 - [ ] **51** — [Дерево команд](tasks/51_command_tree.md) — зависит от: 43, 30
