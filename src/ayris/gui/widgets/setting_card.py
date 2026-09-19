@@ -27,6 +27,10 @@ class SettingCard(QFrame):
         self._texts = QVBoxLayout()
         self.title_label = QLabel(title)
         self.title_label.setProperty("role", "h2")
+        # A long title («Пауза после срабатывания») on one line sets the card's
+        # minimum width and can push the page past a narrow settings window into a
+        # horizontal scrollbar; wrapping lets the title fold instead of widen.
+        self.title_label.setWordWrap(True)
         self.description_label = QLabel(description)
         self.description_label.setProperty("role", "secondary")
         self.description_label.setWordWrap(True)

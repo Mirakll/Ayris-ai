@@ -70,6 +70,29 @@ QListWidget#settingsSidebar::item:selected {
     color: {{color.on_accent}};
     background-color: {{color.accent}};
 }
+/* Дерево команд: та же поверхность-карта, что и сайдбар, без системной рамки
+   выделения и без квадрата за узлом. Ветви и отступ рисует Qt, цвет наследуем. */
+QTreeView {
+    background-color: {{color.surface}};
+    border: {{metric.border_width}}px solid {{color.border}};
+    border-radius: {{metric.radius_lg}}px;
+    outline: none;
+    padding: {{metric.spacing_xs}}px;
+    show-decoration-selected: 1;
+}
+QTreeView::item {
+    border-radius: {{metric.radius_md}}px;
+    padding: {{metric.spacing_xs}}px {{metric.spacing_sm}}px;
+    min-height: {{metric.control_height}}px;
+}
+QTreeView::item:hover { background-color: {{color.surface_highlight}}; }
+QTreeView::item:selected {
+    color: {{color.on_accent}};
+    background-color: {{color.accent}};
+}
+QTreeView::branch {
+    background: transparent;
+}
 QPushButton, QLineEdit, QSpinBox, QComboBox {
     min-height: {{metric.control_height}}px;
     border: {{metric.border_width}}px solid {{color.border}};
@@ -178,11 +201,9 @@ QProgressBar::chunk {
     background: {{color.accent}};
     border-radius: {{metric.radius_sm}}px;
 }
-/* Пилюля-статус модели: цвет несёт смысл, фон приглушён, без тёмного квадрата. */
+/* Статус модели: цвет несёт смысл, фон прозрачный — никакого квадрата за текстом. */
 QLabel[badge="true"] {
-    padding: {{metric.spacing_xs}}px {{metric.spacing_sm}}px;
-    border-radius: {{metric.radius_sm}}px;
-    background: {{color.surface_highlight}};
+    background: transparent;
     color: {{color.text_secondary}};
     font-size: {{typography.caption_size}}px;
     font-weight: {{typography.weight_medium}};

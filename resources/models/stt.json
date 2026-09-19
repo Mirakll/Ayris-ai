@@ -12,6 +12,7 @@
       "url": "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_ctc.int8.onnx",
       "sha256": "ceb61454e2e1a2dec5872cbac1de0fe0a4271d1148f6b26b5bda53ff30a12acd",
       "size_bytes": 224721181,
+      "requires_ram_mb": 2048,
       "directory": "gigaam-v3-ctc",
       "extra_files": [
         {
@@ -31,6 +32,7 @@
       "url": "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_ctc.int8.onnx",
       "sha256": "2e3fcb7a7b66030336fd10c2fcfb033bd1dc7e1bf238fe5cfd83b1d0cfc9d28e",
       "size_bytes": 224893347,
+      "requires_ram_mb": 2048,
       "directory": "gigaam-v3-e2e-ctc",
       "extra_files": [
         {
@@ -50,6 +52,7 @@
       "url": "https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip",
       "sha256": "961d5ff98a17f4aa6de69864d0aa71fa5bac682301d2b5d17a3f24c5c99a46d4",
       "size_bytes": 46236750,
+      "requires_ram_mb": 512,
       "archive": "zip",
       "target": "vosk-model-small-ru-0.22"
     },
@@ -63,6 +66,7 @@
       "url": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
       "sha256": "30f26242c4eb449f948e42cb302dd7a686cb29a3423a8367f99ff41780942498",
       "size_bytes": 41205931,
+      "requires_ram_mb": 512,
       "archive": "zip",
       "target": "vosk-model-small-en-us-0.15"
     },
@@ -75,7 +79,8 @@
       "description": "Самая маленькая Whisper. Многоязычная, но заметно ошибается; берите, если места мало.",
       "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
       "sha256": "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
-      "size_bytes": 77691713
+      "size_bytes": 77691713,
+      "requires_ram_mb": 512
     },
     {
       "id": "whispercpp-base",
@@ -86,7 +91,8 @@
       "description": "Многоязычная Whisper среднего размера. Точнее tiny, всё ещё быстрая на процессоре.",
       "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
       "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
-      "size_bytes": 147951465
+      "size_bytes": 147951465,
+      "requires_ram_mb": 1024
     },
     {
       "id": "whispercpp-small",
@@ -97,7 +103,8 @@
       "description": "Заметно точнее base на русском. Требует больше памяти и времени на фразу.",
       "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
       "sha256": "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
-      "size_bytes": 487601967
+      "size_bytes": 487601967,
+      "requires_ram_mb": 2048
     },
     {
       "id": "whispercpp-base-q5",
@@ -108,7 +115,8 @@
       "description": "Та же base, но вдвое меньше на диске и в памяти за счёт квантования.",
       "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base-q5_1.bin",
       "sha256": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
-      "size_bytes": 59707625
+      "size_bytes": 59707625,
+      "requires_ram_mb": 768
     },
     {
       "id": "whispercpp-small-q5",
@@ -119,7 +127,8 @@
       "description": "Точность small при размере вдвое меньше. Обычно лучший компромисс для слабых машин.",
       "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin",
       "sha256": "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
-      "size_bytes": 190085487
+      "size_bytes": 190085487,
+      "requires_ram_mb": 1536
     },
     {
       "id": "whispercpp-large-v3-turbo",
@@ -130,7 +139,8 @@
       "description": "Самая точная из поддерживаемых. Полтора гигабайта и заметная нагрузка: имеет смысл с видеокартой.",
       "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
       "sha256": "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
-      "size_bytes": 1624555275
+      "size_bytes": 1624555275,
+      "requires_ram_mb": 3072
     }
   ]
 }

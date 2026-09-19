@@ -309,6 +309,21 @@ class ModelRegistry:
             return self._repository.add(record)
         return self._repository.update(record)
 
+    def check_space(self, model: str | ModelEntry) -> None:
+        """Refuse a download that cannot fit, before any bytes are fetched.
+
+        The settings window calls this synchronously when the user presses
+        «Скачать», so «недостаточно места» appears on the card immediately rather
+        than after a thread has started and failed. :meth:`install` runs the same
+        check first thing, so a caller that skips this loses nothing but the early
+        message.
+
+        Raises:
+            NotEnoughSpaceError: The models volume is too small.
+        """
+        entry = self._catalog.require(model) if isinstance(model, str) else model
+        self._downloader.check_space(entry, self._paths.model_dir(entry.kind))
+
     def register_local(
         self,
         kind: ModelKind,
