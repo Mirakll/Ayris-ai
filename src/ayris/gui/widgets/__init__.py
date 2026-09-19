@@ -1,6 +1,7 @@
 """Reusable, theme-driven Qt widgets shared by Ayris interfaces."""
 
 from ayris.gui.widgets.busy_indicator import BusyIndicator
+from ayris.gui.widgets.combo_box import ThemedComboBox
 from ayris.gui.widgets.confirm_dialog import ConfirmDialog
 from ayris.gui.widgets.empty_state import EmptyState
 from ayris.gui.widgets.icon_button import IconButton
@@ -35,6 +36,7 @@ __all__ = [
     "SliderField",
     "SphereState",
     "SphereWidget",
+    "ThemedComboBox",
     "Toast",
     "ToggleSwitch",
     "WorkerControl",

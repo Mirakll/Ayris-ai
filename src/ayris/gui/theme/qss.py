@@ -3,22 +3,19 @@
 from __future__ import annotations
 
 import re
-import tempfile
 from pathlib import Path
 from typing import Literal
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QFont, QFontDatabase
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtWidgets import QApplication, QStyleFactory, QWidget
 
-from ayris.core.paths import native_path
 from ayris.gui.theme.system import SystemThemeWatcher
 from ayris.gui.theme.tokens import Theme, bundled_theme_path, load_theme
 
 __all__ = [
     "DEFAULT_QSS_TEMPLATE",
     "ThemeManager",
-    "combobox_arrow_qss",
     "render_qss",
     "resolve_font_family",
 ]
@@ -33,7 +30,8 @@ DEFAULT_QSS_TEMPLATE = """
     font-size: {{typography.body_size}}px;
 }
 QWidget { background-color: {{color.background}}; }
-QLabel, QSlider, SliderField, ToggleSwitch { background: transparent; }
+QLabel, QSlider, QRadioButton, QCheckBox, SliderField, ToggleSwitch, DownloadProgress,
+ModelManager { background: transparent; }
 /* Layout-only containers opt out of the window fill so they don't paint a dark
    rectangle on top of a card. */
 QWidget[transparent="true"], QFrame[transparent="true"] { background: transparent; }
@@ -92,27 +90,38 @@ QPushButton:disabled, QLineEdit:disabled, QSpinBox:disabled {
     color: {{color.text_muted}};
     border-color: {{color.accent_disabled}};
 }
-/* Combobox (вариант B): выше базового контрола, стрелка-шеврон в мягком
-   акцентном чипе справа. Всё на токенах — треугольник рисуется рамкой, без
-   картинок, чтобы не упираться в путь с кириллицей у url(). */
+/* Combobox: шеврон рисует сам ThemedComboBox (widgets/combo_box.py) в чипе
+   справа. Стилю запрещаем рисовать любую стрелку и дроп-даун — иначе на дробном
+   DPI (125 %, 150 %) QStyleSheetStyle всё равно нарисует свою стрелку по центру
+   поля поверх нашей: те самые «две стрелки». Ноль ширины и image: none гасят её
+   для любого QComboBox, в том числе на будущих страницах. */
 QComboBox {
     min-height: {{metric.control_height_lg}}px;
     padding-right: {{metric.spacing_xs}}px;
 }
 QComboBox::drop-down {
-    subcontrol-origin: padding;
-    subcontrol-position: center right;
-    width: {{metric.control_height}}px;
-    margin: {{metric.spacing_sm}}px {{metric.spacing_xs}}px;
+    width: 0;
     border: none;
-    border-radius: {{metric.radius_sm}}px;
-    background: {{color.surface_highlight}};
+    background: transparent;
 }
-QComboBox:hover::drop-down { background: {{color.accent}}; }
-QComboBox:on::drop-down { background: {{color.accent}}; }
-QComboBox:disabled::drop-down { background: transparent; }
-/* Сама стрелка-шеврон — картинка: QSS не умеет рисовать треугольник рамками
-   (выходит чёрточка). SVG под цвет темы дорисовывает ThemeManager._apply. */
+QComboBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
+/* ThemedComboBox — единственный, кто рисует стрелку; кормим ему цвета и размеры
+   Qt-свойствами, чтобы он оставался темозависимым. */
+ThemedComboBox {
+    qproperty-chipColor: {{color.surface_highlight}};
+    qproperty-chipColorActive: {{color.accent}};
+    qproperty-arrowColor: {{color.text_secondary}};
+    qproperty-arrowColorActive: {{color.on_accent}};
+    qproperty-arrowColorDisabled: {{color.text_muted}};
+    qproperty-chipSize: {{metric.control_height}};
+    qproperty-chipInset: {{metric.spacing_xs}};
+    qproperty-chipRadius: {{metric.radius_sm}};
+    qproperty-arrowSize: {{metric.icon_sm}};
+}
 QComboBox QAbstractItemView {
     background: {{color.surface}};
     border: {{metric.border_width}}px solid {{color.border}};
@@ -156,6 +165,33 @@ QFrame[status="info"] { border-color: {{color.info}}; }
 QFrame[status="warning"] { border-color: {{color.warning}}; }
 QFrame[status="error"] { border-color: {{color.error}}; }
 QFrame[status="success"] { border-color: {{color.success}}; }
+/* Прогресс-бар загрузки модели: тема, не системный серый квадрат. */
+QProgressBar {
+    min-height: {{metric.spacing_md}}px;
+    border: {{metric.border_width}}px solid {{color.border}};
+    border-radius: {{metric.radius_sm}}px;
+    background: {{color.surface_highlight}};
+    text-align: center;
+    color: {{color.text_primary}};
+}
+QProgressBar::chunk {
+    background: {{color.accent}};
+    border-radius: {{metric.radius_sm}}px;
+}
+/* Пилюля-статус модели: цвет несёт смысл, фон приглушён, без тёмного квадрата. */
+QLabel[badge="true"] {
+    padding: {{metric.spacing_xs}}px {{metric.spacing_sm}}px;
+    border-radius: {{metric.radius_sm}}px;
+    background: {{color.surface_highlight}};
+    color: {{color.text_secondary}};
+    font-size: {{typography.caption_size}}px;
+    font-weight: {{typography.weight_medium}};
+}
+QLabel[badge="success"] { color: {{color.success}}; }
+QLabel[badge="warning"] { color: {{color.warning}}; }
+QLabel[badge="error"] { color: {{color.error}}; }
+QLabel[badge="info"] { color: {{color.info}}; }
+QLabel[badge="muted"] { color: {{color.text_muted}}; }
 QSlider::groove:horizontal {
     height: {{metric.spacing_xs}}px;
     background: {{color.surface_highlight}};
@@ -298,70 +334,6 @@ def render_qss(theme: Theme, template: str = DEFAULT_QSS_TEMPLATE, *, scale: flo
     return rendered
 
 
-#: Where generated combobox chevrons live. One tiny SVG per (colour, size); the
-#: name is deterministic, so themes and DPI scales reuse files instead of piling
-#: up. Kept off the profile root on purpose — it is a throwaway render cache.
-_ARROW_CACHE = Path(tempfile.gettempdir()) / "ayris-ui"
-
-
-def _chevron_svg(color: str, size: int) -> str:
-    """A downward chevron stroked in *color*, sized to *size* pixels square."""
-    stroke = color[:7]  # drop any #AARRGGBB alpha tail SVG would not parse
-    inset = size / 4.0
-    mid = size / 2.0
-    low = size - inset
-    return (
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" '
-        f'viewBox="0 0 {size} {size}">'
-        f'<path d="M{inset:.1f} {mid - inset / 2:.1f} '
-        f"L{mid:.1f} {low - inset / 2:.1f} "
-        f'L{low:.1f} {mid - inset / 2:.1f}" '
-        f'fill="none" stroke="{stroke}" stroke-width="{max(1.5, size / 8):.2f}" '
-        'stroke-linecap="round" stroke-linejoin="round"/></svg>'
-    )
-
-
-def _chevron_url(color: str, size: int) -> str | None:
-    """Write the chevron for *color*/*size* and return a QSS ``url(...)``.
-
-    Returns ``None`` if the file cannot be written or has no ASCII spelling —
-    the caller then leaves Qt's native arrow in place rather than emitting a
-    ``url()`` Qt would silently fail to load.
-    """
-    try:
-        _ARROW_CACHE.mkdir(parents=True, exist_ok=True)
-        target = _ARROW_CACHE / f"chevron_{color[:7].lstrip('#')}_{size}.svg"
-        target.write_text(_chevron_svg(color, size), encoding="utf-8")
-    except OSError:
-        return None
-    safe = native_path(target)
-    if safe is None:
-        return None
-    return f'url("{Path(safe).as_posix()}")'
-
-
-def combobox_arrow_qss(theme: Theme, *, scale: float = 1.0) -> str:
-    """QSS for the combobox chevron, as themed SVGs Qt can actually draw.
-
-    Split out from the static template because it must write files: the arrow is
-    an image (a border-triangle renders as a bare dash), and its colour follows
-    the theme. Empty string when no chevron could be written, leaving the native
-    arrow — never a broken ``url()``.
-    """
-    size = theme.metric("icon_sm", scale=scale)
-    rest = _chevron_url(theme.color("text_secondary"), size)
-    active = _chevron_url(theme.color("on_accent"), size)
-    disabled = _chevron_url(theme.color("text_muted"), size)
-    if rest is None or active is None or disabled is None:
-        return ""
-    return (
-        f"QComboBox::down-arrow {{ width: {size}px; height: {size}px; image: {rest}; }}"
-        f"QComboBox:hover::down-arrow {{ image: {active}; }}"
-        f"QComboBox:on::down-arrow {{ image: {active}; }}"
-        f"QComboBox:disabled::down-arrow {{ image: {disabled}; }}"
-    )
-
-
 class ThemeManager(QObject):
     """Own the current theme, stylesheet, system mode and DPI preview scale."""
 
@@ -376,6 +348,14 @@ class ThemeManager(QObject):
     ) -> None:
         super().__init__(parent)
         self._application = application
+        # Base every widget on Fusion. The native Windows 11 style paints its own
+        # combobox arrow that QSS cannot suppress, so a themed chevron leaves the
+        # native one behind — two arrows on every combo. Fusion is a QSS-friendly
+        # base the stylesheet fully owns, so the chevron is the only arrow and the
+        # rest of the dark theme applies cleanly too.
+        fusion = QStyleFactory.create("Fusion")
+        if fusion is not None:
+            application.setStyle(fusion)
         self._theme_dir = theme_dir
         self._mode: ThemeMode = "dark"
         self._scale = 1.0
@@ -434,7 +414,6 @@ class ThemeManager(QObject):
 
     def _apply(self) -> None:
         qss = render_qss(self._theme, scale=self._scale)
-        qss += combobox_arrow_qss(self._theme, scale=self._scale)
         self._application.setStyleSheet(qss)
         font = QFont(resolve_font_family(self._theme))
         font.setPixelSize(max(1, round(self._theme.typography.body_size * self._scale)))

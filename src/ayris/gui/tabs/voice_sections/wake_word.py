@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -19,7 +18,7 @@ from ayris.core.config import RestartScope, WakeConfig
 from ayris.core.errors import ConfigError
 from ayris.core.events import WakeWordDetected
 from ayris.gui.tabs.voice import combo_options
-from ayris.gui.widgets import SliderField, ToggleSwitch
+from ayris.gui.widgets import SliderField, ThemedComboBox, ToggleSwitch
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -127,13 +126,13 @@ class WakeWordSection:
             self._enabled,
         )
 
-        self._engine_combo = QComboBox()
+        self._engine_combo = ThemedComboBox()
         for value, label in combo_options(WakeConfig, "engine", _ENGINES):
             self._engine_combo.addItem(label, value)
         tab.bind_combo(self._engine_combo, "voice.wake.engine", "Движок слова активации")
         tab.add_card("Движок", "Чем распознавать слово активации.", self._engine_combo)
 
-        self._mode_combo = QComboBox()
+        self._mode_combo = ThemedComboBox()
         for value, label in combo_options(WakeConfig, "mic_mode", _MIC_MODES):
             self._mode_combo.addItem(label, value)
         tab.bind_combo(self._mode_combo, "voice.wake.mic_mode", "Режим микрофона")

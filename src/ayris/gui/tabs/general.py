@@ -31,7 +31,6 @@ from typing import Final, get_args
 
 from PySide6.QtCore import QSignalBlocker, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -60,6 +59,7 @@ from ayris.gui.widgets import (
     Sampler,
     SettingCard,
     SliderField,
+    ThemedComboBox,
     ToggleSwitch,
     active_worker_control,
 )
@@ -216,7 +216,7 @@ class GeneralTab(SettingsTab):
     def _build_interface(self) -> None:
         self._add_header("Интерфейс")
 
-        self._language_combo = QComboBox()
+        self._language_combo = ThemedComboBox()
         self._language_combo.addItem("Русский", "ru")
         self._language_combo.setEnabled(False)
         self.bind_combo(self._language_combo, "general.language", "Язык интерфейса")
@@ -229,7 +229,7 @@ class GeneralTab(SettingsTab):
             )
         )
 
-        self._theme_combo = QComboBox()
+        self._theme_combo = ThemedComboBox()
         for value, text in (
             ("dark_purple", "Тёмная фиолетовая"),
             ("light", "Светлая"),
@@ -297,7 +297,7 @@ class GeneralTab(SettingsTab):
     def _build_performance(self) -> None:
         self._add_header("Производительность")
 
-        self._process_combo = QComboBox()
+        self._process_combo = ThemedComboBox()
         for value, label in _priority_options("process_priority"):
             self._process_combo.addItem(label, value)
         self.bind_combo(self._process_combo, "performance.process_priority", "Приоритет помощника")
@@ -312,7 +312,7 @@ class GeneralTab(SettingsTab):
             )
         )
 
-        self._audio_combo = QComboBox()
+        self._audio_combo = ThemedComboBox()
         for value, label in _priority_options("audio_priority"):
             self._audio_combo.addItem(label, value)
         self.bind_combo(self._audio_combo, "performance.audio_priority", "Приоритет захвата звука")
@@ -324,7 +324,7 @@ class GeneralTab(SettingsTab):
             RestartScope.AUDIO,
         )
 
-        self._ram_combo = QComboBox()
+        self._ram_combo = ThemedComboBox()
         for ram_value, ram_label in _ram_options():
             self._ram_combo.addItem(ram_label, ram_value)
         self.bind_combo(self._ram_combo, "performance.ram_limit_mb", "Лимит памяти моделей")

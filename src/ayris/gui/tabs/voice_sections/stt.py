@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
-    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -20,7 +19,7 @@ from ayris.core.config import RestartScope, SttConfig
 from ayris.core.errors import SecretsError
 from ayris.core.secrets import SecretsStore, is_valid_ref
 from ayris.gui.tabs.voice import AsyncRunner, combo_options
-from ayris.gui.widgets import BusyIndicator, InlineNotice
+from ayris.gui.widgets import BusyIndicator, InlineNotice, ThemedComboBox
 
 if TYPE_CHECKING:
     from ayris.gui.tabs.voice import VoiceTab
@@ -172,7 +171,7 @@ class SttSection:
         tab = self._tab
         tab.add_header("Распознавание речи (STT)")
 
-        self._mode_combo = QComboBox()
+        self._mode_combo = ThemedComboBox()
         for value, label in combo_options(SttConfig, "mode", _MODE_LABELS):
             self._mode_combo.addItem(label, value)
         tab.bind_combo(self._mode_combo, "voice.stt.mode", "Режим распознавания")
@@ -183,7 +182,7 @@ class SttSection:
             self._mode_combo,
         )
 
-        self._engine_combo = QComboBox()
+        self._engine_combo = ThemedComboBox()
         for value, label in combo_options(SttConfig, "offline_engine", _OFFLINE_ENGINES):
             self._engine_combo.addItem(label, value)
         tab.bind_combo(self._engine_combo, "voice.stt.offline_engine", "Локальный движок")
@@ -194,7 +193,7 @@ class SttSection:
             self._engine_combo,
         )
 
-        self._model_combo = QComboBox()
+        self._model_combo = ThemedComboBox()
         tab.bind_combo(self._model_combo, "voice.stt.offline_model", "Локальная модель")
         tab.add_card(
             "Модель",
@@ -213,7 +212,7 @@ class SttSection:
         self._model_notice.hide()
         tab.add_widget(self._model_notice)
 
-        self._provider_combo = QComboBox()
+        self._provider_combo = ThemedComboBox()
         for value, label in combo_options(SttConfig, "online_provider", _PROVIDERS):
             self._provider_combo.addItem(label, value)
         tab.bind_combo(self._provider_combo, "voice.stt.online_provider", "Облачный провайдер")

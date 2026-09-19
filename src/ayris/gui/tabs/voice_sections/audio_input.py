@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QSignalBlocker, Signal
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QHBoxLayout,
     QLabel,
@@ -19,7 +18,7 @@ from ayris.core.config import AudioInputConfig, RestartScope
 from ayris.core.errors import AudioError
 from ayris.core.events import AudioLevelChanged
 from ayris.gui.tabs.voice import AsyncRunner, combo_options
-from ayris.gui.widgets import ConfirmDialog, LevelMeter, SliderField
+from ayris.gui.widgets import ConfirmDialog, LevelMeter, SliderField, ThemedComboBox
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -70,7 +69,7 @@ class AudioInputSection:
         tab = self._tab
         tab.add_header("Аудио вход")
 
-        self._device_combo = QComboBox()
+        self._device_combo = ThemedComboBox()
         tab.tame_combo(self._device_combo)
         self._device_notice = QLabel("")
         self._device_notice.setProperty("role", "muted")
@@ -125,7 +124,7 @@ class AudioInputSection:
             self._vad,
         )
 
-        self._denoise_combo = QComboBox()
+        self._denoise_combo = ThemedComboBox()
         for value, label in combo_options(AudioInputConfig, "denoise", _DENOISE):
             self._denoise_combo.addItem(label, value)
         tab.bind_combo(self._denoise_combo, "voice.audio_input.denoise", "Шумоподавление")

@@ -196,6 +196,13 @@ class ModelEntry(ModelFile):
     language: str = ""
     version: str = ""
     directory: str = ""
+    #: Recommended free memory in megabytes, ``0`` when the catalog does not say.
+    #: The settings window shows it as a requirement; optional so an older catalog
+    #: still validates against this model.
+    requires_ram_mb: int = Field(default=0, ge=0)
+    #: Whether the model needs a GPU. ``False`` for every model Ayris ships, which
+    #: all run on the CPU; kept so the card can flag one that does not.
+    requires_gpu: bool = False
     schema_version: int = Field(default=CATALOG_SCHEMA_VERSION, ge=1)
     extra_files: tuple[ModelFile, ...] = ()
 

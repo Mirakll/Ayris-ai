@@ -33,6 +33,7 @@ the catalog entry, so the UI can offer «скачать заново» rather th
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
@@ -80,6 +81,10 @@ _log = get_logger(__name__)
 #: not under ``models`` on purpose: everything here is disposable, which is what
 #: makes "очистить кэш моделей" safe to offer as a single button.
 DOWNLOAD_DIR_NAME: Final = "downloads"
+
+#: How far up the tree :meth:`ModelRegistry.free_disk_bytes` looks for a directory
+#: that exists — the models folder may be absent on a fresh profile.
+_PARENT_PROBES: Final = 16
 
 
 class NotInstalledError(ModelError):
@@ -513,6 +518,29 @@ class ModelRegistry:
             total=sum(by_kind.values()),
             cache_bytes=_size_on_disk(self.download_dir),
         )
+
+    def free_disk_bytes(self) -> int:
+        """Free space on the volume that holds the models directory.
+
+        The settings window shows this beside the used total so a user can see a
+        download will fit before starting it — the same number the downloader's
+        pre-flight :meth:`Downloader.check_space` refuses against. Walks up to a
+        parent that exists, because ``models/`` may not be created yet on a fresh
+        profile. ``0`` when the volume cannot be read rather than raising: a
+        missing figure must not take the whole tab down.
+        """
+        probe = self._paths.models_dir
+        for _ in range(_PARENT_PROBES):
+            if probe.exists():
+                try:
+                    return shutil.disk_usage(probe).free
+                except OSError:  # pragma: no cover - unreadable mount point
+                    return 0
+            parent = probe.parent
+            if parent == probe:
+                return 0
+            probe = parent
+        return 0  # pragma: no cover - that many missing parents cannot happen
 
     # ------------------------------------------------------------------
     # integrity

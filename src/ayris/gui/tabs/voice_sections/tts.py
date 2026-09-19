@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSignalBlocker
 from PySide6.QtWidgets import (
-    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -19,7 +18,7 @@ from PySide6.QtWidgets import (
 from ayris.core.config import RestartScope, TtsConfig
 from ayris.core.paths import get_paths
 from ayris.gui.tabs.voice import AsyncRunner, combo_options
-from ayris.gui.widgets import BusyIndicator, SliderField, ToggleSwitch
+from ayris.gui.widgets import BusyIndicator, SliderField, ThemedComboBox, ToggleSwitch
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -59,7 +58,7 @@ class TtsSection:
         tab = self._tab
         tab.add_header("Синтез речи (TTS)")
 
-        self._engine_combo = QComboBox()
+        self._engine_combo = ThemedComboBox()
         for value, label in combo_options(TtsConfig, "engine", _ENGINES):
             self._engine_combo.addItem(label, value)
         tab.bind_combo(self._engine_combo, "voice.tts.engine", "Движок синтеза")
@@ -68,7 +67,7 @@ class TtsSection:
             "Движок", "Чем озвучивать ответы. Piper — быстрый локальный голос.", self._engine_combo
         )
 
-        self._voice_combo = QComboBox()
+        self._voice_combo = ThemedComboBox()
         tab.bind_combo(self._voice_combo, "voice.tts.voice", "Голос")
         tab.add_card(
             "Голос", "Голос выбранного движка. Свои модели можно загрузить ниже.", self._voice_combo
