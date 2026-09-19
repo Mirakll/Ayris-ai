@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QSlider, QSpinBox, QWidget
+from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QHBoxLayout,
+    QLabel,
+    QSlider,
+    QSpinBox,
+    QWidget,
+)
 
 from ayris.gui.theme import ThemeManager
 
@@ -30,6 +37,8 @@ class SliderField(QWidget):
         self.slider.setRange(minimum, maximum)
         self.spin_box = QSpinBox()
         self.spin_box.setRange(minimum, maximum)
+        self.spin_box.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.spin_box.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.unit_label = QLabel(unit)
         self.unit_label.setProperty("role", "secondary")
         self.slider.setAccessibleName(label)

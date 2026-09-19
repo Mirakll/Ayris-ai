@@ -77,7 +77,11 @@ dependencies = [
     "pywinauto==0.6.9; sys_platform == 'win32'",
     "uiautomation==2.0.20; sys_platform == 'win32'",
     "screeninfo==0.8.1",
-    "monitorcontrol==3.1.0",
+    # Память и загрузка ЦП по процессам для панели ресурсов во вкладке «Общие»
+    # (задача 48): RSS и cpu_percent главного процесса и каждого воркера. Чистое
+    # колесо под все платформы, зависимостей нет. pycaw тянет его транзитивно, но
+    # панель обращается к нему напрямую, поэтому это прямая зависимость.
+    "psutil==7.2.2",
     "mss==9.0.2",
     # Кодирование снимков (PNG/JPEG с качеством), масштабирование и бинаризация
     # перед OCR. mss отдаёт сырой BGRA, сам ничего не кодирует.
@@ -301,13 +305,13 @@ module = [
     "interception.*",
     "keyboard.*",
     "keyring.*",
-    "monitorcontrol.*",
     "mss.*",
     "onnx_asr.*",
     "onnxruntime.*",
     "openwakeword.*",
     "paddleocr.*",
     "piper.*",
+    "psutil.*",
     "pycaw.*",
     "pytesseract.*",
     "pvporcupine.*",
