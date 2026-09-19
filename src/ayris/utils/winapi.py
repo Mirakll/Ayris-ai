@@ -111,6 +111,7 @@ __all__ = [
     "ElevationInfo",
     "MessageWindow",
     "MonitorInfo",
+    "PhysicalMonitor",
     "ProcessRun",
     "Rect",
     "WinApiError",
@@ -128,6 +129,7 @@ __all__ = [
     "current_thread_id",
     "current_user_is_admin",
     "cursor_position",
+    "destroy_physical_monitors",
     "display_device",
     "dpi_for_monitor",
     "enable_privilege",
@@ -144,10 +146,13 @@ __all__ = [
     "is_zoomed",
     "lock_workstation",
     "map_virtual_key",
+    "monitor_brightness",
+    "monitor_capabilities",
     "monitor_from_point",
     "monitor_from_window",
     "monitor_info",
     "oem_codepage",
+    "physical_monitors",
     "post_close",
     "press_chord",
     "process_elevation",
@@ -161,6 +166,7 @@ __all__ = [
     "send_mouse_event",
     "send_unicode_text",
     "set_foreground_window",
+    "set_monitor_brightness",
     "set_suspend_state",
     "set_window_position",
     "shell_execute",
@@ -480,6 +486,14 @@ class MonitorInfo:
     primary: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class PhysicalMonitor:
+    """One DXVA2 physical monitor handle and its driver description."""
+
+    handle: int
+    description: str
+
+
 class _RECT(ctypes.Structure):
     """``RECT``: the shape every WinAPI geometry call speaks in."""
 
@@ -509,6 +523,13 @@ class _MONITORINFOEXW(ctypes.Structure):
         ("rcWork", _RECT),
         ("dwFlags", ctypes.c_ulong),
         ("szDevice", ctypes.c_wchar * 32),
+    )
+
+
+class _PhysicalMonitorStruct(ctypes.Structure):
+    _fields_ = (
+        ("hPhysicalMonitor", ctypes.c_void_p),
+        ("szPhysicalMonitorDescription", ctypes.c_wchar * 128),
     )
 
 
@@ -1593,6 +1614,64 @@ def monitor_info(handle: int) -> MonitorInfo:
         device=str(info.szDevice),
         primary=bool(int(info.dwFlags) & MONITORINFOF_PRIMARY),
     )
+
+
+def physical_monitors(hmonitor: int) -> list[PhysicalMonitor]:
+    """Open physical monitor handles owned by the caller."""
+    get_count = _require("dxva2", "GetNumberOfPhysicalMonitorsFromHMONITOR")
+    get_items = _require("dxva2", "GetPhysicalMonitorsFromHMONITOR")
+    count = ctypes.c_ulong()
+    if not get_count(_handle(hmonitor), ctypes.byref(count)):
+        raise _last_error("GetNumberOfPhysicalMonitorsFromHMONITOR")
+    if count.value == 0:
+        return []
+    array = (_PhysicalMonitorStruct * count.value)()
+    if not get_items(_handle(hmonitor), count, array):
+        raise _last_error("GetPhysicalMonitorsFromHMONITOR")
+    return [
+        PhysicalMonitor(int(item.hPhysicalMonitor or 0), str(item.szPhysicalMonitorDescription))
+        for item in array
+    ]
+
+
+def destroy_physical_monitors(monitors: Sequence[PhysicalMonitor]) -> None:
+    """Release handles obtained by :func:`physical_monitors`."""
+    if not monitors:
+        return
+    destroy = _require("dxva2", "DestroyPhysicalMonitors")
+    array = (_PhysicalMonitorStruct * len(monitors))()
+    for index, monitor in enumerate(monitors):
+        array[index].hPhysicalMonitor = monitor.handle
+        array[index].szPhysicalMonitorDescription = monitor.description[:127]
+    if not destroy(len(monitors), array):
+        raise _last_error("DestroyPhysicalMonitors")
+
+
+def monitor_brightness(handle: int) -> tuple[int, int, int]:
+    """Return ``(minimum, current, maximum)`` for a physical monitor."""
+    get = _require("dxva2", "GetMonitorBrightness")
+    minimum, current, maximum = ctypes.c_ulong(), ctypes.c_ulong(), ctypes.c_ulong()
+    if not get(
+        _handle(handle), ctypes.byref(minimum), ctypes.byref(current), ctypes.byref(maximum)
+    ):
+        raise _last_error("GetMonitorBrightness")
+    return int(minimum.value), int(current.value), int(maximum.value)
+
+
+def set_monitor_brightness(handle: int, value: int) -> None:
+    """Set a physical monitor brightness in its native range."""
+    setter = _require("dxva2", "SetMonitorBrightness")
+    if not setter(_handle(handle), ctypes.c_ulong(max(0, value))):
+        raise _last_error("SetMonitorBrightness")
+
+
+def monitor_capabilities(handle: int) -> tuple[int, int]:
+    """Return monitor and colour-temperature capability bitmasks."""
+    get = _require("dxva2", "GetMonitorCapabilities")
+    capabilities, temperatures = ctypes.c_ulong(), ctypes.c_ulong()
+    if not get(_handle(handle), ctypes.byref(capabilities), ctypes.byref(temperatures)):
+        raise _last_error("GetMonitorCapabilities")
+    return int(capabilities.value), int(temperatures.value)
 
 
 def monitor_from_window(hwnd: int, flags: int = MONITOR_DEFAULTTONEAREST) -> int:

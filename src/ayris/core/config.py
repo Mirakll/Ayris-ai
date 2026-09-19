@@ -82,6 +82,7 @@ __all__ = [
     "ConfigManager",
     "ConfigSection",
     "DevtoolsConfig",
+    "DisplayActionsConfig",
     "GeneralConfig",
     "HotkeysConfig",
     "InputActionsConfig",
@@ -836,6 +837,17 @@ class AudioActionsConfig(ConfigSection):
     )
 
 
+class DisplayActionsConfig(ConfigSection):
+    """Sub-section ``[actions.display]`` — display brightness controls."""
+
+    brightness_step: int = Field(
+        default=10,
+        ge=1,
+        le=50,
+        description="На сколько процентов «ярче» и «темнее» меняют яркость",
+    )
+
+
 class InputActionsConfig(ConfigSection):
     """Sub-section ``[actions.input]`` — the pacing of synthesised input.
 
@@ -1386,6 +1398,10 @@ class ActionsConfig(ConfigSection):
     audio: AudioActionsConfig = Field(
         default_factory=AudioActionsConfig,
         description="Громкость и звуковые устройства",
+    )
+    display: DisplayActionsConfig = Field(
+        default_factory=DisplayActionsConfig,
+        description="Яркость и мониторы",
     )
     input: InputActionsConfig = Field(
         default_factory=InputActionsConfig,
