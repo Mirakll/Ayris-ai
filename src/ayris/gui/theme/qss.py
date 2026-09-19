@@ -34,6 +34,9 @@ DEFAULT_QSS_TEMPLATE = """
 }
 QWidget { background-color: {{color.background}}; }
 QLabel, QSlider, SliderField, ToggleSwitch { background: transparent; }
+/* Layout-only containers opt out of the window fill so they don't paint a dark
+   rectangle on top of a card. */
+QWidget[transparent="true"], QFrame[transparent="true"] { background: transparent; }
 QWidget[card="true"], QFrame[card="true"] {
     background-color: {{color.surface}};
     border: {{metric.border_width}}px solid {{color.border}};

@@ -10,6 +10,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Понедельник 06:17 UTC — раз в неделю проверить живость сетевых адресов
+    # (маркер network) в чистой среде. На push/PR эти тесты исключены, чтобы
+    # падение чужого сайта не красило PR; job test-network идёт только здесь.
+    - cron: "17 6 * * 1"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -60,12 +65,18 @@ jobs:
         # этот файл и джоб краснеет на собственном тексте. Проверка стоит в
         # линтерах, а не в тестах: она нужна один раз на прогон и требует git,
         # которого у песочницы с распакованным архивом может не быть.
+        # Паттерн синхронен со scripts/check.sh. Ветки без завязки на длину
+        # (sk-ant-/sk-proj-/AKIA/AIza/xox, gho_/ghu_/ghs_/ghr_) ловят ключи
+        # Anthropic, OpenAI-project, AWS, Google, Slack — их дефис рвёт серию
+        # {20} у старого sk-, а проект тянет и anthropic, и openai.
         run: |
-          PAT='githu''b_pat_|gh''p_|sk-[A-Za-z0-9]{20}|BEGIN (RSA|OPENSSH|PRIVATE)'
+          PAT='githu''b_pat_[A-Za-z0-9_]{20,}|gh[oprsu]_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{20}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[0-9A-Za-z-]{10,}|BEGIN( [A-Z0-9]+)? PRIVATE KEY'
           FOUND=$(git grep -nIE "$PAT" || true)
-          if [ -n "$FOUND" ]; then
+          FILES=$(git ls-files | grep -iE '(^|/)(\.env(\.|$)|.*credentials?.*\.(json|ya?ml|toml)|id_(rsa|dsa|ecdsa|ed25519)|.*\.(pem|pfx|p12|key))' || true)
+          if [ -n "$FOUND" ] || [ -n "$FILES" ]; then
             echo "::error::похоже на секрет в коде"
-            echo "$FOUND"
+            [ -n "$FOUND" ] && echo "$FOUND"
+            [ -n "$FILES" ] && echo "секрет-файл в индексе:" && echo "$FILES"
             exit 1
           fi
           echo "секретов не найдено"
@@ -129,7 +140,15 @@ jobs:
           --junitxml=junit/pytest-slow-${{ matrix.python }}.xml
 
       - name: Приложение отвечает на --version
+        # --version — argparse action=version, выходит в parse_args ДО ленивых
+        # импортов Qt/GUI. Ловит только жадную цепочку импортов __main__.
         run: python -m ayris --version
+
+      - name: Ленивый слой импортируется
+        # То, что --version не грузит: GUI, воркеры, пайплайн, триггеры, таймеры.
+        # Сломанный импорт во вкладке или воркере иначе виден только pytest-у.
+        # QApplication не создаётся, окон нет (QT_QPA_PLATFORM=offscreen).
+        run: python -c "import ayris.gui.main_window, ayris.core.pipeline_app, ayris.workers, ayris.triggers, ayris.actions.timers"
 
       - name: Выгрузить отчёты
         if: always()
@@ -241,3 +260,32 @@ jobs:
         # Скрипт сверяет установленное с пинами из requirements-ci*.txt, то
         # есть проверяет ровно работу флага -c выше.
         run: python scripts/verify_pins.py
+
+  test-network:
+    name: Живость сетевых адресов / Windows
+    runs-on: windows-latest
+    # Тесты с маркером network ходят к чужим серверам (HEAD по адресам моделей).
+    # В обычных джобах они исключены, чтобы падение чужого сайта не красило PR.
+    # Здесь идут отдельно и ТОЛЬКО по расписанию/вручную: link rot в адресе
+    # модели всплывёт до пользователя, а не у него на первом запуске. На push и
+    # pull_request job не запускается — условие ниже отсекает эти события.
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-ci.txt
+            requirements-ci-nodeps.txt
+
+      - name: Установить зависимости
+        run: |
+          python -m pip install -r requirements-ci.txt
+          python -m pip install --no-deps -r requirements-ci-nodeps.txt
+          python -m pip install -e . --no-deps
+
+      - name: pytest network
+        run: pytest -m "network"

@@ -15,11 +15,13 @@
 #   в коде нет секретов. Первые два ловят ровно те поломки, которые тесты
 #   проходят молча: подмену версии библиотеки и упавший импорт в `__main__`.
 # * Вывод сжат до строки на проверку; разворачивается только упавшая.
-# * Судится то, что уйдёт в коммит: индекс и трекаемые файлы. Питоний файл,
-#   которого в индексе нет, скрипт называет отдельной строкой и исключает из
-#   ruff, black, mypy и сбора тестов — иначе недописанный модуль соседнего чата
-#   не даёт запушить чужую готовую работу. Свой новый файл проверяется с момента
-#   `git add`, то есть раньше, чем из него получится коммит.
+# * Проверяется рабочее дерево трекаемых файлов, а не staged-снимок: ruff, black,
+#   mypy и pytest читают файлы с диска. Untracked .py (недописанный модуль
+#   соседнего чата) исключаются — скрипт называет их отдельной строкой, иначе
+#   они не дают запушить чужую готовую работу. Свой новый файл попадает под
+#   проверку ровно на `git add` (перестаёт быть untracked), то есть раньше, чем
+#   из него получится коммит. Если файл застейджен, а в рабочем дереве иная
+#   правка — судится рабочая версия; это редкое расхождение со staged-снимком.
 #
 # Использование:
 #   scripts/check.sh                        всё: линтеры + тесты + окружение
@@ -295,19 +297,33 @@ if ((RUN_LINT)); then
     # Что установлено — то, что заявлено в requirements-ci*.txt. Тесты этого не
     # видят: они одинаково зелены и на numpy 1.26, и на 2.3, а приложение — нет.
     stage pins "$PY" scripts/verify_pins.py
-    # Самый дешёвый способ поймать сломанный импорт в точке входа: тесты зовут
-    # внутренности напрямую и `python -m ayris` не проверяют вообще. PYTHONPATH
-    # — чтобы проверка работала и там, где пакет не установлен editable: она про
-    # импорт `__main__`, а не про способ установки.
+    # `--version` — argparse action=version: печатает и делает SystemExit внутри
+    # parse_args, ДО ленивых импортов Qt/GUI. Поэтому smoke проверяет только
+    # жадную цепочку импортов __main__ (core.app, errors, paths, utils.dpi,
+    # utils.logger). PYTHONPATH — чтобы работало и без editable-установки.
     stage smoke env PYTHONPATH=src "$PY" -m ayris --version
+    # Ленивый слой, который --version не грузит: GUI, воркеры, пайплайн, триггеры,
+    # таймеры. Сломанный импорт во вкладке или воркере иначе виден только
+    # pytest-у. QApplication тут не создаётся, окон нет (offscreen выставлен выше).
+    stage gui-imp env PYTHONPATH=src "$PY" -c \
+        'import ayris.gui.main_window, ayris.core.pipeline_app, ayris.workers, ayris.triggers, ayris.actions.timers; print("импорт GUI/воркеров ок")'
 fi
 
-# Куски склеены, чтобы git grep не нашёл сам этот файл.
-SECRET_PAT='githu''b_pat_|gh''p_|sk-[A-Za-z0-9]{20}|BEGIN (RSA|OPENSSH|PRIVATE)'
+# Куски склеены, чтобы git grep не нашёл сам этот файл. Ветки без завязки на
+# длину (sk-ant-/sk-proj-/AKIA/AIza/xox, а также gho_/ghu_/ghs_/ghr_) ловят
+# современные ключи Anthropic, OpenAI-project, AWS, Google, Slack и все префиксы
+# GitHub. Старая версия знала только ghp_ и legacy-sk-, а проект тянет и
+# anthropic, и openai — их формат sk-ant-/sk-proj- дефис рвёт серию {20} и мимо.
+SECRET_PAT='githu''b_pat_[A-Za-z0-9_]{20,}|gh[oprsu]_[A-Za-z0-9]{36}|sk-[A-Za-z0-9]{20}|sk-ant-[A-Za-z0-9-]{20,}|sk-proj-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|xox[baprs]-[0-9A-Za-z-]{10,}|BEGIN( [A-Z0-9]+)? PRIVATE KEY'
 FOUND=$(git grep -nIE "$SECRET_PAT" 2>/dev/null)
-if [[ -n $FOUND ]]; then
+# Файл с секрет-именем в индексе — промах `git add` независимо от содержимого:
+# grep по паттернам не увидит произвольный DB_PASSWORD= в .env, а сам факт
+# трекаемого .env/credentials/приватного ключа почти всегда ошибка.
+mapfile -t SECRET_FILES < <(git ls-files 2>/dev/null | grep -iE '(^|/)(\.env(\.|$)|.*credentials?.*\.(json|ya?ml|toml)|id_(rsa|dsa|ecdsa|ed25519)|.*\.(pem|pfx|p12|key))')
+if [[ -n $FOUND ]] || ((${#SECRET_FILES[@]})); then
     printf '%-8s ПАДАЕТ        похоже на секрет в коде\n' secrets
-    echo "$FOUND" | sed 's/^/  | /'
+    [[ -n $FOUND ]] && echo "$FOUND" | sed 's/^/  | /'
+    ((${#SECRET_FILES[@]})) && printf '  | секрет-файл в индексе: %s\n' "${SECRET_FILES[@]}"
     FAILED+=(secrets)
 else
     printf '%-8s ok         0s  секретов в трекаемых файлах нет\n' secrets

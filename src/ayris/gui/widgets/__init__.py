@@ -4,6 +4,7 @@ from ayris.gui.widgets.busy_indicator import BusyIndicator
 from ayris.gui.widgets.confirm_dialog import ConfirmDialog
 from ayris.gui.widgets.empty_state import EmptyState
 from ayris.gui.widgets.icon_button import IconButton
+from ayris.gui.widgets.level_meter import LevelMeter
 from ayris.gui.widgets.notice import InlineNotice, Toast
 from ayris.gui.widgets.resource_monitor import (
     ResourceMonitor,
@@ -25,6 +26,7 @@ __all__ = [
     "EmptyState",
     "IconButton",
     "InlineNotice",
+    "LevelMeter",
     "ResourceMonitor",
     "ResourceRow",
     "Sampler",

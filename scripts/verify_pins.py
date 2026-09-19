@@ -61,13 +61,20 @@ def normalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def read_pins(paths: tuple[str, ...]) -> dict[str, Pin]:
+def read_pins(paths: tuple[str, ...]) -> tuple[dict[str, Pin], list[str]]:
     """Пины из файлов требований, с учётом маркера платформы.
 
     Строка с `; sys_platform == 'win32'` на линуксе пропускается: pip её тоже
     пропустил, и требовать установленный pycaw там значит красить джоб зря.
+
+    Второй элемент — список «не пинов»: строк, похожих на требование (начинаются
+    с имени пакета), но без точного `==`. Такую строку `_PIN` раньше молча
+    пропускал, и она выпадала из проверки бесследно — а ослабленный до `>=`
+    numpy это ровно тот дрейф ABI, ради ловли которого скрипт и написан. Строки
+    с опциями pip (`-r`, `-c`, `--hash`) не требования и в аномалии не идут.
     """
     pins: dict[str, Pin] = {}
+    loose: list[str] = []
     for name in paths:
         path = _ROOT / name
         if not path.is_file():
@@ -78,13 +85,15 @@ def read_pins(paths: tuple[str, ...]) -> dict[str, Pin]:
                 continue
             match = _PIN.match(line)
             if match is None:
+                if line[:1].isalnum():
+                    loose.append(f"{line}  (из {name})")
                 continue
             marker = _MARKER.search(line)
             if marker is not None and marker["platform"] != sys.platform:
                 continue
             key = normalize(match["name"])
             pins[key] = Pin(name=key, wanted=match["version"], source=name)
-    return pins
+    return pins, loose
 
 
 def installed_version(name: str) -> str | None:
@@ -102,10 +111,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-v", "--verbose", action="store_true", help="печатать и совпадения")
     args = parser.parse_args(argv)
 
-    pins = read_pins(REQUIREMENTS)
+    pins, loose = read_pins(REQUIREMENTS)
     if not pins:
         print("не нашёл ни одного пина — файлы требований пропали?", file=sys.stderr)
         return 2
+
+    for line in loose:
+        print(f"НЕ ПИН   {line}: не точный `==`, из проверки выпадает бесследно", file=sys.stderr)
 
     wrong: list[tuple[Pin, str]] = []
     absent: list[Pin] = []
@@ -126,9 +138,10 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
 
-    if wrong or absent:
+    if wrong or absent or loose:
         print(
-            f"\nокружение не то, что заявлено: разошлось {len(wrong)}, не установлено {len(absent)}",
+            f"\nокружение не то, что заявлено: разошлось {len(wrong)}, "
+            f"не установлено {len(absent)}, ослаблено пинов {len(loose)}",
             file=sys.stderr,
         )
         return 1
