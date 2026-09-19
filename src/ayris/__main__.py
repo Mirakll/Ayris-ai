@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import signal
 import sys
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
@@ -243,11 +244,13 @@ def _run_application(options: CliOptions) -> int:
     from PySide6.QtWidgets import QApplication
 
     from ayris.actions.timers import MissedPolicy, TimerScheduler, set_active_scheduler
+    from ayris.core.pipeline_app import install_pipeline
     from ayris.gui.main_window import MainWindow, ShowWindowNativeEventFilter
     from ayris.gui.overlay import ActiveTimer as OverlayTimer
-    from ayris.gui.overlay import OverlayController
     from ayris.gui.theme import ThemeManager
     from ayris.gui.tray import TrayController
+    from ayris.gui.widgets import set_active_worker_control
+    from ayris.workers import install_workers
 
     # PassThrough keeps fractional scaling (125%, 150%) instead of rounding it,
     # which the overlay needs to stay pixel-aligned. Must precede QApplication.
@@ -291,9 +294,36 @@ def _run_application(options: CliOptions) -> int:
 
         install_triggers(ayris)
         bridge = _QtBridge(ayris)
-        window = MainWindow(theme=theme, manager=ayris.config, bus=ayris.bus)
-        tray = TrayController(ayris, window, theme, parent=app)
-        tray.start()
+
+        # Workers come up on their own background thread (start is blocking by
+        # design); the supervisor is registered for the resource monitor and the
+        # restart buttons in «Общие», and cleared before the GUI tears down so
+        # nothing queries a supervisor that is on its way out.
+        worker_manager = install_workers(ayris)
+        set_active_worker_control(worker_manager)
+        ayris.add_component(
+            Component(
+                name="worker_control",
+                stage=LifecycleStage.GUI,
+                stop=lambda: set_active_worker_control(None),
+            )
+        )
+
+        # The dispatcher (task 18) becomes the text field's destination: a typed
+        # command runs the same understanding → IntentMatched path a spoken one
+        # does, and the trigger dispatcher executes what matched.
+        pipeline = install_pipeline(ayris)
+
+        def submit_text(text: str) -> None:
+            # run_text is synchronous by design (it returns a result); keep it off
+            # the UI thread so a slow match or a spoken answer never freezes the
+            # window. The dashboard already logged the line; events carry the rest.
+            threading.Thread(
+                target=pipeline.run_text,
+                args=(text,),
+                name="ayris-text-command",
+                daemon=True,
+            ).start()
 
         timers_cfg = ayris.settings.timers
         scheduler = TimerScheduler(
@@ -305,7 +335,7 @@ def _run_application(options: CliOptions) -> int:
         set_active_scheduler(scheduler)
 
         class _OverlayTimers:
-            """Adapts the scheduler's active list to the overlay's timer provider."""
+            """Adapts the scheduler's active list to the dashboard's timer provider."""
 
             def active_timers(self) -> list[OverlayTimer]:
                 return [
@@ -316,16 +346,18 @@ def _run_application(options: CliOptions) -> int:
             def cancel_timer(self, timer_id: int) -> None:
                 scheduler.cancel(timer_id)
 
-        overlay = OverlayController(
-            ayris.bus,
-            theme,
-            lambda: ayris.settings.overlay,
+        window = MainWindow(
+            theme=theme,
+            manager=ayris.config,
+            bus=ayris.bus,
             timer_provider=_OverlayTimers(),
-            show_settings=tray.show_settings,
+            submit_text=submit_text,
+            profiles=ayris.profile_manager.list_all,
+            switch_profile=ayris.profile_manager.switch,
             snapshot=ayris.state.snapshot,
-            parent=app,
         )
-        overlay.start()
+        tray = TrayController(ayris, window, theme, parent=app)
+        tray.start()
         scheduler.start()
         native_window_handle = int(window.winId()) if sys.platform == "win32" else 0
         if native_window_handle:
@@ -350,7 +382,6 @@ def _run_application(options: CliOptions) -> int:
         ayris.add_component(
             Component(name="system_tray", stage=LifecycleStage.GUI, stop=tray.close)
         )
-        ayris.add_component(Component(name="overlay", stage=LifecycleStage.GUI, stop=overlay.close))
 
         def stop_scheduler() -> None:
             scheduler.stop()

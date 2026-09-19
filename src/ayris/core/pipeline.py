@@ -1230,10 +1230,14 @@ class Pipeline:
         trace.action = request.name
         runner = self._actions
         if runner is None:
-            raise ActionError(
-                f"no action runner for {request.name or 'command'}",
-                user_message=ACTION_FAILED_MESSAGE,
-            )
+            # No in-pipeline runner: a matched command has already gone out as
+            # ``IntentMatched``, and the trigger dispatcher — the single route to
+            # ``MacroEngine.start`` — runs it off that event. Defer to it rather
+            # than reporting a false failure or executing the command twice. This
+            # is the text path wired by task 47; a runner is only injected once a
+            # subsystem owns execution end to end.
+            trace.outcome = ExecutionResult.OK
+            return ActionOutcome(result=ExecutionResult.OK)
         self._bus.publish(
             ActionStarted(
                 action=request.name,

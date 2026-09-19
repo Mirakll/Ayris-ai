@@ -1344,14 +1344,28 @@ def install_workers(app: AyrisApp) -> WorkerManager:
 
     manager = WorkerManager(app.bus, log_dir=app.paths.logs_dir)
 
+    def _bring_up() -> None:
+        """Build the plan and start the autostart workers. Runs off the caller."""
+        try:
+            plan = plan_workers(app.settings, log_dir=app.paths.logs_dir)
+            _log.info("план воркеров: %s", plan.describe())
+            for planned in plan:
+                translator = event_translator(planned.spec.kind)
+                if translator is not None:
+                    manager.set_event_translator(planned.spec.name, translator)
+            manager.apply_plan(plan)
+        except Exception:
+            # One subsystem that will not come up must not take the launch with
+            # it; the supervisor already reflects the failure in its status.
+            _log.exception("не удалось поднять воркеры")
+
     def start() -> None:
-        plan = plan_workers(app.settings, log_dir=app.paths.logs_dir)
-        _log.info("план воркеров: %s", plan.describe())
-        for planned in plan:
-            translator = event_translator(planned.spec.kind)
-            if translator is not None:
-                manager.set_event_translator(planned.spec.name, translator)
-        manager.apply_plan(plan)
+        # Starting a worker blocks until its model has loaded — tens of seconds
+        # with eco mode off. Run that on a background thread so neither startup
+        # nor the UI stalls; the supervisor's status walks STARTING → READY as
+        # the processes come up, and the resource monitor shows them arriving.
+        thread = threading.Thread(target=_bring_up, name="ayris-workers-startup", daemon=True)
+        thread.start()
 
     def stop() -> None:
         manager.shutdown()

@@ -1222,14 +1222,25 @@ class TestStageErrors:
         assert [event.error for event in failures] == ["volume driver missing"]
         assert rig.pipeline.state is PipelineState.IDLE
 
-    def test_a_missing_action_runner_is_reported(self) -> None:
+    def test_a_matched_command_without_a_runner_defers_to_the_dispatcher(self) -> None:
+        """Без исполнителя пайплайн не выдумывает отказ.
+
+        Совпавшая команда уже ушла как ``IntentMatched``; её выполняет диспетчер
+        триггеров — единственный маршрут к ``MacroEngine.start``. Задача 47
+        подключает текстовый ввод именно так, поэтому «нет исполнителя» — это не
+        ошибка, а честная передача исполнения на шину, без двойного запуска.
+        """
         rig = build()
         toothless = pipeline_of(rig, matcher=library(), tts=rig.tts)
 
         result = toothless.run_text(PHRASE)
 
-        assert result.outcome is ExecutionResult.ERROR
-        assert rig.tts.said == [ACTION_FAILED_MESSAGE]
+        assert result.ok
+        matched = [event for event in rig.events if isinstance(event, IntentMatched)]
+        assert len(matched) == 1
+        assert matched[0].command_id == 7
+        assert rig.tts.said == []
+        assert not [event for event in rig.events if isinstance(event, ActionFailed)]
 
     def test_a_silent_failure_still_gets_a_word(self) -> None:
         """Тишина после команды читается как «сработало»."""
