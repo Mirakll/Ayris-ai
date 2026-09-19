@@ -1,9 +1,11 @@
-"""The single main overlay: an interactive, always-on-top assistant panel.
+"""Reusable dialogue-panel widgets shared by the Ayris dashboard.
 
-Ayris has one overlay. It is shown or hidden as a whole — there is no separate
-compact mode and no size toggle (that is deferred to task 76). The panel carries
-the state sphere, network and microphone indicators, a bounded dialogue log,
-active timers and a text command field, all driven by the event bus.
+These used to live in a floating overlay window; that window is gone — its parts
+now sit in the right column of the single main window
+(:class:`ayris.gui.main_window.MainWindow`). The widgets here — the command
+field, the bounded dialogue log, the network/microphone indicators and the
+active-timers panel — are all driven by the event bus and reused as plain
+widgets, not as a separate window.
 """
 
 from __future__ import annotations
@@ -11,10 +13,7 @@ from __future__ import annotations
 from ayris.gui.overlay.command_input import CommandInput
 from ayris.gui.overlay.dialog_log import DialogEntry, DialogKind, DialogLog
 from ayris.gui.overlay.indicators import MicIndicator, NetworkIndicator
-from ayris.gui.overlay.main import MainOverlay, OverlayController
-from ayris.gui.overlay.placement import Geometry, Placement, Position, place, snap_position
 from ayris.gui.overlay.timers_panel import ActiveTimer, TimerProvider, TimersPanel
-from ayris.gui.overlay.window_flags import WindowFlags, overlay_qt_flags
 
 __all__ = [
     "ActiveTimer",
@@ -22,17 +21,8 @@ __all__ = [
     "DialogEntry",
     "DialogKind",
     "DialogLog",
-    "Geometry",
-    "MainOverlay",
     "MicIndicator",
     "NetworkIndicator",
-    "OverlayController",
-    "Placement",
-    "Position",
     "TimerProvider",
     "TimersPanel",
-    "WindowFlags",
-    "overlay_qt_flags",
-    "place",
-    "snap_position",
 ]

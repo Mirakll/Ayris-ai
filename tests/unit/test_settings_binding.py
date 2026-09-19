@@ -67,8 +67,15 @@ def test_second_launch_restores_visible_widget_hierarchy(
     ShowWindowNativeEventFilter(window, 0xC123).show_window()
     app.processEvents()
 
+    # The dashboard columns come back visible after a second-launch restore.
     assert window.isVisible()
     assert window.centralWidget().isVisible()
+    assert window._showcase.isVisible()
+    assert window._dialog.isVisible()
+
+    # Settings are a slide-down layer inside the same window, not a second one.
+    window.open_settings()
+    app.processEvents()
     assert window._search_field.isVisible()
     assert window._sidebar.isVisible()
     assert window._stack.isVisible()

@@ -5,6 +5,14 @@ from ayris.gui.widgets.confirm_dialog import ConfirmDialog
 from ayris.gui.widgets.empty_state import EmptyState
 from ayris.gui.widgets.icon_button import IconButton
 from ayris.gui.widgets.notice import InlineNotice, Toast
+from ayris.gui.widgets.resource_monitor import (
+    ResourceMonitor,
+    ResourceRow,
+    Sampler,
+    WorkerControl,
+    active_worker_control,
+    set_active_worker_control,
+)
 from ayris.gui.widgets.search_field import SearchField
 from ayris.gui.widgets.setting_card import SettingCard
 from ayris.gui.widgets.slider_field import SliderField
@@ -17,6 +25,9 @@ __all__ = [
     "EmptyState",
     "IconButton",
     "InlineNotice",
+    "ResourceMonitor",
+    "ResourceRow",
+    "Sampler",
     "SearchField",
     "SettingCard",
     "SliderField",
@@ -24,4 +35,7 @@ __all__ = [
     "SphereWidget",
     "Toast",
     "ToggleSwitch",
+    "WorkerControl",
+    "active_worker_control",
+    "set_active_worker_control",
 ]

@@ -11,19 +11,19 @@
     --bg-2: #2b0f47;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; overflow: hidden; background: #08040f; }
+  html, body { height: 100%; overflow: hidden; background: transparent; }
   body {
     font-family: "Segoe UI", system-ui, sans-serif;
     color: #cdbce8;
   }
-  /* фон как на референсе: тёмный радиальный градиент фиолетовый -> почти чёрный */
+  /* прозрачный фон: виджет встроен в панель, чёрного квадрата быть не должно.
+     оставляем только мягкое свечение, которое тает в ноль по краям. */
   #scene {
     position: fixed;
     inset: 0;
     background:
-      radial-gradient(120% 120% at 18% 12%, #3a1160 0%, rgba(58,17,96,0) 42%),
-      radial-gradient(120% 120% at 82% 88%, #17264a 0%, rgba(23,38,74,0) 45%),
-      radial-gradient(100% 100% at 50% 50%, #140829 0%, #08040f 70%);
+      radial-gradient(120% 120% at 18% 12%, rgba(58,17,96,0.30) 0%, rgba(58,17,96,0) 45%),
+      radial-gradient(120% 120% at 82% 88%, rgba(23,38,74,0.30) 0%, rgba(23,38,74,0) 48%);
   }
   canvas { display: block; }
 
@@ -110,7 +110,22 @@
   const scene = new THREE.Scene();
 
   const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100);
-  camera.position.set(0, 0, 6.2);
+
+  // Ставим камеру так, чтобы сфера (с учётом деформации и запаса под свечение)
+  // целиком влезала в кадр при ЛЮБОМ соотношении сторон. Тогда канвас может
+  // занимать всю панель-хост, а не центральный квадрат: свечение bloom затухает
+  // в ноль внутри кадра, у краёв канваса разницы с фоном панели нет — «коробки»
+  // за сферой не остаётся.
+  const FIT_R = 2.15; // эффективный радиус: R=1.6 + деформация + запас под glow
+  function fitCamera() {
+    const aspect = innerWidth / innerHeight;
+    const vFov = (camera.fov * Math.PI) / 180;
+    const distV = FIT_R / Math.sin(vFov / 2);
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * aspect);
+    const distH = FIT_R / Math.sin(hFov / 2);
+    camera.position.set(0, 0, Math.max(distV, distH));
+  }
+  fitCamera();
 
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
@@ -189,9 +204,9 @@
     uJitter:    { value: 0.0 },    // высокочастотная дрожь (режим «ошибка»)
     uBreath:    { value: 0.0 },    // добавка к масштабу (дыхание)
     uColorA:    { value: new THREE.Color('#5a2ea8') }, // низ — фиолетовый
-    uColorB:    { value: new THREE.Color('#37d6ff') }, // верх — циан
-    uColorEdge: { value: new THREE.Color('#9ad8ff') }, // свечение кромки
-    uOpacity:   { value: 0.6 },
+    uColorB:    { value: new THREE.Color('#52a8f0') }, // верх — мягкий сине-голубой
+    uColorEdge: { value: new THREE.Color('#b7ccf2') }, // свечение кромки
+    uOpacity:   { value: 0.5 },
     uCamPos:    { value: new THREE.Vector3() },
   };
 
@@ -315,7 +330,7 @@
       // живее, но спокойно: мягкое перетекание + лёгкая медленная закрутка
       amp: 0.048, freq: 1.6, speed: 0.16, waveAmp: 0.042, waveFreq: 1.9,
       twist: 0.12, jitter: 0.0, spin: 0.075, breathHz: 0.28, breathAmp: 0.018,
-      colorA: '#4a2a9e', colorB: '#35c9ff', edge: '#9ad8ff', bloom: 0.52,
+      colorA: '#5236a6', colorB: '#52a8f0', edge: '#b7ccf2', bloom: 0.44,
     },
     listening: {
       label: 'слушает',
@@ -434,6 +449,7 @@
   // ---------------------------------------------------------------------------
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight;
+    fitCamera();
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
     composer.setSize(innerWidth, innerHeight);
@@ -449,6 +465,15 @@
     const d = show ? '' : 'none';
     if (p) p.style.display = d;
     if (h) h.style.display = d;
+  };
+  // EffectComposer + bloom выдают непрозрачный кадр, поэтому пустые места канваса
+  // становятся чёрными. Красим фон сцены в цвет панели-хоста — чёрного квадрата
+  // не остаётся. Пусто/null — вернуть прозрачный клир (для standalone-демо).
+  window.setBackground = (hex) => {
+    if (!hex) { scene.background = null; renderer.setClearColor(0x000000, 0); return; }
+    const c = new THREE.Color(hex);
+    scene.background = c;
+    renderer.setClearColor(c, 1);
   };
   </script>
 </body>

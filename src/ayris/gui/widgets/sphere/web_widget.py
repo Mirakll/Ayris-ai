@@ -78,6 +78,7 @@ class SphereWidget(QWebEngineView):
         self._state = SphereState.IDLE
         self._level = 0.0
         self._show_controls = show_controls
+        self._background: str | None = None
         self.setPage(_LoggingPage(self))
         self.page().setBackgroundColor(Qt.GlobalColor.transparent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -101,11 +102,24 @@ class SphereWidget(QWebEngineView):
         self._show_controls = visible
         self._run(f"window.setPanel({str(visible).lower()})")
 
+    def set_background(self, color: str | None) -> None:
+        """Paint the page background a solid colour so it blends with the panel.
+
+        ``QWebEngineView`` on Windows does not reliably composite a transparent
+        surface, so instead of leaving it transparent we fill the page with the
+        host panel's colour — the sphere then has no visible square behind it.
+        Passing ``None`` clears back to the stylesheet default.
+        """
+        self._background = color
+        self._run(f"window.setBackground({json.dumps(color)})")
+
     def _on_loaded(self, ok: bool) -> None:
         self._ready = bool(ok)
         if not self._ready:
             return
         self.set_controls_visible(self._show_controls)
+        if self._background is not None:
+            self.set_background(self._background)
         self.set_state(self._state)
         self.set_level(self._level)
 

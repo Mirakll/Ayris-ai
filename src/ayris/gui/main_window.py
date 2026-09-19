@@ -1,9 +1,19 @@
-"""Main settings window with lazy navigation and persisted state."""
+"""The single Ayris window: a frameless dashboard with slide-down settings.
+
+One window does everything. The left column is the showcase (logo, state sphere,
+caption); the right column is the dialogue (top bar, conversation or status line,
+active timers, command input). Settings are not a second window — the hamburger
+slides them down as a full-window layer over the dashboard.
+
+The window reflects the assistant's real state off the event bus and exposes
+:meth:`set_state`, :meth:`set_status` and :meth:`add_message` for callers that
+drive it directly. Closing only hides it; :meth:`exit` is the real shutdown.
+"""
 
 from __future__ import annotations
 
 import ctypes
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Final, Protocol, cast
 
 from PySide6.QtCore import (
@@ -20,26 +30,62 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QCloseEvent, QGuiApplication, QKeyEvent, QMoveEvent, QResizeEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
     QMainWindow,
     QStackedWidget,
-    QVBoxLayout,
     QWidget,
 )
 
-from ayris import __app_name__, __version__
+from ayris import __app_name__
 from ayris.core.config import ConfigManager, WindowConfig
-from ayris.core.events import EventBus
+from ayris.core.events import (
+    ActionFailed,
+    AudioLevelChanged,
+    EventBus,
+    MacroFailed,
+    MicToggled,
+    MicToggleRequested,
+    ModeChanged,
+    OnlineStatusChanged,
+    OverlayToggleRequested,
+    OverlayVisibilityRequested,
+    TranscriptReady,
+    TtsStarted,
+)
+from ayris.core.models import Profile
+from ayris.core.profile import ProfileSwitched
+from ayris.core.state import AssistantState, MicMode, StatusSnapshot
+from ayris.gui.dashboard import DialogView, SettingsLayer, ShowcasePanel
 from ayris.gui.nav_sidebar import NavSidebar
+from ayris.gui.overlay.dialog_log import DialogKind
+from ayris.gui.overlay.timers_panel import TimerProvider
 from ayris.gui.settings_search import SettingsSearch, SettingsSearchIndex, highlight_widget
 from ayris.gui.tabs import SECTIONS, PlaceholderTab, SearchEntry, SettingsTab, tab_spec
 from ayris.gui.theme import ThemeManager
 from ayris.gui.widgets import SearchField
+from ayris.gui.widgets.sphere.states import SphereState
 
 __all__ = ["MainWindow", "ShowWindowNativeEventFilter", "restored_geometry"]
 
 _STATE_DEBOUNCE_MS = 500
 _WINDOWS_EVENT_TYPE: Final = b"windows_generic_MSG"
+
+#: Status line shown for each assistant state; SPEAKING keeps the spoken line.
+_STATE_STATUS: Final[dict[AssistantState, str]] = {
+    AssistantState.IDLE: "Привет, чем помочь?",
+    AssistantState.LISTENING: "Слушаю…",
+    AssistantState.THINKING: "Думаю…",
+    AssistantState.ERROR: "Что-то пошло не так",
+}
+
+_ROLE_KIND: Final[dict[str, DialogKind]] = {
+    "user": DialogKind.HEARD,
+    "heard": DialogKind.HEARD,
+    "assistant": DialogKind.ANSWER,
+    "answer": DialogKind.ANSWER,
+    "error": DialogKind.ERROR,
+}
 
 
 class _NativeMessage(ctypes.Structure):
@@ -56,7 +102,7 @@ class _NativeMessagePointer(Protocol):
 
 
 class ShowWindowNativeEventFilter(QAbstractNativeEventFilter):
-    """Restore the settings window when another Ayris instance is launched."""
+    """Restore the window when another Ayris instance is launched."""
 
     def __init__(self, window: MainWindow, message_id: int) -> None:
         super().__init__()
@@ -98,7 +144,7 @@ def restored_geometry(state: WindowConfig, screens: Iterable[QRect], primary: QR
 
 
 class MainWindow(QMainWindow):
-    # Settings window whose normal close action only hides it.
+    """Frameless dashboard window; closing hides it, :meth:`exit` shuts down."""
 
     def __init__(
         self,
@@ -107,6 +153,11 @@ class MainWindow(QMainWindow):
         theme: ThemeManager | None = None,
         manager: ConfigManager | None = None,
         bus: EventBus | None = None,
+        timer_provider: TimerProvider | None = None,
+        submit_text: Callable[[str], None] | None = None,
+        profiles: Callable[[], list[Profile]] | None = None,
+        switch_profile: Callable[[Profile], object] | None = None,
+        snapshot: StatusSnapshot | None = None,
     ) -> None:
         super().__init__(parent)
         application = QApplication.instance()
@@ -118,22 +169,36 @@ class MainWindow(QMainWindow):
         self._theme = theme
         self._manager = manager or ConfigManager()
         self._bus = bus
+        self._submit_text = submit_text
+        self._profiles = profiles
+        self._switch_profile = switch_profile
         self._pages: dict[str, SettingsTab] = {}
         self._current_section = "general"
         self._allow_close = False
         self._restoring = True
         self._search_index = SettingsSearchIndex()
+        self._unsubscribers: list[Callable[[], None]] = []
 
-        self.setWindowTitle(f"{__app_name__} {__version__} — Настройки")
+        self.setWindowTitle(__app_name__)
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setMinimumSize(theme.metric("window_min_width"), theme.metric("window_min_height"))
-        self.setCentralWidget(self._build_central_widget())
+        self.setCentralWidget(self._build_central_widget(timer_provider))
 
         self._state_timer = QTimer(self)
         self._state_timer.setSingleShot(True)
         self._state_timer.setInterval(_STATE_DEBOUNCE_MS)
         self._state_timer.timeout.connect(self._save_window_state)
+
+        self._subscribe_to_bus()
+        self._reload_profiles()
+        if snapshot is not None:
+            self.sync(snapshot)
+
         self._restore_window_state()
         self._restoring = False
+
+    # -- properties kept for compatibility ----------------------------------
 
     @property
     def created_sections(self) -> tuple[str, ...]:
@@ -146,6 +211,50 @@ class MainWindow(QMainWindow):
     @property
     def search_index(self) -> SettingsSearchIndex:
         return self._search_index
+
+    @property
+    def settings_open(self) -> bool:
+        return self._settings_layer.is_open
+
+    # -- public dashboard API -----------------------------------------------
+
+    def set_state(self, state: SphereState | AssistantState | str) -> None:
+        """Drive the sphere, the microphone highlight and the status line."""
+        value = state.value if isinstance(state, SphereState | AssistantState) else str(state)
+        self._showcase.set_state(value)
+        self._dialog.set_voice_active(value == SphereState.LISTENING.value)
+        default = _STATE_STATUS.get(AssistantState(value))
+        if default is not None:
+            self._dialog.set_status(default)
+
+    def set_status(self, text: str) -> None:
+        self._dialog.set_status(text)
+
+    def add_message(self, role: DialogKind | str, text: str) -> None:
+        if isinstance(role, DialogKind):
+            kind = role
+        else:
+            kind = _ROLE_KIND.get(str(role), DialogKind.ANSWER)
+        self._dialog.add_message(kind, text)
+
+    def set_level(self, level: float) -> None:
+        self._showcase.set_level(max(0.0, min(1.0, level)))
+
+    def set_mic(self, *, enabled: bool, mode: MicMode) -> None:
+        self._dialog.set_mic(enabled=enabled, mode=mode)
+
+    def set_online(self, *, online: bool, detail: str = "") -> None:
+        self._dialog.set_online(online=online, detail=detail)
+
+    def set_profile(self, name: str) -> None:
+        self._dialog.set_profile(name)
+
+    def sync(self, snapshot: StatusSnapshot) -> None:
+        self.set_state(snapshot.state.value)
+        self.set_mic(enabled=snapshot.mic_enabled, mode=snapshot.mic_mode)
+        self.set_online(online=snapshot.online, detail=snapshot.detail)
+
+    # -- settings sections --------------------------------------------------
 
     def open_section(self, key: str) -> SettingsTab:
         # Create a section page only on its first visit.
@@ -167,11 +276,36 @@ class MainWindow(QMainWindow):
         self._schedule_state_save()
         return page
 
+    def open_settings(self) -> None:
+        # Drop the WebGL sphere's native surface so the layer can cover the panel.
+        self._showcase.set_sphere_visible(False)
+        self._settings_layer.setGeometry(self._root.rect())
+        self._settings_layer.open_layer()
+
+    def close_settings(self) -> None:
+        self._settings_layer.close_layer()
+
+    def toggle_settings(self) -> None:
+        if self._settings_layer.is_open:
+            self.close_settings()
+        else:
+            self.open_settings()
+
+    def _on_settings_closed(self) -> None:
+        # Restore the sphere hidden in open_settings, then return focus to input.
+        self._showcase.set_sphere_visible(True)
+        self._dialog.focus_command()
+
+    # -- lifecycle ----------------------------------------------------------
+
     def exit(self) -> None:
         # Closing is accepted only during explicit application shutdown.
         self._allow_close = True
         self._state_timer.stop()
         self._save_window_state()
+        for unsubscribe in self._unsubscribers:
+            unsubscribe()
+        self._unsubscribers.clear()
         for page in self._pages.values():
             page.dispose()
         self.close()
@@ -190,7 +324,15 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
+        self._settings_layer.setGeometry(self._root.rect())
         self._schedule_state_save()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape and self._settings_layer.is_open:
+            self.close_settings()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
         if watched is self._search_field and event.type() == QEvent.Type.KeyPress:
@@ -211,26 +353,59 @@ class MainWindow(QMainWindow):
                     return True
         return super().eventFilter(watched, event)
 
-    def _build_central_widget(self) -> QWidget:
-        container = QWidget(self)
-        outer = QVBoxLayout(container)
-        margin = self._theme.metric("spacing_lg")
-        outer.setContentsMargins(margin, margin, margin, margin)
-        outer.setSpacing(self._theme.metric("spacing_lg"))
+    # -- construction -------------------------------------------------------
+
+    def _build_central_widget(self, timer_provider: TimerProvider | None) -> QWidget:
+        self._root = QFrame(self)
+        self._root.setObjectName("windowRoot")
+        outer = QHBoxLayout(self._root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._showcase = ShowcasePanel(self._theme, self._root)
+        self._showcase.drag_started.connect(self._start_system_move)
+
+        separator = QFrame(self._root)
+        separator.setObjectName("columnSeam")
+        separator.setFrameShape(QFrame.Shape.VLine)
+        separator.setFixedWidth(1)
+
+        self._dialog = DialogView(self._theme, timer_provider=timer_provider, parent=self._root)
+        self._dialog.settings_requested.connect(self.toggle_settings)
+        self._dialog.minimize_requested.connect(self.showMinimized)
+        self._dialog.close_requested.connect(self.close)
+        self._dialog.command_submitted.connect(self._on_command)
+        self._dialog.voice_requested.connect(self._on_voice)
+        self._dialog.code_requested.connect(self._dialog.focus_command)
+        self._dialog.profile_selected.connect(self._on_profile_chosen)
+        self._dialog.drag_started.connect(self._start_system_move)
+
+        outer.addWidget(self._showcase, 56)
+        outer.addWidget(separator)
+        outer.addWidget(self._dialog, 44)
+
+        self._build_settings_layer()
+        self._theme.theme_changed.connect(self._refresh_theme)
+        self._refresh_theme()
+        return self._root
+
+    def _build_settings_layer(self) -> None:
+        self._settings_layer = SettingsLayer(self._theme, self._root)
+        self._settings_layer.closed.connect(self._on_settings_closed)
 
         self._search_field = SearchField(
-            container, placeholder="Найти настройку", theme=self._theme
+            self._settings_layer, placeholder="Найти настройку", theme=self._theme
         )
         self._search_field.installEventFilter(self)
-        outer.addWidget(self._search_field)
+        self._settings_layer.body_layout.addWidget(self._search_field)
 
         content = QHBoxLayout()
         content.setSpacing(self._theme.metric("spacing_lg"))
-        self._sidebar = NavSidebar(SECTIONS, self._theme, container)
-        self._stack = QStackedWidget(container)
+        self._sidebar = NavSidebar(SECTIONS, self._theme, self._settings_layer)
+        self._stack = QStackedWidget(self._settings_layer)
         content.addWidget(self._sidebar)
         content.addWidget(self._stack, 1)
-        outer.addLayout(content, 1)
+        self._settings_layer.body_layout.addLayout(content, 1)
 
         self._search_popup = SettingsSearch(self._search_index, self._theme, self)
         self._search_field.search_changed.connect(
@@ -238,7 +413,114 @@ class MainWindow(QMainWindow):
         )
         self._search_popup.chosen.connect(self._open_search_result)
         self._sidebar.section_selected.connect(self.open_section)
-        return container
+
+    # -- event bus ----------------------------------------------------------
+
+    def _subscribe_to_bus(self) -> None:
+        bus = self._bus
+        if bus is None:
+            return
+        self._unsubscribers = [
+            bus.subscribe(ModeChanged, self._on_mode),
+            bus.subscribe(AudioLevelChanged, self._on_level),
+            bus.subscribe(MicToggled, self._on_mic),
+            bus.subscribe(OnlineStatusChanged, self._on_online),
+            bus.subscribe(ProfileSwitched, self._on_profile_switched),
+            bus.subscribe(TranscriptReady, self._on_transcript),
+            bus.subscribe(TtsStarted, self._on_answer),
+            bus.subscribe(ActionFailed, self._on_action_failed),
+            bus.subscribe(MacroFailed, self._on_macro_failed),
+            bus.subscribe(OverlayToggleRequested, self._on_toggle_visibility),
+            bus.subscribe(OverlayVisibilityRequested, self._on_visibility),
+        ]
+
+    def _on_mode(self, event: ModeChanged) -> None:
+        self.set_state(event.state.value)
+        self.set_mic(enabled=self._current_mic_enabled(), mode=event.mic_mode)
+        if event.state is AssistantState.ERROR and event.detail:
+            self.set_status(event.detail)
+
+    def _on_level(self, event: AudioLevelChanged) -> None:
+        self.set_level(event.rms)
+
+    def _on_mic(self, event: MicToggled) -> None:
+        mode = event.mic_mode if event.mic_mode is not None else MicMode.HYBRID
+        self._mic_enabled = event.enabled
+        self.set_mic(enabled=event.enabled, mode=mode)
+
+    def _on_online(self, event: OnlineStatusChanged) -> None:
+        self.set_online(online=event.online, detail=event.detail)
+
+    def _on_profile_switched(self, event: ProfileSwitched) -> None:
+        self.set_profile(event.profile.name)
+        self._reload_profiles()
+
+    def _on_transcript(self, event: TranscriptReady) -> None:
+        if event.is_final and self._show_transcript():
+            self.add_message(DialogKind.HEARD, event.text)
+
+    def _on_answer(self, event: TtsStarted) -> None:
+        self.add_message(DialogKind.ANSWER, event.text)
+        self.set_status(event.text)
+
+    def _on_action_failed(self, event: ActionFailed) -> None:
+        self.add_message(DialogKind.ERROR, event.user_message or event.error)
+
+    def _on_macro_failed(self, event: MacroFailed) -> None:
+        self.add_message(DialogKind.ERROR, event.user_message or event.error)
+
+    def _on_toggle_visibility(self, _event: OverlayToggleRequested) -> None:
+        if self.isVisible():
+            self.hide()
+        else:
+            self._raise_and_focus()
+
+    def _on_visibility(self, event: OverlayVisibilityRequested) -> None:
+        if event.visible:
+            self._raise_and_focus()
+        else:
+            self.hide()
+
+    # -- interaction --------------------------------------------------------
+
+    def _on_command(self, text: str) -> None:
+        self.add_message(DialogKind.HEARD, text)
+        if self._submit_text is not None:
+            self._submit_text(text)
+
+    def _on_voice(self) -> None:
+        if self._bus is not None:
+            self._bus.publish(MicToggleRequested())
+
+    def _on_profile_chosen(self, profile: object) -> None:
+        if isinstance(profile, Profile) and self._switch_profile is not None:
+            self._switch_profile(profile)
+
+    def _reload_profiles(self) -> None:
+        if self._profiles is not None:
+            self._dialog.set_profiles(tuple(self._profiles()))
+
+    def _start_system_move(self) -> None:
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.startSystemMove()
+
+    def _raise_and_focus(self) -> None:
+        self.showNormal()
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    # -- helpers ------------------------------------------------------------
+
+    def _current_mic_enabled(self) -> bool:
+        return getattr(self, "_mic_enabled", True)
+
+    def _show_transcript(self) -> bool:
+        try:
+            return bool(self._manager.settings.overlay.show_transcript)
+        except Exception:  # pragma: no cover - defensive: settings shape drift
+            return True
 
     def _index_page(self, page: SettingsTab) -> None:
         for entry in page.search_entries:
@@ -252,6 +534,18 @@ class MainWindow(QMainWindow):
             entry.scroll_area.ensureWidgetVisible(entry.widget)
         highlight_widget(entry.widget, self._theme)
         self._search_field.clear()
+
+    def _refresh_theme(self, _theme: object | None = None) -> None:
+        color = self._theme.theme.color
+        radius = self._theme.metric("radius_lg")
+        self._root.setStyleSheet(
+            f"#windowRoot {{ background: {color('surface')};"
+            f" border: 1px solid {color('border')}; border-radius: {radius}px; }}"
+            f"#columnSeam {{ color: {color('border')}; background: {color('border')};"
+            " border: none; }"
+        )
+
+    # -- window state -------------------------------------------------------
 
     def _restore_window_state(self) -> None:
         state = self._manager.settings.window

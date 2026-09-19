@@ -92,18 +92,21 @@ class TimersPanel(QWidget):
         *,
         provider: TimerProvider | None = None,
         clock: Callable[[], datetime] = utc_now,
+        show_empty: bool = True,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._theme = theme
         self._provider = provider
         self._clock = clock
+        self._show_empty = show_empty
         self._rows: dict[int, _TimerRow] = {}
         self._timers: tuple[ActiveTimer, ...] = ()
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._empty = QLabel("Нет активных таймеров")
         self._empty.setAccessibleName("Нет активных таймеров")
+        self._empty.setVisible(self._show_empty)
         self._layout.addWidget(self._empty)
         self._tick = QTimer(self)
         self._tick.setInterval(_TICK_MS)
@@ -130,7 +133,7 @@ class TimersPanel(QWidget):
             row = self._rows.get(timer.id)
             if row is not None:
                 row.update_remaining(timer.remaining_seconds(now))
-        self._empty.setVisible(not active)
+        self._empty.setVisible(self._show_empty and not active)
 
     def start_updates(self) -> None:
         if not self._tick.isActive():

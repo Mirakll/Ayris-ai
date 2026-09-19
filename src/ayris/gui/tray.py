@@ -134,6 +134,10 @@ class TrayController(QObject):
         status = status_for(self._app.state.snapshot, problem=self._problem)
         self.icon.setIcon(_icon(status.level, light_panel=self._theme.theme.mode == "light"))
         self.icon.setToolTip(status.tooltip)
+        self.menu.restyle(
+            muted=self._theme.theme.color("text_muted"),
+            accent=self._theme.theme.color("accent"),
+        )
         self.menu.sync(
             self._app.state.snapshot,
             overlay_visible=self._app.settings.overlay.enabled,

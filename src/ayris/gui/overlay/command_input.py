@@ -43,6 +43,10 @@ class CommandInput(QLineEdit):
     def history(self) -> tuple[str, ...]:
         return tuple(self._history)
 
+    def submit(self) -> None:
+        """Submit the current text as if Enter were pressed."""
+        self._submit()
+
     def _submit(self) -> None:
         text = self.text().strip()
         if not text:
