@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QLabel, QSplitter
 
 from ayris.core.config import ConfigManager
 from ayris.core.events import CommandsChanged, EventBus
@@ -28,6 +28,7 @@ from ayris.gui.tabs.registry import register_tab
 from ayris.gui.theme import ThemeManager
 from ayris.gui.widgets.command_tree import CommandTree
 from ayris.gui.widgets.command_tree_model import CommandTreeStore
+from ayris.gui.widgets.macro_editor import MacroEditor, MacroEditorServices
 from ayris.utils.logger import get_logger
 
 __all__ = ["CommandsTab", "build_store"]
@@ -75,6 +76,8 @@ class CommandsTab(SettingsTab):
         # Defaults set before any early return, so dispose() is always safe even
         # when the library could not be opened.
         self._tree: CommandTree | None = None
+        self._editor: MacroEditor | None = None
+        self._store: CommandTreeStore | None = None
         self._unsub_commands: Callable[[], None] = lambda: None
         self._unsub_profile: Callable[[], None] = lambda: None
         self._suppress_reload = False
@@ -94,13 +97,15 @@ class CommandsTab(SettingsTab):
             self._splitter.addWidget(notice)
             return
 
+        self._store = resolved
         self._tree = CommandTree(resolved, theme)
         self._tree.command_activated.connect(self._on_command_activated)
         self._tree.tree_changed.connect(self._on_tree_changed)
         self._splitter.addWidget(self._tree)
 
-        self._editor_placeholder = _EditorPlaceholder(theme)
-        self._splitter.addWidget(self._editor_placeholder)
+        self._editor = MacroEditor(resolved, theme, services=MacroEditorServices())
+        self._editor.command_saved.connect(self._on_command_saved)
+        self._splitter.addWidget(self._editor)
         self._splitter.setStretchFactor(0, 2)
         self._splitter.setStretchFactor(1, 3)
 
@@ -111,8 +116,14 @@ class CommandsTab(SettingsTab):
     # -- event wiring -------------------------------------------------------
 
     def _on_command_activated(self, command_id: int) -> None:
-        if self._tree is not None:
-            self._editor_placeholder.set_command(command_id)
+        if self._editor is not None:
+            self._editor.load_command(command_id)
+
+    def _on_command_saved(self, _command_id: int) -> None:
+        # A save changed the command's name, tags or triggers; the tree labels and
+        # conflict marks are now stale. Refresh through the same echo guard as a tree
+        # edit, so our own CommandsChanged does not bounce back into a reload.
+        self._on_tree_changed()
 
     def _on_tree_changed(self) -> None:
         if self._bus is not None:
@@ -133,7 +144,10 @@ class CommandsTab(SettingsTab):
             return
         store = build_store()
         if store is not None:
+            self._store = store
             self._tree.set_store(store)
+            if self._editor is not None:
+                self._editor.set_store(store)
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -141,28 +155,6 @@ class CommandsTab(SettingsTab):
         self._unsub_commands()
         self._unsub_profile()
         super().dispose()
-
-
-class _EditorPlaceholder(QWidget):
-    """Stand-in for the task-52 editor: names the selected command, nothing more."""
-
-    def __init__(self, theme: ThemeManager, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._theme = theme
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._title = QLabel("Выберите команду")
-        self._title.setProperty("role", "h2")
-        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint = QLabel("Редактор команды появится здесь (задача 52).")
-        self._hint.setProperty("role", "secondary")
-        self._hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._hint.setWordWrap(True)
-        layout.addWidget(self._title)
-        layout.addWidget(self._hint)
-
-    def set_command(self, command_id: int) -> None:
-        self._title.setText(f"Команда #{command_id}")
 
 
 register_tab("commands", CommandsTab)

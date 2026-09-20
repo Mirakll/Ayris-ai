@@ -213,6 +213,25 @@ QLabel[badge="warning"] { color: {{color.warning}}; }
 QLabel[badge="error"] { color: {{color.error}}; }
 QLabel[badge="info"] { color: {{color.info}}; }
 QLabel[badge="muted"] { color: {{color.text_muted}}; }
+/* Чип тега в редакторе команды: скруглённая «пилюля» на подсвеченной поверхности,
+   без квадрата за текстом. */
+QPushButton[chip="true"] {
+    background-color: {{color.surface_highlight}};
+    border: {{metric.border_width}}px solid {{color.border}};
+    border-radius: {{metric.radius_lg}}px;
+    padding-left: {{metric.spacing_md}}px;
+    padding-right: {{metric.spacing_md}}px;
+    color: {{color.text_secondary}};
+    min-height: {{metric.control_height}}px;
+}
+QPushButton[chip="true"]:hover {
+    border-color: {{color.error}};
+    color: {{color.text_primary}};
+}
+/* Поле с ошибкой ввода (пустое или занятое имя команды): рамка цветом ошибки. */
+QLineEdit[invalid="true"], QSpinBox[invalid="true"] {
+    border-color: {{color.error}};
+}
 QSlider::groove:horizontal {
     height: {{metric.spacing_xs}}px;
     background: {{color.surface_highlight}};

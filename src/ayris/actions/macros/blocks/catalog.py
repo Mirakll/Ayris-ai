@@ -366,6 +366,15 @@ class BlockCatalog:
     def get(self, block_type: str) -> BlockMeta:
         return self._blocks[block_type]
 
+    def try_get(self, block_type: str) -> BlockMeta | None:
+        """The metadata for a block type, or ``None`` when it is unknown.
+
+        A command written by a newer build can carry a block type this catalog has
+        never heard of; the editor must show it without crashing, so it looks up
+        through here rather than :meth:`get`, which raises for the unknown.
+        """
+        return self._blocks.get(block_type)
+
     def list_categories(self) -> tuple[CategoryMeta, ...]:
         return CATEGORIES
 

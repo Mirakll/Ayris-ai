@@ -54,7 +54,13 @@ from ayris.actions.macros.serializer import (
     triggers_to_rows,
 )
 from ayris.core.errors import AyrisError
-from ayris.core.models import Command, CommandFolder, Trigger, TriggerType
+from ayris.core.models import (
+    Command,
+    CommandFolder,
+    Trigger,
+    TriggerType,
+    VariableScope,
+)
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -403,6 +409,106 @@ class CommandTreeStore:
             self._repos.commands.update(replace(command, tags=(*command.tags, tag)))
             changed += 1
         return changed
+
+    # -- editor load / save (task 52) --------------------------------------
+
+    def command_model(self, command_id: int) -> CommandModel:
+        """The full :class:`CommandModel` of one command, for the editor to open.
+
+        This is the same read the export path uses: the command row, its triggers,
+        and its folder path, back into the one model the editor and the node view of
+        task 53 both work on. The variables the command declares travel inside
+        ``actions_json`` (the declaration header of the serializer), so the model
+        comes back whole.
+        """
+        return self._command_model(command_id)
+
+    def sibling_names(self, command_id: int) -> set[str]:
+        """Names of the other commands in the same folder, for duplicate checking.
+
+        The editor flags a name that clashes before it lets the command be saved;
+        the comparison is case-folded so «Свет» and «свет» count as the same name.
+        """
+        target = self._repos.commands.get(command_id)
+        if target is None:
+            return set()
+        return {
+            command.name.casefold()
+            for command in self.commands()
+            if command.id != command_id and command.folder_id == target.folder_id
+        }
+
+    def trigger_conflicts(self, command_id: int) -> dict[tuple[str, str], tuple[str, ...]]:
+        """Every voice phrase / hotkey combo used by *other* commands and by whom.
+
+        Keyed by the same ``(kind, text)`` identity :func:`_trigger_key` builds, so the
+        editor can look a trigger up as the user types it and name the command it would
+        collide with — the task's «конфликт показывается до сохранения».
+        """
+        names = {c.id: c.name for c in self.commands() if c.id is not None}
+        owners: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for trigger in self.triggers():
+            if trigger.command_id == command_id:
+                continue
+            key = _trigger_key(trigger)
+            if key is not None and trigger.command_id in names:
+                owners[key].add(names[trigger.command_id])
+        return {key: tuple(sorted(who)) for key, who in owners.items()}
+
+    def save_command(self, model: CommandModel) -> CommandModel:
+        """Persist an edited command: its row, its triggers, its variable declarations.
+
+        The command keeps its id and folder — the editor does not move it — so this is
+        an update of the ``commands`` row, a full replacement of the ``triggers`` rows
+        (the editor is the authority on the trigger set now), and a merge of the profile
+        and global variable declarations into the ``variables`` table without stepping
+        on a value a running macro has since stored. Returns the model as it reads back,
+        so the editor shows exactly what was written.
+
+        Raises:
+            AyrisError: the model has no id — a command must exist in the tree before
+                the editor can save it.
+        """
+        if model.id is None:
+            raise AyrisError(
+                "cannot save a command without an id",
+                user_message="Команду нельзя сохранить: она ещё не создана.",
+            )
+        from dataclasses import replace
+
+        command_id = model.id
+        current = self._repos.commands.get(command_id)
+        folder_id = current.folder_id if current is not None else model.folder_id
+        placed = model.model_copy(
+            update={"folder_id": folder_id, "folder": [], "updated_at": _now()}
+        )
+        row = replace(command_to_row(placed, profile_id=self._profile_id), folder_id=folder_id)
+        self._repos.commands.update(row, save_version=True, comment="редактор")
+        self._repos.triggers.replace_for_command(
+            command_id, triggers_to_rows(placed, command_id=command_id)
+        )
+        self._sync_declarations(placed)
+        return self._command_model(command_id)
+
+    def _sync_declarations(self, model: CommandModel) -> None:
+        """Write the profile/global declarations that are new, leaving values alone."""
+        for declared in model.variables:
+            if declared.scope is VariableScope.LOCAL:
+                continue
+            profile_id = self._profile_id if declared.scope is VariableScope.PROFILE else None
+            existing = self._repos.variables.get(
+                declared.name, scope=declared.scope, profile_id=profile_id
+            )
+            if existing is not None:
+                continue
+            self._repos.variables.set(
+                declared.name,
+                declared.default,
+                scope=declared.scope,
+                profile_id=profile_id,
+                var_type=declared.type,
+                persistent=declared.persistent,
+            )
 
     # -- export / import ----------------------------------------------------
 
