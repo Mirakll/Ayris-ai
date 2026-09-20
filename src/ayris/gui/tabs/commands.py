@@ -15,6 +15,8 @@ the tree on a :class:`CommandsChanged` or :class:`ProfileSwitched` from elsewher
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QSplitter, QVBoxLayout, QWidget
 
@@ -70,6 +72,12 @@ class CommandsTab(SettingsTab):
         self.reset_button.hide()
         self.dirty_label.hide()
         self._bus = bus
+        # Defaults set before any early return, so dispose() is always safe even
+        # when the library could not be opened.
+        self._tree: CommandTree | None = None
+        self._unsub_commands: Callable[[], None] = lambda: None
+        self._unsub_profile: Callable[[], None] = lambda: None
+        self._suppress_reload = False
 
         resolved = store if store is not None else build_store()
 
@@ -77,7 +85,6 @@ class CommandsTab(SettingsTab):
         self.body.addWidget(self._splitter)
 
         if resolved is None:
-            self._tree = None
             notice = QLabel(
                 "Библиотека команд недоступна: не удалось открыть профиль. "
                 "Откройте вкладку позже или перезапустите Ayris."
@@ -100,10 +107,6 @@ class CommandsTab(SettingsTab):
         if bus is not None:
             self._unsub_commands = bus.subscribe(CommandsChanged, self._on_commands_changed)
             self._unsub_profile = bus.subscribe(ProfileSwitched, self._on_profile_switched)
-        else:
-            self._unsub_commands = lambda: None
-            self._unsub_profile = lambda: None
-        self._suppress_reload = False
 
     # -- event wiring -------------------------------------------------------
 

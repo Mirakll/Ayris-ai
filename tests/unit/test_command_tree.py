@@ -458,6 +458,254 @@ def test_widget_tree_changed_after_store_op(app: QApplication, store: CommandTre
 
 
 # ----------------------------------------------------------------------
+# the widget: context menu, dialogs and file operations (dialogs stubbed)
+# ----------------------------------------------------------------------
+
+
+def _tree(app: QApplication, store: CommandTreeStore) -> CommandTree:
+    return CommandTree(store, ThemeManager(app))
+
+
+def test_widget_create_command(
+    app: QApplication, store: CommandTreeStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *_a, **_k: ("Новая", True)))
+    tree = _tree(app, store)
+    tree._create_command(_folder_id(store, "Игры"))
+    created = store._repos.commands.get_by_name(store.profile_id, "Новая")
+    assert created is not None and created.folder_id == _folder_id(store, "Игры")
+    tree.close()
+
+
+def test_widget_create_folder(
+    app: QApplication, store: CommandTreeStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QInputDialog
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *_a, **_k: ("Папка2", True)))
+    tree = _tree(app, store)
+    tree._create_folder(None)
+    assert any(f.name == "Папка2" for f in store.folders())
+    tree.close()
+
+
+def test_widget_duplicate_and_toggle(app: QApplication, store: CommandTreeStore) -> None:
+    tree = _tree(app, store)
+    tree._duplicate(_command_id(store, "Свет"))
+    assert store._repos.commands.get_by_name(store.profile_id, "Свет — копия")
+    light = _command_id(store, "Свет")
+    tree._toggle(light, False)
+    reread = store._repos.commands.get(light)
+    assert reread is not None and reread.enabled is False
+    tree.close()
+
+
+def test_widget_assign_tag_and_delete(
+    app: QApplication, store: CommandTreeStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QDialog, QInputDialog
+
+    from ayris.gui.widgets import confirm_dialog
+
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *_a, **_k: ("метка", True)))
+    monkeypatch.setattr(
+        confirm_dialog.ConfirmDialog, "exec", lambda _self: QDialog.DialogCode.Accepted
+    )
+    tree = _tree(app, store)
+    ids = [_command_id(store, "Свет"), _command_id(store, "Корень")]
+    tree._assign_tag(ids)
+    tagged = store._repos.commands.get(ids[0])
+    assert tagged is not None and "метка" in tagged.tags
+    tree._delete_commands([_command_id(store, "Корень")])
+    assert store._repos.commands.get_by_name(store.profile_id, "Корень") is None
+    tree.close()
+
+
+def test_widget_delete_folder(
+    app: QApplication, store: CommandTreeStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PySide6.QtWidgets import QDialog
+
+    from ayris.gui.widgets import confirm_dialog
+
+    monkeypatch.setattr(
+        confirm_dialog.ConfirmDialog, "exec", lambda _self: QDialog.DialogCode.Accepted
+    )
+    tree = _tree(app, store)
+    work = _folder_id(store, "Работа")
+    tree._delete_folder(work)
+    assert all(f.id != work for f in store.folders())
+    tree.close()
+
+
+def test_widget_export_and_import_roundtrip(
+    app: QApplication,
+    store: CommandTreeStore,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: object,
+) -> None:
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QDialog
+
+    from ayris.gui.widgets import command_import_dialog, command_tree
+
+    assert isinstance(tmp_path, Path)
+    target = tmp_path / "out.ayris"
+    monkeypatch.setattr(CommandTree, "_save_path", lambda _self, _stem: target)
+    tree = _tree(app, store)
+    tree._export_commands([_command_id(store, "Свет")])
+    assert target.exists() and target.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        command_tree.QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *_a, **_k: (str(target), "")),
+    )
+    monkeypatch.setattr(
+        command_import_dialog.CommandImportDialog, "exec", lambda _self: QDialog.DialogCode.Accepted
+    )
+    fired: list[int] = []
+    tree.tree_changed.connect(lambda: fired.append(1))
+    tree._import_file()
+    # «Свет» exists → the imported copy is renamed by the default RENAME strategy.
+    assert store._repos.commands.get_by_name(store.profile_id, "Свет 2") is not None
+    assert fired
+    tree.close()
+
+
+def test_widget_context_menu_builds(app: QApplication, store: CommandTreeStore) -> None:
+    tree = _tree(app, store)
+    tree._view.expandAll()
+    command_menu = tree._build_menu(_root_command_index(tree.model, "Корень"))
+    labels = {a.text() for a in command_menu.actions() if a.text()}
+    assert {"Дублировать", "Удалить"} <= labels
+    folder_menu = tree._build_menu(_folder_index(tree.model, "Работа"))
+    folder_labels = {a.text() for a in folder_menu.actions() if a.text()}
+    assert "Удалить папку" in folder_labels
+    empty_menu = tree._build_menu(QModelIndex())
+    assert any(a.text() == "Новая команда" for a in empty_menu.actions())
+    command_menu.deleteLater()
+    folder_menu.deleteLater()
+    empty_menu.deleteLater()
+    tree.close()
+
+
+def test_widget_filters_status_and_conflicts(app: QApplication, store: CommandTreeStore) -> None:
+    tree = _tree(app, store)
+    tree._status_combo.setCurrentIndex(2)  # «Выключенные»
+    assert tree.model.rowCount(QModelIndex()) == 1
+    tree._status_combo.setCurrentIndex(0)
+    tree._conflicts_toggle.setChecked(True)
+    assert tree.model.tree_filter.only_conflicts
+    tree.close()
+
+
+def test_delegate_paints_disabled_and_conflict(app: QApplication, store: CommandTreeStore) -> None:
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QPainter, QPixmap
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    repos = store._repos
+    repos.triggers.add_voice(_command_id(store, "Свет"), "айрис общий")
+    repos.triggers.add_voice(_command_id(store, "Корень"), "айрис общий")
+    tree = _tree(app, store)
+    delegate = tree._delegate
+    delegate.set_query("корень")
+    option = QStyleOptionViewItem()
+    option.rect = QRect(0, 0, 200, 20)
+    delegate.initStyleOption(option, _first_disabled(tree.model))
+    conflict = _root_command_index(tree.model, "Корень")
+    delegate.initStyleOption(option, conflict)
+    pixmap = QPixmap(200, 20)
+    painter = QPainter(pixmap)
+    delegate.paint(painter, option, conflict)
+    painter.end()
+    tree.close()
+
+
+def _first_disabled(model: CommandTreeModel) -> QModelIndex:
+    def walk(parent: QModelIndex) -> QModelIndex | None:
+        for row in range(model.rowCount(parent)):
+            index = model.index(row, 0, parent)
+            is_cmd = index.data(KIND_ROLE) == str(NodeKind.COMMAND)
+            if is_cmd and index.data(ENABLED_ROLE) is False:
+                return index
+            found = walk(index)
+            if found is not None:
+                return found
+        return None
+
+    result = walk(QModelIndex())
+    assert result is not None
+    return result
+
+
+# ----------------------------------------------------------------------
+# import dialog and the tab
+# ----------------------------------------------------------------------
+
+
+def test_import_dialog_reads_document(app: QApplication, store: CommandTreeStore) -> None:
+    from ayris.gui.widgets.command_import_dialog import CommandImportDialog
+
+    text = store.export_command(_command_id(store, "Свет"))
+    dialog = CommandImportDialog(text, ThemeManager(app), folders=[(None, "Корень")])
+    assert dialog.is_valid
+    assert dialog.target_folder_id is None
+    assert dialog.strategy is ConflictStrategy.RENAME
+    dialog.close()
+
+
+def test_import_dialog_rejects_garbage(app: QApplication) -> None:
+    from ayris.gui.widgets.command_import_dialog import CommandImportDialog
+
+    dialog = CommandImportDialog("не json", ThemeManager(app), folders=[(None, "Корень")])
+    assert not dialog.is_valid
+    dialog.close()
+
+
+def test_tab_builds_and_bridges_events(app: QApplication, store: CommandTreeStore) -> None:
+    import tempfile
+    from pathlib import Path
+
+    from ayris.core.config import ConfigManager
+    from ayris.core.events import CommandsChanged, EventBus
+    from ayris.gui.tabs.commands import CommandsTab
+
+    config = ConfigManager(Path(tempfile.mkdtemp()) / "c.toml")
+    bus = EventBus()
+    tab = CommandsTab(config, ThemeManager(app), bus, store=store)
+    published: list[CommandsChanged] = []
+    bus.subscribe(CommandsChanged, published.append)
+    assert tab._tree is not None
+    tab._on_command_activated(_command_id(store, "Свет"))
+    tab._tree.tree_changed.emit()
+    assert published
+    bus.publish(CommandsChanged())  # external change rebuilds without looping
+    tab.dispose()
+    tab.close()
+
+
+def test_tab_handles_missing_store(app: QApplication, monkeypatch: pytest.MonkeyPatch) -> None:
+    import tempfile
+    from pathlib import Path
+
+    from ayris.core.config import ConfigManager
+    from ayris.gui.tabs import commands as commands_module
+    from ayris.gui.tabs.commands import CommandsTab
+
+    monkeypatch.setattr(commands_module, "build_store", lambda: None)
+    config = ConfigManager(Path(tempfile.mkdtemp()) / "c.toml")
+    tab = CommandsTab(config, ThemeManager(app), None)
+    assert tab._tree is None
+    tab.dispose()  # must not raise even without a tree
+    tab.close()
+
+
+# ----------------------------------------------------------------------
 # helpers
 # ----------------------------------------------------------------------
 

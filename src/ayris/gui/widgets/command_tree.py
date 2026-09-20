@@ -224,7 +224,14 @@ class CommandTree(QWidget):
     # -- context menu -------------------------------------------------------
 
     def _show_menu(self, point: QPoint) -> None:
-        index = self._view.indexAt(point)
+        menu = self._build_menu(self._view.indexAt(point))
+        viewport = self._view.viewport()
+        if viewport is not None:
+            menu.exec(viewport.mapToGlobal(point))
+
+    def _build_menu(self, index: QModelIndex) -> QMenu:
+        """Assemble the context menu for a row. Split out so a test can inspect its
+        actions without opening the modal ``exec`` that would hang an offscreen run."""
         menu = QMenu(self)
         commands = self._selected_commands()
         is_folder = index.isValid() and index.data(KIND_ROLE) == str(NodeKind.FOLDER)
@@ -261,9 +268,7 @@ class CommandTree(QWidget):
             menu.addSeparator()
             _add(menu, "Удалить папку", lambda: self._delete_folder(folder_id))
 
-        viewport = self._view.viewport()
-        if viewport is not None:
-            menu.exec(viewport.mapToGlobal(point))
+        return menu
 
     # -- create -------------------------------------------------------------
 
