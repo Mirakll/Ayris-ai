@@ -137,6 +137,7 @@ class WinApiBackend:
 
     def run(self, callback: Callable[[int], None]) -> None:
         """Own a message-only window and its queue until :meth:`stop`."""
+        self._declare_signatures()
         self._startup_error = None
         self._callback = callback
         self._thread_id = int(self._kernel32.GetCurrentThreadId())
@@ -154,6 +155,58 @@ class WinApiBackend:
         self._remove_capture_hook()
         self._window = 0
         self._window_proc = None
+
+    def _declare_signatures(self) -> None:
+        """Give every WinAPI call its full ctypes signature before it is used.
+
+        An undeclared ctypes function coerces each argument and its return value
+        to a 32-bit ``int``. Window handles survive that (Win32 keeps them inside
+        32 bits), but a module base address does not: handing the 64-bit
+        ``GetModuleHandleW`` result to an *undeclared* ``SetWindowsHookExW``
+        overflows the implicit ``int`` and raises before the capture hook can
+        install — which is why «Нажмите сочетание» recorded nothing at all.
+        Declared once here so no later call depends on another having run first.
+        """
+        user32, kernel32 = self._user32, self._kernel32
+        hwnd, hhook = wintypes.HWND, wintypes.HANDLE
+        cint, hinst = ctypes.c_int, wintypes.HINSTANCE
+        msg_p = ctypes.POINTER(wintypes.MSG)
+        uint, dword = wintypes.UINT, wintypes.DWORD
+        wparam, lparam = wintypes.WPARAM, wintypes.LPARAM
+
+        kernel32.GetCurrentThreadId.argtypes = []
+        kernel32.GetCurrentThreadId.restype = dword
+        kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+        kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+        user32.GetMessageW.argtypes = [msg_p, hwnd, uint, uint]
+        user32.GetMessageW.restype = wintypes.BOOL
+        user32.TranslateMessage.argtypes = [msg_p]
+        user32.TranslateMessage.restype = wintypes.BOOL
+        user32.DispatchMessageW.argtypes = [msg_p]
+        user32.DispatchMessageW.restype = lparam
+        user32.PostMessageW.argtypes = [hwnd, uint, wparam, lparam]
+        user32.PostMessageW.restype = wintypes.BOOL
+        user32.PostThreadMessageW.argtypes = [dword, uint, wparam, lparam]
+        user32.PostThreadMessageW.restype = wintypes.BOOL
+        user32.PostQuitMessage.argtypes = [cint]
+        user32.PostQuitMessage.restype = None
+        user32.DestroyWindow.argtypes = [hwnd]
+        user32.DestroyWindow.restype = wintypes.BOOL
+
+        user32.RegisterHotKey.argtypes = [hwnd, cint, uint, uint]
+        user32.RegisterHotKey.restype = wintypes.BOOL
+        user32.UnregisterHotKey.argtypes = [hwnd, cint]
+        user32.UnregisterHotKey.restype = wintypes.BOOL
+        user32.GetAsyncKeyState.argtypes = [cint]
+        user32.GetAsyncKeyState.restype = wintypes.SHORT
+
+        user32.SetWindowsHookExW.argtypes = [cint, LowLevelKeyboardProc, hinst, dword]
+        user32.SetWindowsHookExW.restype = hhook
+        user32.CallNextHookEx.argtypes = [hhook, cint, wparam, lparam]
+        user32.CallNextHookEx.restype = lparam
+        user32.UnhookWindowsHookEx.argtypes = [hhook]
+        user32.UnhookWindowsHookEx.restype = wintypes.BOOL
 
     def _create_message_window(self) -> None:
         def window_proc(hwnd: int, message: int, wparam: int, lparam: int) -> int:
@@ -276,11 +329,10 @@ class WinApiBackend:
             return int(self._user32.CallNextHookEx(self._hook, code, wparam, lparam))
 
         self._hook_proc = LowLevelKeyboardProc(hook)
-        self._hook = int(
-            self._user32.SetWindowsHookExW(
-                WH_KEYBOARD_LL, self._hook_proc, self._kernel32.GetModuleHandleW(None), 0
-            )
+        handle = self._user32.SetWindowsHookExW(
+            WH_KEYBOARD_LL, self._hook_proc, self._kernel32.GetModuleHandleW(None), 0
         )
+        self._hook = int(handle) if handle else 0
         if not self._hook:
             self._hook_proc = None
             raise HotkeyBackendUnavailable(

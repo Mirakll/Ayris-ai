@@ -277,11 +277,25 @@ def install_triggers(app: AyrisApp) -> TriggerDispatcher:
             return None
         return command_from_rows(row, app.repositories.triggers.list_for_command(row.id))
 
+    # The one audio-output owner: the macro engine plays a stage's binding through
+    # it, and the command editor previews through the very same instance (registered
+    # below). A build that fails degrades to no sound rather than aborting startup.
+    from ayris.actions.macros.sounds import build_sound_library, set_active_sound_library
+    from ayris.core.paths import get_paths
+
+    paths = get_paths()
+    built = build_sound_library(sounds_dir=paths.sounds_dir, cache_dir=paths.cache_dir)
+    sound_library = built[0] if built is not None else None
+    stop_sound: Callable[[], None] = built[1] if built is not None else lambda: None
+    if sound_library is not None:
+        set_active_sound_library(sound_library)
+
     engine = MacroEngine(
         registry,
         bus=app.bus,
         store=DatabaseVariables(app.repositories.variables, profile_id=profile_id),
         library=command_by_name,
+        sounds=sound_library,
     )
 
     def switch_variables(new_profile_id: int) -> None:
@@ -297,6 +311,8 @@ def install_triggers(app: AyrisApp) -> TriggerDispatcher:
         dispatcher.close()
         engine.shutdown()
         registry.shutdown()
+        set_active_sound_library(None)
+        stop_sound()
 
     app.add_component(
         Component(

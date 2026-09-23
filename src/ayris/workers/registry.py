@@ -309,7 +309,11 @@ def _audio_spec(settings: Settings) -> WorkerSpec:
             "wake_engine": wake.engine,
             "wake_debounce_ms": wake.debounce_ms,
             "wake_phrases": [
-                {"phrase": item.phrase, "sensitivity": item.sensitivity}
+                {
+                    "phrase": item.phrase,
+                    "sensitivity": item.sensitivity,
+                    "model": item.engine_model,
+                }
                 for item in wake.phrases
                 if item.enabled
             ],

@@ -103,6 +103,51 @@ def test_winapi_backend_creates_and_stops_real_message_window() -> None:
     assert not thread.is_alive()
 
 
+@pytest.mark.hardware
+@pytest.mark.skipif(sys.platform != "win32", reason="нужен настоящий WinAPI")
+def test_winapi_backend_installs_capture_hook_without_overflow() -> None:
+    # Regression for «Назначить сочетание» recording nothing: an undeclared
+    # SetWindowsHookExW received the 64-bit GetModuleHandleW result and raised on
+    # the message-loop thread, so the low-level hook never installed. With full
+    # ctypes signatures the hook installs and lifts cleanly.
+    backend = WinApiBackend()
+    thread = threading.Thread(target=backend.run, args=(lambda _identifier: None,), daemon=True)
+    thread.start()
+    installed = threading.Event()
+    error: list[Exception] = []
+    hook_handles: list[int] = []
+    try:
+        assert backend.wait_ready(2)
+
+        def begin() -> None:
+            try:
+                backend.start_capture(lambda _vk, _pressed: False)
+                hook_handles.append(backend._hook)
+            except Exception as exc:
+                error.append(exc)
+            finally:
+                installed.set()
+
+        assert backend.invoke(begin)
+        assert installed.wait(2)
+        assert not error, error[0]
+        assert hook_handles and hook_handles[0]
+
+        released = threading.Event()
+
+        def finish() -> None:
+            backend.stop_capture()
+            released.set()
+
+        assert backend.invoke(finish)
+        assert released.wait(2)
+        assert backend._hook == 0
+    finally:
+        backend.stop()
+        thread.join(2)
+    assert not thread.is_alive()
+
+
 class FakeCommands:
     def __init__(self, commands: list[Command]) -> None:
         self.rows = {command.id: command for command in commands}
@@ -312,6 +357,25 @@ def test_capture_normalizes_combo_and_escape_cancels() -> None:
         manager.capture(captured.append)
         backend.key("escape")
         assert captured[-1] is None
+    finally:
+        manager.stop()
+
+
+def test_capture_accepts_single_special_keys_and_printscreen() -> None:
+    # The user asked for numpad, function-row, arrows and Print Screen, pressed
+    # on their own without a modifier. Each is a valid combination now.
+    manager, backend, _bus, _events = make_manager()
+    captured: list[Hotkey | None] = []
+    try:
+        for name in ("up", "f5", "num5", "printscreen"):
+            manager.capture(captured.append)
+            backend.key(name)
+        assert captured == [
+            Hotkey(key="up"),
+            Hotkey(key="f5"),
+            Hotkey(key="num5"),
+            Hotkey(key="printscreen"),
+        ]
     finally:
         manager.stop()
 

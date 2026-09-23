@@ -2,16 +2,87 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from ayris.actions.input.keys import KEYS, MODIFIERS
 from ayris.utils.hotkey_backends.winapi import HotkeyBackendUnavailable
 from ayris.utils.hotkeys import Hotkey
 
-__all__ = ["InterceptionBackend"]
+__all__ = ["InterceptionBackend", "InterceptionState", "InterceptionStatus", "probe_interception"]
+
+
+class InterceptionState(StrEnum):
+    """Whether the Interception driver can be used on this machine."""
+
+    #: Package and driver both present — full-screen games are covered.
+    READY = "ready"
+    #: Neither the Python package nor the driver is installed.
+    MISSING = "missing"
+    #: The package is importable but the kernel driver is not running.
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class InterceptionStatus:
+    """The result of :func:`probe_interception`: a state and a Russian caption."""
+
+    state: InterceptionState
+    message: str
+
+    @property
+    def ready(self) -> bool:
+        return self.state is InterceptionState.READY
+
+
+def probe_interception() -> InterceptionStatus:
+    """Check the Interception driver without leaving a device context open.
+
+    Constructing an :class:`InterceptionBackend` opens a driver context that only
+    :meth:`InterceptionBackend.run` would ever destroy, so the «Горячие клавиши» tab
+    must not build one just to test the driver. This opens a context, asks whether
+    the driver bound any devices, and destroys it again — the one safe, side-effect
+    free way to answer «установлен / не установлен / установлен, но недоступен».
+    """
+    try:
+        module = importlib.import_module("interception")
+    except (ImportError, OSError):
+        return InterceptionStatus(
+            InterceptionState.MISSING,
+            "Драйвер Interception не установлен. Работают обычные горячие клавиши Windows.",
+        )
+    context_class = getattr(module, "Interception", None)
+    if not callable(context_class):
+        return InterceptionStatus(
+            InterceptionState.MISSING,
+            "Пакет Interception не содержит нужного API. Работает WinAPI.",
+        )
+    context: Any = None
+    try:
+        context = context_class()
+        valid = bool(getattr(context, "valid", False))
+    except Exception:
+        valid = False
+    finally:
+        destroy = getattr(context, "destroy", None)
+        if callable(destroy):
+            with contextlib.suppress(Exception):
+                destroy()
+    if valid:
+        return InterceptionStatus(
+            InterceptionState.READY,
+            "Драйвер Interception установлен — хоткеи работают в полноэкранных играх.",
+        )
+    return InterceptionStatus(
+        InterceptionState.UNAVAILABLE,
+        "Драйвер Interception установлен, но не запущен. Нужны права администратора "
+        "и перезагрузка. Пока работает WinAPI.",
+    )
 
 
 class InterceptionBackend:

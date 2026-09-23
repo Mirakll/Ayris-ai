@@ -46,8 +46,10 @@ __all__ = [
     "HotkeyBinding",
     "HotkeyConflict",
     "HotkeyManager",
+    "active_hotkey_manager",
     "detect_conflicts",
     "install_hotkeys",
+    "set_active_hotkey_manager",
 ]
 
 _log = get_logger(__name__)
@@ -55,7 +57,7 @@ _START_TIMEOUT_S: Final = 3.0
 _PTT_POLL_S: Final = 0.01
 _PTT_MINIMUM_MS: Final = 120
 _CAPTURE_FORBIDDEN: Final[frozenset[str]] = frozenset(
-    {"escape", "printscreen", "pause", "capslock", "numlock", "scrolllock"}
+    {"escape", "pause", "capslock", "numlock", "scrolllock"}
 )
 _SYSTEM_LABELS: Final[dict[str, str]] = {
     "push_to_talk": "Push-to-Talk",
@@ -159,6 +161,7 @@ class HotkeyManager:
         self._capture_result: Hotkey | BaseException | None = None
         self._capture_modifiers: set[str] = set()
         self._capture_callback: Callable[[Hotkey | None], None] | None = None
+        self._capture_modifiers_callback: Callable[[tuple[str, ...]], None] | None = None
         self._interception: InterceptionBackend | None = None
         self._interception_thread: threading.Thread | None = None
         self._subscriptions = [
@@ -173,6 +176,17 @@ class HotkeyManager:
         result = {binding.hotkey.canonical: binding.owner for binding in self._bindings.values()}
         result.update(self._registration_errors)
         return result
+
+    @property
+    def registration_errors(self) -> Mapping[str, str]:
+        """Canonical combos the OS refused us, mapped to the reason to show.
+
+        These are *our* desired bindings that ``RegisterHotKey`` rejected because
+        another application already holds the combination — the «Горячие клавиши»
+        tab (task 55) marks exactly these rows red. Kept apart from :attr:`occupied`,
+        which folds them together with the combos we did claim.
+        """
+        return dict(self._registration_errors)
 
     @property
     def conflicts(self) -> tuple[HotkeyConflict, ...]:
@@ -410,12 +424,18 @@ class HotkeyManager:
         self,
         callback: Callable[[Hotkey | None], None] | None = None,
         *,
+        on_modifiers: Callable[[tuple[str, ...]], None] | None = None,
         timeout: float | None = None,
     ) -> Hotkey | None:
         """Temporarily hook the keyboard and return one normalized combination.
 
         With ``callback`` this is asynchronous for a UI dialog.  Without it the
         call waits until a combination, Esc, or ``timeout``.
+
+        ``on_modifiers`` is called with the held modifiers in canonical order every
+        time they change while capturing, so a dialog can show them live. Like
+        ``callback`` it runs on the backend's capture thread, so a Qt consumer must
+        marshal it to the UI thread itself.
         """
         backend = self._backend
         if backend is None:
@@ -424,6 +444,7 @@ class HotkeyManager:
         self._capture_result = None
         self._capture_modifiers.clear()
         self._capture_callback = callback
+        self._capture_modifiers_callback = on_modifiers
         if not backend.invoke(lambda: backend.start_capture(self._capture_key)):
             raise HotkeyBackendUnavailable("capture hook could not be queued")
         if callback is not None:
@@ -450,6 +471,7 @@ class HotkeyManager:
                 self._capture_modifiers.add(canonical_modifier)
             else:
                 self._capture_modifiers.discard(canonical_modifier)
+            self._emit_capture_modifiers()
             return True
         if not pressed:
             return True
@@ -468,12 +490,22 @@ class HotkeyManager:
         self._finish_capture(hotkey)
         return True
 
+    def _emit_capture_modifiers(self) -> None:
+        callback = self._capture_modifiers_callback
+        if callback is None:
+            return
+        held = tuple(
+            name for name in ("ctrl", "alt", "shift", "win") if name in self._capture_modifiers
+        )
+        callback(held)
+
     def _finish_capture(self, result: Hotkey | None) -> None:
         backend = self._backend
         if backend is not None:
             backend.stop_capture()
         self._capture_result = result
         self._capture_done.set()
+        self._capture_modifiers_callback = None
         callback, self._capture_callback = self._capture_callback, None
         if callback is not None:
             callback(result)
@@ -517,6 +549,36 @@ def _modifier_name(name: str) -> str:
     return ""
 
 
+# ----------------------------------------------------------------------
+# the running manager registers itself here, so the settings tab can reach it
+# ----------------------------------------------------------------------
+#
+# The «Горячие клавиши» tab (task 55) must capture through the *one* manager that
+# owns the keyboard — a second manager would start its own message loop and fight
+# over RegisterHotKey. It is created deep in the lifecycle (install_hotkeys, below),
+# long before and quite apart from the settings window, so the two meet through this
+# module-level slot exactly the way the resource panel meets the worker supervisor
+# (:func:`~ayris.gui.widgets.resource_monitor.set_active_worker_control`). The tab
+# degrades to a disabled «Назначить» when nothing is registered — a settings window
+# opened before the hotkey backend is up, or on a machine where it never comes up.
+
+_ACTIVE_MANAGER: HotkeyManager | None = None
+_MANAGER_LOCK: Final = threading.Lock()
+
+
+def set_active_hotkey_manager(manager: HotkeyManager | None) -> None:
+    """Register (or clear) the live manager the «Горячие клавиши» tab captures through."""
+    global _ACTIVE_MANAGER
+    with _MANAGER_LOCK:
+        _ACTIVE_MANAGER = manager
+
+
+def active_hotkey_manager() -> HotkeyManager | None:
+    """The manager registered with :func:`set_active_hotkey_manager`, if any."""
+    with _MANAGER_LOCK:
+        return _ACTIVE_MANAGER
+
+
 def install_hotkeys(app: AyrisApp) -> HotkeyManager:
     """Attach global hotkeys and their event consumers to the lifecycle."""
     from ayris.core.app import Component, LifecycleStage
@@ -539,7 +601,14 @@ def install_hotkeys(app: AyrisApp) -> HotkeyManager:
 
     unsubscribers = [app.bus.subscribe(MicToggleRequested, toggle_mic, weak=False)]
 
+    def start() -> None:
+        manager.start()
+        # Only publish the manager once its backend loop is up: the settings tab
+        # captures through it, and a manager whose loop never started would raise.
+        set_active_hotkey_manager(manager)
+
     def stop() -> None:
+        set_active_hotkey_manager(None)
         manager.stop()
         for unsubscribe in unsubscribers:
             unsubscribe()
@@ -549,7 +618,7 @@ def install_hotkeys(app: AyrisApp) -> HotkeyManager:
         Component(
             name="глобальные горячие клавиши",
             stage=LifecycleStage.ACTIONS,
-            start=manager.start,
+            start=start,
             stop=stop,
         )
     )
