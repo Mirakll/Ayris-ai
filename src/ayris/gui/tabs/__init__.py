@@ -7,6 +7,7 @@ from ayris.gui.tabs import commands as _commands  # noqa: F401
 from ayris.gui.tabs import general as _general  # noqa: F401
 from ayris.gui.tabs import hotkeys as _hotkeys  # noqa: F401
 from ayris.gui.tabs import overlay_settings as _overlay  # noqa: F401
+from ayris.gui.tabs import profiles as _profiles  # noqa: F401
 from ayris.gui.tabs import updates as _updates  # noqa: F401
 from ayris.gui.tabs import voice as _voice  # noqa: F401
 from ayris.gui.tabs.base import SearchEntry, SettingsTab
