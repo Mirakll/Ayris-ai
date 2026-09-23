@@ -716,6 +716,26 @@ class TestValidation:
         report = validate_command(command, registry=registry)
         assert "параметр «level»: нужно целое число" in report.user_message
 
+    def test_a_detached_block_does_not_block_the_save(self, registry: ActionRegistry) -> None:
+        """A free (unwired) node is an unfinished draft: an incomplete one must not raise a
+        blocking error and refuse the save, but the same defect on a wired block still does."""
+        draft = CommandModel(
+            name="Черновик",
+            actions=[
+                ActionBlock(type="Say", params={"text": "готово"}),
+                ActionBlock(type="SetVolume", params={}, detached=True),  # без level, но свободный
+            ],
+        )
+        assert validate_command(draft, registry=registry).ok
+        wired = CommandModel(name="Поток", actions=[ActionBlock(type="SetVolume", params={})])
+        assert not validate_command(wired, registry=registry).ok
+
+    def test_a_detached_break_is_not_reported_out_of_a_loop(self, registry: ActionRegistry) -> None:
+        """A detached ``Break`` at the root has no loop above it, but as a draft it must not
+        produce the «стоит вне цикла» error a wired one would."""
+        draft = CommandModel(name="Ч", actions=[ActionBlock(type="Break", detached=True)])
+        assert validate_command(draft, registry=registry).ok
+
     def test_problems_come_in_the_order_the_editor_draws_the_blocks(
         self, registry: ActionRegistry
     ) -> None:

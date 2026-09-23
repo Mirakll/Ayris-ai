@@ -656,6 +656,13 @@ class ActionBlock(MacroModel):
     catch: list[ActionBlock] = Field(default_factory=list)
     sound: SoundBinding | None = None
     enabled: bool = True
+    #: A free node in the node editor: added to the command but not yet wired into the
+    #: flow. Kept strictly apart from ``enabled`` (the user's on/off toggle): a detached
+    #: block does not run and does not block validation, but it is not «disabled» — it is
+    #: simply not connected. Determined by graph reachability in the node editor; a block
+    #: reachable from the flow's start is never detached. Defaults ``False`` so every
+    #: pre-existing command (and every list-mode block) reads as wired.
+    detached: bool = False
     comment: str = Field(default="", max_length=500)
     on_error: OnError = OnError.STOP
 
@@ -700,6 +707,13 @@ class ActionBlock(MacroModel):
             for key in (field_name, wire_name):
                 if not data.get(key, True):
                     del data[key]
+        # ``detached`` is the exception's exception: a plain ``False`` bool would be
+        # written on every block (like ``enabled``), rewriting every existing .ayris and
+        # actions_json row with ``"detached": false`` and breaking byte-for-byte stability.
+        # Drop it when False so only genuinely free nodes carry the key, mirroring the
+        # ``_drop_default_wait`` trick on :class:`SoundBinding`.
+        if not self.detached:
+            data.pop("detached", None)
         return data
 
     def branches(self) -> Iterator[tuple[str, list[ActionBlock]]]:

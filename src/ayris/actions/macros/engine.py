@@ -376,6 +376,14 @@ class _Runner:
         self._guard()
         if self._debug is not None:
             self._debug.before_block(self, block, path, depth)
+        # A free (unwired) node never runs — checked before ``enabled`` so an
+        # unwired-but-enabled block reports «не подключено», not «выключен». This is the
+        # sole execution choke point, so one gate covers top-level and nested blocks alike.
+        if block.detached:
+            self._builder.mark(
+                path, block.type, StepStatus.SKIPPED, depth=depth, message="не подключено"
+            )
+            return Flow.NEXT
         if not block.enabled:
             self._builder.mark(
                 path, block.type, StepStatus.SKIPPED, depth=depth, message="выключен"

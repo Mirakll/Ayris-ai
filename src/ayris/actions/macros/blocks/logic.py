@@ -299,7 +299,9 @@ def run_switch(rt: BlockRuntime, block: ActionBlock, path: str, depth: int) -> F
 
 def _arm(rt: BlockRuntime, block: ActionBlock, value: Any) -> int:
     """Which arm of a ``Switch`` answers ``value``: a ``Case``, a ``Default``, or none."""
-    arms = tuple((index, arm) for index, arm in enumerate(block.body) if arm.enabled)
+    arms = tuple(
+        (index, arm) for index, arm in enumerate(block.body) if arm.enabled and not arm.detached
+    )
     for index, arm in arms:
         if arm.type == "Default":
             continue

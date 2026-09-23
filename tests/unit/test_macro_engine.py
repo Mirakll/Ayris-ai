@@ -504,6 +504,40 @@ class TestBlocks:
         assert step.status is StepStatus.SKIPPED
         assert step.message == "выключен"
 
+    def test_a_detached_block_is_not_run(self, engine, registry) -> None:
+        # Свободная (неподключённая) нода не выполняется; следующий подключённый блок — да.
+        report = engine.run(command({"type": "Skip", "detached": True}, block("Run")))
+
+        assert registry.names == ["Run"]
+        step = report.step("actions[0]")
+        assert step.status is StepStatus.SKIPPED
+        assert step.message == "не подключено"
+
+    def test_detached_wins_over_disabled_in_the_message(self, engine, registry) -> None:
+        # detached проверяется раньше enabled: свободный, но включённый блок читается как
+        # «не подключено», а не «выключен».
+        report = engine.run(command({"type": "Skip", "detached": True, "enabled": False}))
+
+        assert report.step("actions[0]").message == "не подключено"
+
+    def test_a_detached_logic_block_skips_its_whole_subtree(self, engine, registry) -> None:
+        # Единственная точка исполнения — run_one, поэтому одна проверка гасит и вложенное:
+        # у свободного If ветка не выполняется вовсе.
+        report = engine.run(
+            command(
+                {
+                    "type": "If",
+                    "params": {"condition": "1 == 1"},
+                    "then": [block("Inside")],
+                    "detached": True,
+                },
+                block("After"),
+            )
+        )
+
+        assert registry.names == ["After"]
+        assert report.step("actions[0]").status is StepStatus.SKIPPED
+
     def test_wait_records_the_pause_it_took(self, engine) -> None:
         report = engine.run(command(block("Wait", ms=20)))
 

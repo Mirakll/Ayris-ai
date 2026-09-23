@@ -76,6 +76,7 @@ __all__ = [
     "AyrisDocument",
     "FolderEntry",
     "command_from_rows",
+    "command_from_snapshot",
     "command_to_row",
     "command_to_rows",
     "dump_command",
@@ -505,6 +506,48 @@ def command_from_rows(
     if row.updated_at is not None:
         payload["updated_at"] = row.updated_at
     return CommandModel.model_validate(payload)
+
+
+def command_from_snapshot(
+    snapshot: JsonObject,
+    *,
+    command_id: int | None = None,
+    folder: Sequence[str] = (),
+) -> CommandModel:
+    """A stored version snapshot back into a :class:`CommandModel`.
+
+    The snapshot is the dict :meth:`CommandRepository.save_version` writes: the
+    command's own fields, its ``actions`` (declaration header and all), and — for
+    snapshots written since task 54 — its triggers. A snapshot from before that
+    carries no ``triggers`` key and reads back with an empty trigger set, which is
+    honest: those versions never recorded what fired the command. Used by the
+    version history to diff, to preview a rollback and to export a version.
+    """
+    trigger_rows = [
+        Trigger(
+            command_id=command_id or 0,
+            type=TriggerType(str(item.get("type", "voice"))),
+            payload=dict(item.get("payload", {})),
+            fuzzy=bool(item.get("fuzzy", True)),
+            priority=int(item.get("priority", 0)),
+        )
+        for item in snapshot.get("triggers", [])
+        if isinstance(item, dict)
+    ]
+    row = Command(
+        id=command_id,
+        name=str(snapshot.get("name", "")),
+        profile_id=0,
+        folder_id=snapshot.get("folder_id"),
+        description=str(snapshot.get("description", "")),
+        tags=tuple(str(tag) for tag in snapshot.get("tags", [])),
+        enabled=bool(snapshot.get("enabled", True)),
+        priority=int(snapshot.get("priority", 0)),
+        cooldown_ms=int(snapshot.get("cooldown_ms", 0)),
+        require_admin=bool(snapshot.get("require_admin", False)),
+        actions=tuple(item for item in snapshot.get("actions", []) if isinstance(item, dict)),
+    )
+    return command_from_rows(row, trigger_rows, folder=folder)
 
 
 def initial_variables(

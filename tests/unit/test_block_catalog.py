@@ -71,6 +71,27 @@ def test_every_spec_block_has_complete_palette_metadata(catalog: BlockCatalog) -
             assert block.unavailable_reason
 
 
+def test_available_blocks_are_all_dispatchable(
+    catalog: BlockCatalog, registry: ActionRegistry
+) -> None:
+    """A block the palette shows as available must have a real executor.
+
+    ``Else``/``Catch`` used to sit here as draggable blocks with no handler — the
+    engine has no ``Else`` action, so dropping one gave «unknown action». Availability
+    now has to match dispatchability: either a native handler runs the block, or a
+    registered action does. Nothing may look usable and then fail at run time.
+    """
+    from ayris.actions.macros.blocks import BLOCK_HANDLERS
+
+    for category in catalog.list_categories():
+        for block in catalog.list_blocks(category.type):
+            dispatchable = block.type in BLOCK_HANDLERS or registry.has(block.type)
+            assert block.available == dispatchable, (
+                f"{block.type}: available={block.available}, "
+                f"а исполнить движок {'может' if dispatchable else 'не может'}"
+            )
+
+
 def test_action_wrappers_reuse_registry_schema_and_examples_validate(
     catalog: BlockCatalog, registry: ActionRegistry
 ) -> None:

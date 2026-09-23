@@ -156,11 +156,22 @@ def validate_command(
             one of those is not a broken reference.
     """
     problems: list[Problem] = []
-    locations = list(command.blocks())
-    if not command.actions:
+    all_locations = list(command.blocks())
+    # A free (detached) node is an unfinished draft, not part of the flow: it never runs,
+    # so an incomplete one must not raise a blocking error and refuse the save. Drop every
+    # detached block AND its whole subtree before the checks — a detached ``If`` with a
+    # half-written ``then`` must not block either. Reachability from the flow's start, not
+    # position, is what makes a block «live», so this is a prefix test on the block path.
+    detached_paths = [loc.path for loc in all_locations if loc.block.detached]
+
+    def _under_detached(path: tuple[str | int, ...]) -> bool:
+        return any(len(p) <= len(path) and path[: len(p)] == p for p in detached_paths)
+
+    locations = [loc for loc in all_locations if not _under_detached(loc.path)]
+    if not any(not block.detached for block in command.actions):
         problems.append(
             Problem(
-                message="в команде нет ни одного блока: она ничего не сделает",
+                message="в команде нет ни одного подключённого блока: она ничего не сделает",
                 path="actions",
                 severity=Severity.WARNING,
             )

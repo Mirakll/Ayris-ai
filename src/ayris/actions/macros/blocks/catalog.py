@@ -99,12 +99,10 @@ BLOCKS_BY_CATEGORY: Final[dict[BlockCategory, tuple[str, ...]]] = {
     ),
     BlockCategory.LOGIC: (
         "If",
-        "Else",
         "Switch",
         "While",
         "For",
         "Try",
-        "Catch",
         "SetVar",
         "GetVar",
         "ArrayPush",
@@ -135,11 +133,9 @@ _TITLES.update(
         "ToastNotify": "Показать уведомление",
         "OverlayLog": "Строка в оверлее",
         "If": "Если",
-        "Else": "Иначе",
         "While": "Пока",
         "For": "Цикл",
         "Try": "Попытка",
-        "Catch": "Обработка ошибки",
         "Return": "Вернуть",
     }
 )
@@ -263,8 +259,6 @@ _NATIVE_EXAMPLES: Final[dict[str, dict[str, Any]]] = {
     },
     "ToastNotify": {"title": "Готово", "message": "Команда выполнена"},
     "OverlayLog": {"message": "Шаг выполнен", "level": "info"},
-    "Else": {},
-    "Catch": {},
 }
 
 
