@@ -1,0 +1,33 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sphere-prototype",
+      "runtimeExecutable": "_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8777", "--directory", "design/prototype"],
+      "port": 8777,
+      "url": "http://localhost:8777"
+    },
+    {
+      "name": "sphere-ref",
+      "runtimeExecutable": "_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8778", "--directory", "design/sphere_ref"],
+      "port": 8778,
+      "url": "http://localhost:8778"
+    },
+    {
+      "name": "mockups",
+      "runtimeExecutable": "_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8779", "--directory", "design/mockups"],
+      "port": 8779,
+      "url": "http://localhost:8779"
+    },
+    {
+      "name": "sphere-assets",
+      "runtimeExecutable": "_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8780", "--directory", "src/ayris/gui/widgets/sphere/assets"],
+      "port": 8780,
+      "url": "http://localhost:8780"
+    }
+  ]
+}
