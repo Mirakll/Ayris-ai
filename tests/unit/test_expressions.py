@@ -188,6 +188,19 @@ class TestCoercion:
             coerce_value("уровень", given, kind)
         assert "уровень" in str(caught.value)
 
+    def test_a_deeply_nested_json_value_is_refused_and_not_a_recursion_error(self) -> None:
+        """``ArrayPush`` on ``[[[…]]]`` must not crash a run with a ``RecursionError``.
+
+        Coercing to a container parses JSON text, and a deeply nested array overruns the
+        decoder as a ``RecursionError`` — which is not a ``ValueError``. ``pytest.raises``
+        pins the typed refusal for both container kinds; a bare ``RecursionError`` fails it.
+        """
+        deep = "[" * 10000 + "]" * 10000
+        for kind in (VariableType.ARRAY, VariableType.DICT):
+            with pytest.raises(MacroValueError) as caught:
+                coerce_value("уровень", deep, kind)
+            assert "уровень" in str(caught.value)
+
     @pytest.mark.parametrize(
         ("given", "wanted"),
         [("2.5", 3), ("2.4", 2), (2.5, 3), (3.5, 4), (-2.5, -3), ("2,5", 3)],

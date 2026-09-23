@@ -57,6 +57,7 @@ from ayris.core.portable_profile import (
     VARIABLES_NAME,
     BundleManifest,
     ConflictPolicy,
+    _is_unsafe_name,
     export_bundle,
     import_bundle,
     preview_bundle,
@@ -989,12 +990,76 @@ class TestManifest:
             read_manifest(hostile)
         assert caught.value.recoverable is False
 
+    @pytest.mark.parametrize(
+        "hostile_name",
+        ["sounds/CON.wav", "sounds/nul", "sounds/com1.wav", "sounds/LPT9.txt", "prn.dat", "AUX"],
+    )
+    def test_a_reserved_windows_device_name_is_refused(
+        self, archive: Path, tmp_path: Path, hostile_name: str
+    ) -> None:
+        hostile = tmp_path / "устройство.zip"
+        with zipfile.ZipFile(archive) as source, zipfile.ZipFile(hostile, "w") as target:
+            for name in source.namelist():
+                target.writestr(name, source.read(name))
+            target.writestr(hostile_name, "устройство")
+        with pytest.raises(ProfileError, match="unsafe entry name") as caught:
+            read_manifest(hostile)
+        assert caught.value.recoverable is False
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "CON",
+            "con.wav",
+            "sounds/CON.wav",
+            "sounds/NUL",
+            "sounds/Com1.wav",
+            "LPT9.txt",
+            "sounds/aux.tar.gz",
+            "PRN",
+        ],
+    )
+    def test_reserved_device_names_are_unsafe(self, name: str) -> None:
+        assert _is_unsafe_name(name) is True
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "sounds/concert.wav",
+            "com.txt",
+            "sounds/com10.wav",
+            "console.log",
+            "lpt.wav",
+            "sounds/nulls.dat",
+            "sounds/со звуком.wav",
+        ],
+    )
+    def test_names_that_only_resemble_a_device_are_safe(self, name: str) -> None:
+        assert _is_unsafe_name(name) is False
+
     def test_malformed_json_inside_a_valid_zip_is_refused(
         self, manager: ProfileManager, archive: Path, tmp_path: Path
     ) -> None:
         forged = rewrite(archive, tmp_path / "мусор.zip", {COMMANDS_NAME: "{не json".encode()})
         with pytest.raises(ProfileError, match="not valid JSON"):
             manager.import_bundle(forged, backup=False)
+
+    def test_a_deeply_nested_member_is_refused_by_preview_and_not_a_recursion_error(
+        self, archive: Path, tmp_path: Path
+    ) -> None:
+        """A hostile ``.zip`` must not crash the preview that runs before any import.
+
+        ``[[[…]]]`` overruns the JSON decoder as a ``RecursionError``, which is not a
+        ``JSONDecodeError``; without its own handler ``read_manifest`` — reached by merely
+        looking at a foreign bundle — would crash. ``pytest.raises`` pins the typed refusal.
+        """
+        deep = ("[" * 10000 + "]" * 10000).encode("utf-8")
+        forged = rewrite(archive, tmp_path / "глубокий.zip", {MANIFEST_NAME: deep})
+        with pytest.raises(ProfileError, match="nested too deeply") as caught:
+            read_manifest(forged)
+        assert caught.value.recoverable is False
+        with pytest.raises(ProfileError, match="nested too deeply"):
+            preview_bundle(forged)
 
     def test_a_json_array_where_an_object_belongs_is_refused(
         self, manager: ProfileManager, archive: Path, tmp_path: Path

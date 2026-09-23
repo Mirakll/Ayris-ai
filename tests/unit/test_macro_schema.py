@@ -950,6 +950,25 @@ class TestFilesOnDisk:
             load_document("[]")
         assert raised.value.user_message == "Файл команд должен быть JSON-объектом."
 
+    def test_a_deeply_nested_file_is_refused_and_not_a_recursion_error(
+        self, tmp_path: Path
+    ) -> None:
+        """``[[[…]]]`` overruns the JSON decoder as a ``RecursionError`` — refused here.
+
+        ``RecursionError`` is not a ``ValueError``, so without its own handler this deep
+        array would crash an import rather than being refused. ``pytest.raises`` pins the
+        typed refusal for both the in-memory text and the file on disk: a bare
+        ``RecursionError`` would fail this test, not satisfy it.
+        """
+        deep = "[" * 10000 + "]" * 10000
+        with pytest.raises(MacroFormatError) as raised:
+            load_document(deep)
+        assert raised.value.user_message == "Файл слишком глубоко вложен, чтобы его прочитать."
+        path = tmp_path / "глубокий.ayris"
+        path.write_text(deep, encoding="utf-8")
+        with pytest.raises(MacroFormatError):
+            read_document(path)
+
     def test_a_missing_file_names_the_file_and_not_the_whole_path(self, tmp_path: Path) -> None:
         """The path may hold the user's name; the window shows the file name."""
         with pytest.raises(MacroFormatError) as raised:

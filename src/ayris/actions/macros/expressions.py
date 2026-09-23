@@ -154,13 +154,17 @@ def to_container(name: str, value: object, kind: VariableType) -> Any:
     the name has to become a list before an element can be added to it.
 
     Raises:
-        MacroValueError: the value is not that container and cannot be read as one.
+        MacroValueError: the value is not that container and cannot be read as
+            one, including JSON text nested too deeply for the decoder.
     """
     wanted: type[Any] = list if kind is VariableType.ARRAY else dict
     if isinstance(value, str):
         try:
             value = json.loads(value)
-        except ValueError as exc:
+        except (ValueError, RecursionError, MemoryError) as exc:
+            # A deeply nested ``[[[…]]]`` overruns the JSON decoder as a
+            # ``RecursionError``, which is not a ``ValueError``; fold it into the
+            # same typed failure so ``ArrayPush`` cannot crash on hostile text.
             raise MacroValueError(name, value, kind.value) from exc
     if kind is VariableType.ARRAY and isinstance(value, tuple):
         return list(value)

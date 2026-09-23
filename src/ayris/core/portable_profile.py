@@ -434,13 +434,40 @@ def _zip_info(name: str, when: datetime) -> zipfile.ZipInfo:
     return info
 
 
+#: Names Windows opens as a device rather than a file, whatever the extension:
+#: a ``sounds/CON.wav`` entry unpacked verbatim would write to the console
+#: device, not to disk. Refused on every platform so a bundle behaves the same
+#: wherever it is opened. ``COM``/``LPT`` are reserved only with a trailing
+#: ``1``-``9``, which is why a plain ``com.txt`` is left alone.
+_RESERVED_DEVICE_NAMES: Final[frozenset[str]] = frozenset(
+    {"CON", "PRN", "AUX", "NUL"}
+    | {f"COM{digit}" for digit in range(1, 10)}
+    | {f"LPT{digit}" for digit in range(1, 10)}
+)
+
+
+def _is_reserved_device(segment: str) -> bool:
+    """Whether a path segment names a Windows device rather than a file.
+
+    Windows resolves the name up to the first dot, so ``CON`` and ``CON.wav``
+    both reach the console device, while ``concert.wav`` and ``com.txt`` - whose
+    stems merely start like a device name - stay ordinary files.
+    """
+    stem = segment.split(".", 1)[0]
+    return stem.upper() in _RESERVED_DEVICE_NAMES
+
+
 def _is_unsafe_name(name: str) -> bool:
-    """Reject anything that could escape the directory we unpack into."""
+    """Reject anything that could escape the directory we unpack into, or that
+    Windows would open as a device instead of writing a file."""
     if not name or name.startswith(("/", "\\")) or ":" in name:
         return True
     if "\\" in name:  # zip separators are always "/"; a backslash is a red flag
         return True
-    return any(part in {"..", "."} for part in name.split("/"))
+    segments = name.split("/")
+    if any(part in {"..", "."} for part in segments):
+        return True
+    return any(_is_reserved_device(part) for part in segments)
 
 
 def _entries(bundle: zipfile.ZipFile, archive: Path) -> dict[str, zipfile.ZipInfo]:
@@ -503,6 +530,16 @@ def _read_json(bundle: zipfile.ZipFile, name: str, archive: Path) -> JsonObject:
         raise ProfileError(
             f"{archive}: {name} is not valid JSON: {exc}",
             user_message=f"Файл «{name}» внутри профиля повреждён.",
+        ) from exc
+    except (RecursionError, MemoryError) as exc:
+        # A deeply nested ``[[[…]]]`` overruns the JSON decoder as a
+        # ``RecursionError``, which is not a ``JSONDecodeError`` — so a hostile
+        # zip would crash even a preview. The handler stays tiny: the stack is
+        # all but spent when we land here.
+        raise ProfileError(
+            f"{archive}: {name} is nested too deeply to read",
+            user_message=f"Файл «{name}» внутри профиля слишком глубоко вложен.",
+            recoverable=False,
         ) from exc
     if not isinstance(parsed, dict):
         raise ProfileError(
@@ -827,8 +864,8 @@ def read_manifest(archive: Path) -> BundleManifest:
     """Read and validate just the header of a bundle.
 
     Raises:
-        ProfileError: The file is unreadable, not a bundle, or written in a
-            layout this build cannot handle.
+        ProfileError: The file is unreadable, nested too deeply to parse, not a
+            bundle, or written in a layout this build cannot handle.
     """
     with _open_bundle(archive) as bundle:
         entries = _entries(bundle, archive)

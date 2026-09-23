@@ -207,8 +207,8 @@ def load_document(source: str | bytes | JsonObject) -> AyrisDocument:
     """Read a ``.ayris`` document, migrating an older format on the way in.
 
     Raises:
-        MacroFormatError: the text is not JSON, not an object, or carries a version
-            this build cannot read.
+        MacroFormatError: the text is not JSON, is nested too deeply to read, is
+            not an object, or carries a version this build cannot read.
         pydantic.ValidationError: the document is the right format but the wrong
             shape — a broken parameter, an unknown trigger type, a bad combination.
     """
@@ -244,6 +244,15 @@ def _as_object(source: str | bytes | JsonObject) -> JsonObject:
         raise MacroFormatError(
             f"not valid JSON: {exc}",
             user_message="Файл повреждён: это не JSON.",
+        ) from exc
+    except (RecursionError, MemoryError) as exc:
+        # A deeply nested ``[[[…]]]`` overruns the JSON decoder as a
+        # ``RecursionError``, which is not a ``ValueError`` and would otherwise
+        # crash an import. The handler stays tiny on purpose: the stack is all
+        # but spent when we land here.
+        raise MacroFormatError(
+            "JSON is nested too deeply to read",
+            user_message="Файл слишком глубоко вложен, чтобы его прочитать.",
         ) from exc
     if not isinstance(loaded, dict):
         raise MacroFormatError(
