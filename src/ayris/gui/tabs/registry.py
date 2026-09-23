@@ -53,7 +53,7 @@ SECTIONS: Final[tuple[TabSpec, ...]] = (
         55,
         ("hotkeys",),
     ),
-    TabSpec("overlay", "Оверлей", QStyle.StandardPixmap.SP_DesktopIcon, 56, ("overlay",)),
+    TabSpec("overlay", "Панель / Сфера", QStyle.StandardPixmap.SP_DesktopIcon, 56, ("overlay",)),
     TabSpec("plugins", "Плагины", QStyle.StandardPixmap.SP_DriveNetIcon, 67, ("plugins",)),
     TabSpec("profiles", "Профили", QStyle.StandardPixmap.SP_DirHomeIcon, 57, ()),
     TabSpec(

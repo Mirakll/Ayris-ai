@@ -45,10 +45,11 @@ from PySide6.QtWidgets import (
 )
 
 from ayris import __app_name__
-from ayris.core.config import ConfigManager, WindowConfig
+from ayris.core.config import ConfigManager, OverlayConfig, WindowConfig
 from ayris.core.events import (
     ActionFailed,
     AudioLevelChanged,
+    ConfigChanged,
     EventBus,
     MacroFailed,
     MicToggled,
@@ -65,6 +66,7 @@ from ayris.core.models import Profile
 from ayris.core.profile import ProfileSwitched
 from ayris.core.state import AssistantState, MicMode, StatusSnapshot
 from ayris.gui.dashboard import DialogView, SettingsLayer, ShowcasePanel
+from ayris.gui.dashboard.sphere_host import apply_overlay_appearance
 from ayris.gui.nav_sidebar import NavSidebar
 from ayris.gui.overlay.dialog_log import DialogKind
 from ayris.gui.overlay.timers_panel import TimerProvider
@@ -202,6 +204,11 @@ class MainWindow(QMainWindow):
 
         self._subscribe_to_bus()
         self._reload_profiles()
+        # Reflect the saved overlay appearance at once; only force the system
+        # theme when the user asked to follow it, so the «Общие» choice stands.
+        self._apply_overlay(self._manager.settings.overlay)
+        if self._manager.settings.overlay.follow_system_theme:
+            self._theme.set_mode("system")
         if snapshot is not None:
             self.sync(snapshot)
 
@@ -507,7 +514,17 @@ class MainWindow(QMainWindow):
             bus.subscribe(OverlayToggleRequested, self._on_toggle_visibility),
             bus.subscribe(OverlayVisibilityRequested, self._on_visibility),
             bus.subscribe(OpenCommandRequested, self._on_open_command),
+            bus.subscribe(ConfigChanged, self._on_config_changed),
         ]
+
+    def _on_config_changed(self, event: ConfigChanged) -> None:
+        """Reflect a live «Панель / Сфера» edit in the running window."""
+        if not event.touches("overlay"):
+            return
+        overlay = event.settings.overlay
+        self._apply_overlay(overlay)
+        if "overlay.follow_system_theme" in event.diff.paths:
+            self._apply_theme_follow(overlay.follow_system_theme)
 
     def _on_mode(self, event: ModeChanged) -> None:
         self.set_state(event.state.value)
@@ -535,14 +552,17 @@ class MainWindow(QMainWindow):
             self.add_message(DialogKind.HEARD, event.text)
 
     def _on_answer(self, event: TtsStarted) -> None:
-        self.add_message(DialogKind.ANSWER, event.text)
+        if self._show_answers():
+            self.add_message(DialogKind.ANSWER, event.text)
         self.set_status(event.text)
 
     def _on_action_failed(self, event: ActionFailed) -> None:
-        self.add_message(DialogKind.ERROR, event.user_message or event.error)
+        if self._show_errors():
+            self.add_message(DialogKind.ERROR, event.user_message or event.error)
 
     def _on_macro_failed(self, event: MacroFailed) -> None:
-        self.add_message(DialogKind.ERROR, event.user_message or event.error)
+        if self._show_errors():
+            self.add_message(DialogKind.ERROR, event.user_message or event.error)
 
     def _on_toggle_visibility(self, _event: OverlayToggleRequested) -> None:
         if self.isVisible():
@@ -602,10 +622,40 @@ class MainWindow(QMainWindow):
         return getattr(self, "_mic_enabled", True)
 
     def _show_transcript(self) -> bool:
+        return self._overlay_flag("show_transcript")
+
+    def _show_answers(self) -> bool:
+        return self._overlay_flag("show_answers")
+
+    def _show_errors(self) -> bool:
+        return self._overlay_flag("show_errors")
+
+    def _overlay_flag(self, name: str) -> bool:
         try:
-            return bool(self._manager.settings.overlay.show_transcript)
+            return bool(getattr(self._manager.settings.overlay, name))
         except Exception:  # pragma: no cover - defensive: settings shape drift
             return True
+
+    def _apply_overlay(self, overlay: OverlayConfig) -> None:
+        """Push the whole «Панель / Сфера» appearance into the running window."""
+        apply_overlay_appearance(self._showcase.sphere, overlay)
+        self._dialog.apply_overlay(overlay)
+
+    def _apply_theme_follow(self, follow: bool) -> None:
+        """React to the «следовать системной теме» toggle from the overlay tab.
+
+        On — hand the theme to the OS; off — restore the explicit choice from the
+        «Общие» tab. Ownership of the current mode is shared with that tab on a
+        last-write-wins basis; the paths differ, so a single edit never fights.
+        """
+        if follow:
+            self._theme.set_mode("system")
+        elif self._manager.settings.general.theme == "light":
+            self._theme.set_mode("light")
+        elif self._manager.settings.general.theme == "system":
+            self._theme.set_mode("system")
+        else:
+            self._theme.set_mode("dark")
 
     def _index_page(self, page: SettingsTab) -> None:
         for entry in page.search_entries:

@@ -136,6 +136,18 @@ class InputBar(QFrame):
     def focus_command(self) -> None:
         self.command.setFocus(Qt.FocusReason.OtherFocusReason)
 
+    def set_visible_controls(self, *, mic: bool, text: bool) -> None:
+        """Toggle the microphone and text-entry controls (task 56, live).
+
+        ``mic`` governs the microphone button; ``text`` the code glyph, phrase
+        field and send button together. The whole bar hides when neither remains,
+        so the column does not keep an empty rounded strip.
+        """
+        self.mic_button.setVisible(mic)
+        for widget in (self.command, self.code_button, self.send_button):
+            widget.setVisible(text)
+        self.setVisible(mic or text)
+
     def set_voice_active(self, active: bool) -> None:
         """Highlight the microphone while voice input is live."""
         if active == self._voice_active:

@@ -157,6 +157,7 @@ class SettingsTab(QWidget):
                 del blocker
         finally:
             self._programmatic = False
+        self._pending_changed()
 
     def bind_toggle(self, widget: ToggleSwitch, path: str, label: str) -> None:
         self._bind(widget, path, label, widget.isChecked, widget.setChecked, widget.toggled)
@@ -249,6 +250,14 @@ class SettingsTab(QWidget):
         self._pending[path] = self._bindings[path].getter()
         self.dirty_label.show()
         self._save_timer.start()
+        self._pending_changed()
+
+    def _pending_changed(self) -> None:
+        """Hook fired after a control edits pending state or a diff lands.
+
+        The base does nothing; pages with a live preview (task 56's «Оверлей»)
+        override this to reflect edits immediately, before the debounced save.
+        """
 
     def _receive_event(self, event: ConfigChanged) -> None:
         self._relay.changed.emit(event.diff)
@@ -271,6 +280,7 @@ class SettingsTab(QWidget):
         finally:
             self._programmatic = False
         self.dirty_label.setVisible(bool(self._pending))
+        self._pending_changed()
 
 
 def _read_path(root: Any, path: str) -> Any:

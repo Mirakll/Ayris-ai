@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import Final
 
@@ -59,6 +59,41 @@ class AnimationParams:
             _lerp(self.shimmer_amt, other.shimmer_amt, a),
             _lerp(self.shimmer_hz, other.shimmer_hz, a),
             _lerp(self.error, other.error, a),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AnimationProfile:
+    """User overrides from ``OverlayConfig`` applied on top of a state's params.
+
+    The three multipliers scale motion strength (``1.0`` = as designed in the
+    prototype, ``0.0`` = still); the four booleans hard-disable a whole class of
+    motion for economy or taste.  It is a pure transform over
+    :class:`AnimationParams`, so the live widget, the preview and the tests all
+    reason about the *effective* motion without a running clock.  The default is
+    the identity, so an unconfigured sphere animates exactly as before.
+    """
+
+    rotation_speed: float = 1.0
+    pulse_amplitude: float = 1.0
+    wave_intensity: float = 1.0
+    rotation: bool = True
+    pulsation: bool = True
+    waves: bool = True
+    error_flash: bool = True
+
+    def applied(self, params: AnimationParams) -> AnimationParams:
+        pulse = self.pulse_amplitude if self.pulsation else 0.0
+        wave = self.wave_intensity if self.waves else 0.0
+        return replace(
+            params,
+            spin=params.spin * self.rotation_speed if self.rotation else 0.0,
+            level_amp=params.level_amp * pulse,
+            breath_amp=params.breath_amp * pulse,
+            wave_amp=params.wave_amp * wave,
+            waves=params.waves * wave,
+            jitter=params.jitter if self.error_flash else 0.0,
+            error=params.error if self.error_flash else 0.0,
         )
 
 

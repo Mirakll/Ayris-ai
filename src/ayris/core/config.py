@@ -1557,84 +1557,110 @@ class TimersConfig(ConfigSection):
 
 
 class OverlayConfig(ConfigSection):
-    """Tab «Оверлей» — the single always-on-top panel with the dotted sphere.
+    """Tab «Панель / Сфера» — облик единственного окна-дашборда и его сферы.
 
-    There is exactly one overlay: the main panel is either shown or hidden.
-    A separate compact mode is deferred to task 76, so nothing here selects a
-    «mini / expanded» layout.
+    Плавающего оверлея больше нет: Айрис — одно безрамочное окно, позицией,
+    размером и полноэкранным режимом которого пользователь управляет сам
+    (тащит за пустые места, трей, F11). Поэтому здесь ничего не позиционирует
+    окно: поля плавающего оверлея ``position`` / ``custom_x`` / ``custom_y`` /
+    ``monitor`` / ``opacity`` / ``scale`` / ``click_through`` удалены, а старый
+    ``config.toml`` с ними грузится как есть — :class:`ConfigSection` игнорирует
+    неизвестные ключи, так что удаление не требует миграции. Автоскрытие по
+    простою (``hide_when_idle`` / ``idle_hide_sec``) ушло с ними: прятать
+    единственное окно по таймеру спорит с ручным управлением им, а запуск
+    свёрнутым и сворачивание в трей живут в «Общих» и трее (задачи 48, 44).
+
+    Остаётся то, что настраивает вид окна и нагрузку от сферы: форма и движение
+    сферы, тумблеры экономии анимаций (слабая видеокарта убавит или выключит
+    движение), состав столбца диалога и палитра сферы. Всё применяется на лету
+    через :class:`ConfigChanged`; перезапуск не нужен.
     """
 
-    enabled: bool = Field(default=True, description="Показывать оверлей")
-    position: Literal[
-        "top_left",
-        "top_right",
-        "bottom_left",
-        "bottom_right",
-        "top_center",
-        "bottom_center",
-        "custom",
-    ] = Field(default="bottom_right", description="Где показывать панель")
-    custom_x: int = Field(
-        default=0,
-        description="Смещение X относительно монитора при позиции «custom», в логических пикселях",
-    )
-    custom_y: int = Field(
-        default=0,
-        description="Смещение Y относительно монитора при позиции «custom», в логических пикселях",
-    )
-    monitor: int = Field(
-        default=0,
-        ge=0,
-        le=16,
-        description="Номер монитора: 0 — основной",
-    )
-    opacity: float = Field(
-        default=0.92,
-        ge=0.2,
-        le=1.0,
-        description="Прозрачность окна",
-    )
-    scale: float = Field(
-        default=1.0,
-        ge=0.5,
-        le=2.0,
-        description="Масштаб оверлея независимо от масштаба системы",
-    )
-    click_through: bool = Field(
-        default=False,
-        description="Пропускать клики сквозь оверлей",
-    )
-    hide_when_idle: bool = Field(
-        default=False,
-        description="Прятать оверлей, пока помощник не слушает",
-    )
-    idle_hide_sec: float = Field(
-        default=10.0,
-        ge=1.0,
-        le=600.0,
-        description="Через сколько секунд бездействия прятать",
-    )
-    animations: bool = Field(default=True, description="Анимации сферы")
+    # -- запуск ------------------------------------------------------------
+    enabled: bool = Field(default=True, description="Показывать окно при запуске")
+    # -- форма и движение сферы -------------------------------------------
     sphere_points: int = Field(
         default=600,
         ge=100,
         le=3000,
         description="Точек в сфере. Меньше — легче для слабых видеокарт",
     )
+    rotation_speed: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="Скорость вращения сферы (1.0 — как задумано, 0 — стоп)",
+    )
+    pulse_amplitude: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="Амплитуда пульсации в режиме «Слушаю» (1.0 — обычная)",
+    )
+    wave_intensity: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="Интенсивность волн в режиме «Говорю» (1.0 — обычная)",
+    )
+    # -- экономия анимаций -------------------------------------------------
+    animations: bool = Field(default=True, description="Анимации сферы (общий тумблер)")
+    rotation: bool = Field(default=True, description="Анимация: вращение сферы")
+    pulsation: bool = Field(default=True, description="Анимация: пульсация в «Слушаю»")
+    waves: bool = Field(default=True, description="Анимация: волны в «Говорю»")
+    error_flash: bool = Field(default=True, description="Анимация: вспышка при ошибке")
     target_fps: int = Field(
         default=60,
         ge=15,
         le=144,
-        description="Частота кадров анимации",
+        description="Ограничение частоты кадров анимации",
+    )
+    stop_when_hidden: bool = Field(
+        default=True,
+        description="Останавливать анимацию сферы, когда окно скрыто",
+    )
+    # -- столбец диалога ---------------------------------------------------
+    show_log: bool = Field(default=True, description="Показывать лог диалога")
+    log_lines: int = Field(
+        default=6,
+        ge=1,
+        le=50,
+        description="Сколько последних строк диалога показывать",
     )
     show_transcript: bool = Field(
         default=True,
-        description="Показывать распознанный текст в развёрнутом режиме",
+        description="Показывать в логе распознанную речь",
     )
+    show_answers: bool = Field(default=True, description="Показывать в логе ответы ассистента")
+    show_errors: bool = Field(default=True, description="Показывать в логе ошибки")
+    show_mic: bool = Field(default=True, description="Показывать кнопку микрофона")
+    show_timers: bool = Field(default=True, description="Показывать строку активных таймеров")
+    show_profile: bool = Field(default=True, description="Показывать селектор профиля")
+    show_settings_button: bool = Field(
+        default=True, description="Показывать кнопку настроек (гамбургер)"
+    )
+    show_text_input: bool = Field(default=True, description="Показывать поле текстового ввода")
+    # -- тема сферы --------------------------------------------------------
     follow_system_theme: bool = Field(
         default=False,
         description="Брать тему из Windows вместо темы из «Общих»",
     )
+    sphere_accent: str = Field(
+        default="",
+        description="Акцент сферы в формате #RRGGBB; пусто — брать из темы",
+    )
+
+    @field_validator("sphere_accent")
+    @classmethod
+    def _check_accent(cls, value: str) -> str:
+        """Пусто (брать из темы) либо цвет ``#RRGGBB`` — иначе отклоняем."""
+        text = value.strip().lower()
+        if not text:
+            return ""
+        hexed = text[1:]
+        if text[0] != "#" or len(hexed) != 6 or any(c not in "0123456789abcdef" for c in hexed):
+            raise ValueError("цвет должен быть в формате #RRGGBB")
+        return text
 
 
 class PluginsConfig(ConfigSection):
@@ -1882,7 +1908,7 @@ _SECTION_TITLES: Final[tuple[tuple[str, str], ...]] = (
     ("ai", "ИИ / LLM: режимы, поставщик, промпты, память"),
     ("hotkeys", "Горячие клавиши помощника"),
     ("timers", "Таймеры: пропущенные срабатывания, отложить, синхронизация"),
-    ("overlay", "Оверлей: положение, вид, анимации"),
+    ("overlay", "Панель и сфера: вид, анимации, состав диалога"),
     ("plugins", "Плагины"),
     ("privacy", "Приватность: телеметрия выключена по умолчанию"),
     ("performance", "Производительность: приоритеты, память, потоки"),
@@ -2442,7 +2468,7 @@ class ConfigManager:
 
         This is what the settings window calls on «Применить»::
 
-            manager.apply({"voice.tts.speed": 1.2, "overlay.opacity": 0.8})
+            manager.apply({"voice.tts.speed": 1.2, "overlay.rotation_speed": 0.8})
 
         Raises:
             ConfigError: The result would not validate. Nothing is saved and the

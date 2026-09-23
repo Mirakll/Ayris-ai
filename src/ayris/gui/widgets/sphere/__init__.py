@@ -6,7 +6,7 @@ QPainter fallback for GPU-/WebEngine-less environments.
 """
 
 from ayris.gui.widgets.sphere.sphere_widget import SphereWidget as PainterSphereWidget
-from ayris.gui.widgets.sphere.states import SphereState
+from ayris.gui.widgets.sphere.states import AnimationProfile, SphereState
 from ayris.gui.widgets.sphere.web_widget import SphereWidget
 
-__all__ = ["PainterSphereWidget", "SphereState", "SphereWidget"]
+__all__ = ["AnimationProfile", "PainterSphereWidget", "SphereState", "SphereWidget"]

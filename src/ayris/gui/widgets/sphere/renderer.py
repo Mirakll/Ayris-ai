@@ -41,6 +41,9 @@ class RenderScene:
     wave_progresses: tuple[float, ...]
     glow: bool
     shimmer: float = 0.0
+    #: Overrides the theme accent for the sphere gradient/glow when set
+    #: (``overlay.sphere_accent``); ``None`` keeps the palette accent.
+    accent: QColor | None = None
 
 
 class SceneProvider(Protocol):
@@ -73,17 +76,20 @@ def paint_scene(
 
     colours = theme.theme.colors
     err = max(0.0, min(1.0, scene.params.error))
+    # Accent drives the bottom of the gradient, the shimmer tint and the glow;
+    # an override colour (overlay.sphere_accent) replaces the palette accent.
+    accent = scene.accent if scene.accent is not None else QColor(colours.accent)
     # Gradient endpoints: violet at the bottom, cyan at the top (matches the
     # prototype).  Under an error the whole grid shifts to red→amber.
-    bottom = _mix(QColor(colours.accent), QColor(colours.error), err)
+    bottom = _mix(accent, QColor(colours.error), err)
     top = _mix(QColor(colours.info), QColor(colours.warning), err)
-    shimmer_col = _lighten(QColor(colours.accent), 0.35)
+    shimmer_col = _lighten(accent, 0.35)
 
     count = int(scene.segments.shape[0]) if scene.segments.size else 0
     if scene.glow and count:
         glow_radius = min(widget.width(), widget.height()) * 0.4
         glow = QRadialGradient(widget.rect().center(), glow_radius)
-        inner = _mix(QColor(colours.info), QColor(colours.accent), 0.5)
+        inner = _mix(QColor(colours.info), accent, 0.5)
         if err > 0.0:
             inner = _mix(inner, QColor(colours.error), err)
         inner.setAlpha(34)

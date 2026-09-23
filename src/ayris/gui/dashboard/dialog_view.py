@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ayris.core.config import OverlayConfig
 from ayris.core.models import Profile
 from ayris.core.profile import DEFAULT_PROFILE_NAME
 from ayris.core.state import MicMode
@@ -104,6 +105,7 @@ class DialogView(QFrame):
         self._theme = theme
         self._profiles: tuple[Profile, ...] = ()
         self._flat = False
+        self._show_log = True
         self.setObjectName("dialogPanel")
 
         self._root = QVBoxLayout(self)
@@ -158,11 +160,11 @@ class DialogView(QFrame):
         self.offline_hint.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         self.offline_hint.setVisible(False)
 
-        profile_box = QWidget(self)
+        self._profile_box = QWidget(self)
         # Глобальный QSS красит любой QWidget в тёмный background — гасим его,
         # чтобы колонка профиля сливалась с панелью, а не рисовала тёмную плашку.
-        profile_box.setObjectName("profileGroup")
-        self._profile_col = QVBoxLayout(profile_box)
+        self._profile_box.setObjectName("profileGroup")
+        self._profile_col = QVBoxLayout(self._profile_box)
         self._profile_col.setContentsMargins(0, 0, 0, 0)
         self._profile_col.addWidget(self.profile_button, 0, Qt.AlignmentFlag.AlignHCenter)
         self._profile_col.addWidget(self.offline_hint, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -186,7 +188,7 @@ class DialogView(QFrame):
         top = Qt.AlignmentFlag.AlignTop
         bar.addWidget(self.menu_button, 0, top)
         bar.addStretch(1)
-        bar.addWidget(profile_box, 0, top)
+        bar.addWidget(self._profile_box, 0, top)
         bar.addStretch(1)
         bar.addWidget(self.minimize_button, 0, top)
         bar.addWidget(self.close_button, 0, top)
@@ -218,8 +220,28 @@ class DialogView(QFrame):
 
     def add_message(self, kind: DialogKind, text: str) -> None:
         self.log.add_entry(kind, text)
-        if self.log.entries:
+        if self._show_log and self.log.entries:
             self._center.setCurrentWidget(self.log)
+
+    def apply_overlay(self, overlay: OverlayConfig) -> None:
+        """Apply the live «Панель / Сфера» settings to the dialogue column.
+
+        Covers the log's size and visibility and the four control blocks the tab
+        governs (timers, profile selector, settings button, input controls). The
+        answer/transcript/error filters live on the main window, which gates what
+        ever reaches :meth:`add_message`.
+        """
+        self._show_log = overlay.show_log
+        self.log.set_max_lines(overlay.log_lines)
+        if self._show_log and self.log.entries:
+            self._center.setCurrentWidget(self.log)
+        else:
+            self._center.setCurrentWidget(self._empty_page)
+
+        self.timers.setVisible(overlay.show_timers)
+        self._profile_box.setVisible(overlay.show_profile)
+        self.menu_button.setVisible(overlay.show_settings_button)
+        self.input_bar.set_visible_controls(mic=overlay.show_mic, text=overlay.show_text_input)
 
     def clear_dialogue(self) -> None:
         self.log.clear()

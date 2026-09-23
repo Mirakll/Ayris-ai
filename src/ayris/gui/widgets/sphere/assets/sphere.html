@@ -147,8 +147,8 @@
   // Именно это даёт «квадратную» сетку lat/lon, а не триангуляцию.
   // ---------------------------------------------------------------------------
   const R = 1.6;
-  const LAT = 46;   // число параллелей
-  const LON = 60;   // число меридианов
+  let LAT = 46;   // число параллелей (меняется window.setPointCount)
+  let LON = 60;   // число меридианов (меняется window.setPointCount)
   const SEG = 3;    // подразбиение каждого ребра — линии гнутся плавно при деформации
 
   function buildGrid() {
@@ -397,6 +397,18 @@
   const shimmerCol = new THREE.Color();
   let micLevel = 0;  // уровень микрофона (0..1), задаётся из window.setLevel
 
+  // Профиль анимаций из OverlayConfig (задача 56): множители силы движения
+  // (1.0 — как в референсе, 0 — стоп) и тумблеры целых классов движения.
+  // Дефолт — тождество, поэтому без настройки сфера ведёт себя как раньше.
+  let profile = {
+    rotationSpeed: 1, pulseAmplitude: 1, waveIntensity: 1,
+    rotation: true, pulsation: true, waves: true, errorFlash: true,
+  };
+  let accentCol = null;   // переопределение акцента (низ градиента); null — из темы
+  let fpsCap = 0;         // ограничение FPS; 0 — без ограничения
+  let lastRender = 0;     // время последнего отрисованного кадра (для fpsCap)
+  let rafId = null;       // id текущего requestAnimationFrame (null — цикл стоит)
+
   function tick() {
     const dt = clock.getDelta();
     const t  = clock.elapsedTime;
@@ -412,13 +424,16 @@
     uniforms.uAmp.value      = current.amp;
     uniforms.uFreq.value     = current.freq;
     uniforms.uSpeed.value    = current.speed;
-    uniforms.uWaveAmp.value  = current.waveAmp;
+    uniforms.uWaveAmp.value  = current.waveAmp * (profile.waves ? profile.waveIntensity : 0);
     uniforms.uWaveFreq.value = current.waveFreq;
     uniforms.uTwist.value    = current.twist;
-    uniforms.uJitter.value   = current.jitter;
+    uniforms.uJitter.value   = profile.errorFlash ? current.jitter : 0;
     uniforms.uColorA.value.copy(current.colorA);
     uniforms.uColorB.value.copy(current.colorB);
     uniforms.uColorEdge.value.copy(current.edge);
+    // Переопределение акцента: красим низ градиента заданным цветом (shimmer,
+    // если он есть в режиме «слушает», ниже играет уже поверх акцента).
+    if (accentCol) uniforms.uColorA.value.copy(accentCol);
 
     // переливание цвета (режим «слушает»): плавно домешиваем фиолетовый по синусу
     const shHz = modeMeta.shimmerHz || 0;
@@ -435,19 +450,35 @@
       uniforms.uAmp.value = current.amp + micLevel * 0.05;
     }
 
-    // дыхание масштаба
-    uniforms.uBreath.value = Math.sin(t * modeMeta.breathHz * Math.PI * 2) * modeMeta.breathAmp;
+    // дыхание масштаба (пульсация): множитель профиля, тумблер «пульсация»
+    const pulse = profile.pulsation ? profile.pulseAmplitude : 0;
+    uniforms.uBreath.value =
+      Math.sin(t * modeMeta.breathHz * Math.PI * 2) * modeMeta.breathAmp * pulse;
 
-    // медленное вращение вокруг вертикали
-    group.rotation.y += modeMeta.spin * dt;
+    // медленное вращение вокруг вертикали (скорость/тумблер из профиля)
+    group.rotation.y += modeMeta.spin * dt * (profile.rotation ? profile.rotationSpeed : 0);
 
     camera.getWorldPosition(uniforms.uCamPos.value);
     bloom.strength = current.bloom;
 
     composer.render();
-    requestAnimationFrame(tick);
   }
-  tick();
+
+  // Кадровый цикл вынесен из tick(): так window.setAnimations может честно
+  // останавливать RAF (экономия), а window.setFps — ограничивать частоту.
+  function loop(now) {
+    rafId = requestAnimationFrame(loop);
+    if (fpsCap > 0 && lastRender && now - lastRender < 1000 / fpsCap - 1) return;
+    lastRender = now;
+    tick();
+  }
+  function startLoop() {
+    if (rafId === null) { lastRender = 0; clock.getDelta(); rafId = requestAnimationFrame(loop); }
+  }
+  function stopLoop() {
+    if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+  }
+  startLoop();
 
   // ---------------------------------------------------------------------------
   addEventListener('resize', () => {
@@ -478,6 +509,38 @@
     const c = new THREE.Color(hex);
     scene.background = c;
     renderer.setClearColor(c, 1);
+  };
+
+  // --- управление обликом/экономией из OverlayConfig (задача 56) --------------
+  // window.setProfile({rotationSpeed,pulseAmplitude,waveIntensity,rotation,
+  //                    pulsation,waves,errorFlash}); window.setAccent('#rrggbb'|null);
+  // window.setPointCount(n); window.setFps(n); window.setAnimations(bool)
+  window.setProfile = (p) => {
+    profile = Object.assign(
+      { rotationSpeed: 1, pulseAmplitude: 1, waveIntensity: 1,
+        rotation: true, pulsation: true, waves: true, errorFlash: true },
+      p || {}
+    );
+    if (rafId === null) { tick(); }   // сфера заморожена — освежаем один кадр
+  };
+  window.setAccent = (hex) => {
+    accentCol = hex ? new THREE.Color(hex) : null;
+    if (rafId === null) { tick(); }
+  };
+  window.setFps = (n) => { fpsCap = Math.max(0, Math.min(144, Number(n) | 0)); };
+  window.setAnimations = (on) => {
+    if (on) { startLoop(); } else { stopLoop(); composer.render(); }
+  };
+  window.setPointCount = (n) => {
+    const eff = Math.max(100, Math.min(3000, Number(n) | 0));
+    // Больше точек → плотнее сетка широт/долгот (в тех же пределах, что и раньше).
+    LAT = Math.min(64, Math.max(16, Math.round(Math.sqrt(eff) * 1.85)));
+    LON = Math.min(96, Math.max(20, Math.round(LAT * 1.3)));
+    const geo = buildGrid();
+    const old = sphere.geometry;
+    sphere.geometry = geo;
+    old.dispose();
+    if (rafId === null) { tick(); }
   };
   </script>
 </body>

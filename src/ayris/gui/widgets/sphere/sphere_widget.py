@@ -9,7 +9,7 @@ from typing import Final
 import numpy as np
 from numpy.typing import NDArray
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
-from PySide6.QtGui import QHideEvent, QShowEvent
+from PySide6.QtGui import QColor, QHideEvent, QShowEvent
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from ayris.gui.theme import ThemeManager
@@ -28,6 +28,7 @@ from ayris.gui.widgets.sphere.renderer import (
 )
 from ayris.gui.widgets.sphere.states import (
     AnimationParams,
+    AnimationProfile,
     PerformanceGovernor,
     SphereState,
     SphereStateMachine,
@@ -71,6 +72,9 @@ class SphereWidget(QWidget):
         self._normals_b: NDArray[np.float64] = np.empty((0, 3))
         self._vertical: NDArray[np.float64] = np.empty((0,))
         self._params = self._machine.parameters
+        self._profile = AnimationProfile()
+        self._accent: QColor | None = None
+        self._stop_when_hidden = True
         self._angle_x = -0.18
         self._angle_y = 0.0
         self._angle_z = 0.0
@@ -132,7 +136,7 @@ class SphereWidget(QWidget):
     def set_state(self, state: SphereState | str) -> None:
         self._machine.set_state(state)
         if not self._timer.isActive() and self.isVisible():
-            self._params = self._machine.advance(0.0)
+            self._params = self._advance(0.0)
             self._rebuild_scene()
             self._renderer.update()
 
@@ -151,20 +155,56 @@ class SphereWidget(QWidget):
             self._timer.stop()
             self._renderer.update()
 
+    def set_profile(self, profile: AnimationProfile) -> None:
+        """Apply the user's motion overrides (speed, amplitudes, per-animation).
+
+        Cheap and live: it only reshapes the parameters the next frame reads.  If
+        the timer is paused (hidden / animations off) we refresh one static frame
+        so the change still shows — the preview relies on this.
+        """
+        self._profile = profile
+        if not self._timer.isActive() and self.isVisible():
+            self._params = self._advance(0.0)
+            self._rebuild_scene()
+            self._renderer.update()
+
+    def set_target_fps(self, target_fps: int) -> None:
+        """Re-cap the animation frame rate; degrade state resets from the top."""
+        self._governor = PerformanceGovernor(target_fps)
+        self._apply_performance_level()
+
+    def set_accent(self, colour: str | QColor | None) -> None:
+        """Override the sphere's accent colour; ``None``/empty keeps the theme."""
+        if colour is None or (isinstance(colour, str) and not colour.strip()):
+            self._accent = None
+        elif isinstance(colour, QColor):
+            self._accent = colour if colour.isValid() else None
+        else:
+            parsed = QColor(colour)
+            self._accent = parsed if parsed.isValid() else None
+        self._rebuild_scene()
+        self._renderer.update()
+
+    def set_stop_when_hidden(self, stop: bool) -> None:
+        """Whether animation pauses while the widget/window is hidden."""
+        self._stop_when_hidden = stop
+
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
         if self._animations_enabled:
             self._start_timer()
 
     def hideEvent(self, event: QHideEvent) -> None:  # noqa: N802
-        self._timer.stop()
+        if self._stop_when_hidden:
+            self._timer.stop()
         super().hideEvent(event)
 
     def changeEvent(self, event: QEvent) -> None:  # noqa: N802
         if event.type() == QEvent.Type.WindowStateChange:
             window = self.window()
             if window is not None and window.isMinimized():
-                self._timer.stop()
+                if self._stop_when_hidden:
+                    self._timer.stop()
             elif self.isVisible() and self._animations_enabled:
                 self._start_timer()
         super().changeEvent(event)
@@ -184,7 +224,7 @@ class SphereWidget(QWidget):
         delta = min(0.1, max(0.0, started - self._last_tick))
         self._last_tick = started
         self._clock += delta
-        self._params = self._machine.advance(delta)
+        self._params = self._advance(delta)
         self._angle_y = (self._angle_y + delta * self._params.spin) % math.tau
         self._angle_x = -0.18 + math.sin(self._clock * 0.37) * 0.06
         self._angle_z = math.sin(self._clock * 0.23) * 0.04
@@ -193,6 +233,10 @@ class SphereWidget(QWidget):
         if delta > 0.0:
             instant_fps = 1.0 / delta
             self._fps = instant_fps if self._fps == 0.0 else self._fps * 0.9 + instant_fps * 0.1
+
+    def _advance(self, delta: float) -> AnimationParams:
+        # State machine first, then the user's motion overrides on top.
+        return self._profile.applied(self._machine.advance(delta))
 
     def _rebuild_points(self) -> None:
         effective = max(
@@ -264,6 +308,7 @@ class SphereWidget(QWidget):
             self._machine.speaking_wave_progresses(),
             self._governor.level.glow,
             shimmer,
+            self._accent,
         )
 
     def _current_scene(self) -> RenderScene:

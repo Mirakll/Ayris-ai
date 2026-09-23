@@ -352,7 +352,7 @@ class TestPersistence:
 
         second = ConfigManager(config_path)
         second.load()
-        second.apply({"overlay.opacity": 0.5})
+        second.apply({"overlay.rotation_speed": 0.5})
 
         assert "# моя пометка" in config_path.read_text(encoding="utf-8")
 
@@ -384,7 +384,7 @@ class TestRestartScopes:
             ("ai.model", RestartScope.LLM),
             ("plugins.sandbox", RestartScope.APP),
             ("voice.tts.speed", RestartScope.NONE),
-            ("overlay.opacity", RestartScope.NONE),
+            ("overlay.rotation_speed", RestartScope.NONE),
             ("privacy.telemetry", RestartScope.NONE),
         ],
     )
@@ -478,9 +478,9 @@ class TestApply:
         seen: list[object] = []
         unsubscribe = manager.subscribe(seen.append)
 
-        manager.apply({"overlay.opacity": 0.7})
+        manager.apply({"overlay.rotation_speed": 0.7})
         unsubscribe()
-        manager.apply({"overlay.opacity": 0.6})
+        manager.apply({"overlay.rotation_speed": 0.6})
 
         assert len(seen) == 1
 
@@ -494,7 +494,7 @@ class TestApply:
         manager.subscribe(explode)
         manager.subscribe(seen.append)
 
-        manager.apply({"overlay.opacity": 0.55})
+        manager.apply({"overlay.rotation_speed": 0.55})
 
         assert len(seen) == 1
         assert "listener" in messages(ayris_log.records)
@@ -545,21 +545,21 @@ class TestHotReload:
         manager.start_watching(interval=0.02)
 
         text = manager.path.read_text(encoding="utf-8")
-        assert "opacity = 0.92" in text
+        assert "rotation_speed = 1.0" in text
         manager.path.write_text(
-            text.replace("opacity = 0.92", "opacity = 0.4"),
+            text.replace("rotation_speed = 1.0", "rotation_speed = 0.4"),
             encoding="utf-8",
         )
 
         assert applied.wait(timeout=15.0), "the watcher never noticed the edit"
-        assert manager.settings.overlay.opacity == pytest.approx(0.4)
+        assert manager.settings.overlay.rotation_speed == pytest.approx(0.4)
 
     def test_the_watcher_ignores_the_managers_own_writes(self, manager: ConfigManager) -> None:
         seen: list[object] = []
         manager.subscribe(seen.append)
         manager.start_watching(interval=0.02)
 
-        manager.apply({"overlay.opacity": 0.44})
+        manager.apply({"overlay.rotation_speed": 0.44})
         time.sleep(0.3)
 
         assert len(seen) == 1, "a write by Ayris itself must not fire a second event"
