@@ -131,39 +131,51 @@ class VariableTable(QWidget):
         self._paint_diagnostics()
 
     def _append_row(self, declared: VariableModel) -> None:
-        row = self._table.rowCount()
-        self._table.insertRow(row)
+        # Пока строка собирается, itemChanged от setItem(...) прилетает раньше, чем
+        # выставлены комбобоксы столбцов 1–2, и _commit наткнулся бы на пустой
+        # cellWidget. Глушим коммит на время постройки (в _rebuild _loading уже True,
+        # поэтому сохраняем и восстанавливаем прежнее значение, а не ставим False);
+        # вызывающий (_add_row) сам делает _commit, когда строка готова.
+        was_loading = self._loading
+        self._loading = True
+        try:
+            row = self._table.rowCount()
+            self._table.insertRow(row)
 
-        name_item = QTableWidgetItem(declared.name)
-        self._table.setItem(row, 0, name_item)
+            name_item = QTableWidgetItem(declared.name)
+            self._table.setItem(row, 0, name_item)
 
-        type_combo = QComboBox()
-        for kind, label in _TYPE_LABELS.items():
-            type_combo.addItem(label, kind)
-        type_combo.setCurrentIndex(type_combo.findData(declared.type))
-        type_combo.currentIndexChanged.connect(self._commit)
-        self._table.setCellWidget(row, 1, type_combo)
+            type_combo = QComboBox()
+            for kind, label in _TYPE_LABELS.items():
+                type_combo.addItem(label, kind)
+            type_combo.setCurrentIndex(type_combo.findData(declared.type))
+            type_combo.currentIndexChanged.connect(self._commit)
+            self._table.setCellWidget(row, 1, type_combo)
 
-        scope_combo = QComboBox()
-        for scope, label in _SCOPE_LABELS.items():
-            scope_combo.addItem(label, scope)
-        scope_combo.setCurrentIndex(scope_combo.findData(declared.scope))
-        scope_combo.currentIndexChanged.connect(self._commit)
-        self._table.setCellWidget(row, 2, scope_combo)
+            scope_combo = QComboBox()
+            for scope, label in _SCOPE_LABELS.items():
+                scope_combo.addItem(label, scope)
+            scope_combo.setCurrentIndex(scope_combo.findData(declared.scope))
+            scope_combo.currentIndexChanged.connect(self._commit)
+            self._table.setCellWidget(row, 2, scope_combo)
 
-        default_item = QTableWidgetItem("" if declared.default is None else str(declared.default))
-        self._table.setItem(row, 3, default_item)
+            default_item = QTableWidgetItem(
+                "" if declared.default is None else str(declared.default)
+            )
+            self._table.setItem(row, 3, default_item)
 
-        persist_item = QTableWidgetItem()
-        persist_item.setFlags(
-            Qt.ItemFlag.ItemIsUserCheckable
-            | Qt.ItemFlag.ItemIsEnabled
-            | Qt.ItemFlag.ItemIsSelectable
-        )
-        persist_item.setCheckState(
-            Qt.CheckState.Checked if declared.persistent else Qt.CheckState.Unchecked
-        )
-        self._table.setItem(row, 4, persist_item)
+            persist_item = QTableWidgetItem()
+            persist_item.setFlags(
+                Qt.ItemFlag.ItemIsUserCheckable
+                | Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsSelectable
+            )
+            persist_item.setCheckState(
+                Qt.CheckState.Checked if declared.persistent else Qt.CheckState.Unchecked
+            )
+            self._table.setItem(row, 4, persist_item)
+        finally:
+            self._loading = was_loading
 
     def _add_row(self) -> None:
         if self._model is None:

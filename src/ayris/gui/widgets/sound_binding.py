@@ -250,11 +250,16 @@ class SoundBindingRow(QWidget):
         value = self._value.text().strip()
         if source is None or not value:
             return None
+        # 100 % — громкость по умолчанию: отдаём её как ``None`` (её нет), чтобы
+        # привязка, загруженная без явной громкости, вернулась ровно такой же, а
+        # экспортированный .ayris остался байт-стабильным. Зеркалит set_binding,
+        # где None → 100 при загрузке.
+        volume = self._volume.value()
         return SoundBinding(
             stage=self._stage,
             source=source,
             value=value,
-            volume=self._volume.value(),
+            volume=None if volume == 100 else volume,
             wait=self._wait.isChecked(),
         )
 

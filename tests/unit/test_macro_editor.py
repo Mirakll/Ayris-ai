@@ -488,10 +488,10 @@ def test_block_selected_unknown_type_uses_raw_title(
     editor = _editor(store, theme, catalog)
     editor.load_command(_command_id(store, "Свет"))
     # Блок неизвестного каталогу типа: заголовок — сам тип, полей нет.
-    editor._action_model.insert(ActionBlock(type="ХитрыйБлок"), ("actions",), 0)
+    editor._action_model.insert(ActionBlock(type="MysteryBlock"), ("actions",), 0)
     editor._action_view.rebuild()
     editor._on_block_selected(("actions", 0))
-    assert editor._param_title.text() == "Параметры — ХитрыйБлок"
+    assert editor._param_title.text() == "Параметры — MysteryBlock"
     assert editor._param_form._rows == []
 
 

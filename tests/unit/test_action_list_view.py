@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
-from PySide6.QtCore import QMimeData, Qt
+from PySide6.QtCore import QMimeData, QPointF, Qt
 from PySide6.QtWidgets import QAbstractItemView, QApplication
 
 from ayris.actions.macros.schema import ActionBlock, CommandModel
@@ -77,6 +77,11 @@ class _FakeDropEvent:
 
     def mimeData(self) -> QMimeData:  # noqa: N802 — mirrors the Qt event API.
         return self._mime.mimeData()
+
+    def position(self) -> QPointF:
+        # dropEvent прогоняет это через itemAt (в тесте он подменён), так что само
+        # значение не важно — важно лишь, что у результата есть .toPoint().
+        return QPointF(0.0, 0.0)
 
     def acceptProposedAction(self) -> None:  # noqa: N802 — mirrors the Qt event API.
         self.accepted = True

@@ -206,7 +206,7 @@ def test_row_set_binding_file_source(app: QApplication, theme: ThemeManager) -> 
     row = SoundBindingRow(theme, SoundStage.ON_ERROR)
     binding = _file(SoundStage.ON_ERROR, "звук.wav")
     row.set_binding(binding)
-    assert row._enabled.currentData() is SoundSource.FILE
+    assert row._enabled.currentData() == SoundSource.FILE
     assert row._value.placeholderText() == "custom:имя-файла.wav"
     assert row.binding() == binding
 

@@ -228,7 +228,13 @@ class EditorHeader(QWidget):
     def _on_name(self, text: str) -> None:
         self._validate_name()
         if self._model is not None and not self._loading:
-            self._model.name = text.strip()
+            name = text.strip()
+            # Пустое имя в модель не пишем: CommandModel.name требует min_length=1 и
+            # кинул бы ValidationError прямо в слоте. Ошибку показывает _validate_name,
+            # а save()/_on_test() сами упрутся в is_name_valid(). changed всё равно
+            # шлём — «очистил имя» делает форму грязной.
+            if name:
+                self._model.name = name
             self.changed.emit()
 
     def _on_tags(self) -> None:
