@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ayris — нодовый редактор команды (мокап)</title>
+<style>
+  /* ===== Токены темы Ayris (1:1 с resources/themes) ===== */
+  :root[data-theme="dark"] {
+    --bg: #16131F;
+    --surface: #1C1830;
+    --surface-hi: #29223C;
+    --border: #2E2742;
+    --accent: #9B6DFF;
+    --accent-hover: #B092FF;
+    --accent-pressed: #8458E8;
+    --text: #ECE7F6;
+    --text-2: #C3BAD9;
+    --muted: #948AAC;
+    --success: #45D6A1;
+    --warning: #F6C85F;
+    --error: #FF6685;
+    --info: #68B8FF;
+    --focus: #BCA0FF;
+    --on-accent: #140D22;
+    /* роли нод (кандидаты новых токенов) */
+    --role-action: #3FD6C0;
+    --role-sound: #5FD0E6;
+    --grid-dot: rgba(148,138,172,0.16);
+    --grid-dot-major: rgba(148,138,172,0.28);
+    --bloom: rgba(155,109,255,0.05);
+    --node-shadow: rgba(0,0,0,0.45);
+  }
+  :root[data-theme="light"] {
+    --bg: #F7F5FB;
+    --surface: #FFFFFF;
+    --surface-hi: #EEE9F7;
+    --border: #D5CDE3;
+    --accent: #7044D6;
+    --accent-hover: #8155E7;
+    --accent-pressed: #5C32BD;
+    --text: #20172D;
+    --text-2: #514461;
+    --muted: #756983;
+    --success: #14835F;
+    --warning: #A66500;
+    --error: #C72F50;
+    --info: #176EAF;
+    --focus: #7044D6;
+    --on-accent: #FFFFFF;
+    --role-action: #0E8C7A;
+    --role-sound: #0E7C90;
+    --grid-dot: rgba(117,105,131,0.20);
+    --grid-dot-major: rgba(117,105,131,0.34);
+    --bloom: rgba(112,68,214,0.05);
+    --node-shadow: rgba(80,60,120,0.18);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: "Inter", "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .app { display: grid; grid-template-columns: 232px 1fr 288px; height: 100vh; }
+
+  /* ===== Левая панель — библиотека команд (задача 51) ===== */
+  .sidebar {
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  .side-head {
+    padding: 16px 16px 12px;
+    font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); font-weight: 500;
+  }
+  .search {
+    margin: 0 12px 8px; padding: 8px 12px; border-radius: 8px;
+    background: var(--bg); border: 1px solid var(--border);
+    color: var(--text-2); font-size: 13px;
+  }
+  .tree { padding: 4px 8px; overflow-y: auto; flex: 1; }
+  .tree-folder { padding: 7px 10px; border-radius: 8px; font-size: 13px; color: var(--text-2); display:flex; align-items:center; gap:8px; cursor: default; }
+  .tree-folder .count { margin-left: auto; font-size: 11px; color: var(--muted); background: var(--surface-hi); border-radius: 6px; padding: 1px 7px; }
+  .tree-cmd { padding: 6px 10px 6px 30px; border-radius: 8px; font-size: 13px; color: var(--text-2); display:flex; align-items:center; gap:8px; cursor: default; }
+  .tree-cmd:hover { background: var(--surface-hi); }
+  .tree-cmd.active { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--text); }
+  .tree-cmd.disabled { color: var(--muted); opacity: 0.6; }
+  .tree-cmd .dot { width:7px; height:7px; border-radius:50%; background: var(--success); flex:none; }
+  .tree-cmd.disabled .dot { background: var(--muted); }
+  .tree-cmd .warn { margin-left:auto; color: var(--warning); font-size: 12px; }
+
+  /* ===== Центр — холст ===== */
+  .canvas-wrap { position: relative; overflow: hidden; }
+  .canvas {
+    position: absolute; inset: 0;
+    background-color: var(--bg);
+    background-image:
+      radial-gradient(1200px 800px at 50% 42%, var(--bloom), transparent 70%),
+      radial-gradient(var(--grid-dot) 1.4px, transparent 1.4px);
+    background-size: 100% 100%, 26px 26px;
+    background-position: 0 0, 0 0;
+    cursor: grab;
+  }
+  .canvas.panning { cursor: grabbing; }
+  .world { position: absolute; inset: 0; transform-origin: 0 0; }
+  svg.wires { position:absolute; inset:0; width:100%; height:100%; overflow: visible; pointer-events: none; }
+
+  /* ===== Верхняя панель инструментов ===== */
+  .toolbar {
+    position: absolute; top: 14px; left: 14px; right: 14px; z-index: 30;
+    display: flex; align-items: center; gap: 8px; pointer-events: none;
+  }
+  .toolbar .group { display:flex; gap:6px; background: color-mix(in srgb, var(--surface) 86%, transparent); border:1px solid var(--border); border-radius: 12px; padding: 5px; pointer-events: auto; backdrop-filter: blur(6px); }
+  .tbtn {
+    display:inline-flex; align-items:center; gap:6px; height: 32px; padding: 0 12px;
+    border-radius: 8px; border: 1px solid transparent; background: transparent;
+    color: var(--text-2); font-size: 13px; cursor: pointer; white-space: nowrap;
+  }
+  .tbtn:hover { background: var(--surface-hi); color: var(--text); }
+  .tbtn.primary { background: var(--accent); color: var(--on-accent); font-weight: 500; }
+  .tbtn.primary:hover { background: var(--accent-hover); }
+  .tbtn.active { border-color: var(--accent); color: var(--text); }
+  .spacer { flex: 1; }
+  .cmd-title { pointer-events:auto; font-size: 14px; font-weight: 500; color: var(--text); background: color-mix(in srgb, var(--surface) 86%, transparent); border:1px solid var(--border); border-radius: 12px; padding: 8px 14px; display:flex; align-items:center; gap:10px; }
+  .cmd-title .badge { font-size:11px; color: var(--success); border:1px solid color-mix(in srgb,var(--success) 45%, transparent); border-radius: 6px; padding: 1px 7px; }
+
+  /* ===== Нода ===== */
+  .node {
+    position: absolute; width: 210px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 6px 18px var(--node-shadow);
+    user-select: none; cursor: grab;
+    overflow: hidden;
+  }
+  .node .accent-bar { position:absolute; left:0; top:0; bottom:0; width:4px; background: var(--role); }
+  .node .head {
+    display:flex; align-items:center; gap:8px;
+    padding: 9px 10px 9px 14px;
+    background: color-mix(in srgb, var(--role) 22%, var(--surface-hi));
+    border-bottom: 1px solid var(--border);
+  }
+  .node .head .ico { width:22px; height:22px; border-radius:6px; display:grid; place-items:center; background: color-mix(in srgb, var(--role) 30%, transparent); color: var(--role); flex:none; }
+  .node .head .ico svg { width:14px; height:14px; }
+  .node .head .title { font-size: 13px; font-weight: 600; color: var(--text); flex:1; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .node .head .kebab { color: var(--muted); font-size: 15px; cursor: pointer; padding: 0 2px; }
+  .node .head .role-label { font-size: 10px; letter-spacing:0.05em; text-transform: uppercase; color: var(--role); font-weight:600; }
+  .node .body { padding: 9px 12px 11px 14px; }
+  .node .summary { font-size: 12.5px; color: var(--text-2); line-height: 1.4; overflow:hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .node .summary b { color: var(--text); font-weight: 600; }
+
+  .node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 26px color-mix(in srgb, var(--accent) 55%, transparent); }
+  .node.disabled { opacity: 0.55; }
+  .node.disabled .head { filter: saturate(0.35); }
+  .node.danger { border-color: var(--error); }
+  .node.danger .head::after { content:"⚠"; margin-left:auto; color: var(--error); }
+  .node.running { box-shadow: 0 0 0 1px var(--focus), 0 0 30px color-mix(in srgb, var(--focus) 65%, transparent); animation: breathe 1.4s ease-in-out infinite; }
+  @keyframes breathe { 0%,100%{ box-shadow: 0 0 0 1px var(--focus), 0 0 18px color-mix(in srgb, var(--focus) 45%, transparent);} 50%{ box-shadow: 0 0 0 1px var(--focus), 0 0 34px color-mix(in srgb, var(--focus) 75%, transparent);} }
+
+  /* Порты: вход слева, выход справа */
+  .port { position:absolute; width:13px; height:13px; border-radius:50%; border:2px solid var(--role); background: var(--surface); top: 50%; transform: translateY(-50%); z-index: 3; }
+  .port.filled { background: var(--role); }
+  .port.in { left: -7px; }
+  .port.out { right: -7px; }
+  .port.out:hover { box-shadow: 0 0 10px var(--role); cursor: crosshair; }
+
+  /* Чип задержки на проводе */
+  .delay-chip {
+    position:absolute; z-index: 5; transform: translate(-50%,-50%);
+    display:inline-flex; align-items:center; gap:5px;
+    height: 24px; padding: 0 9px; border-radius: 999px;
+    background: color-mix(in srgb, var(--warning) 20%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
+    color: var(--warning); font-size: 11.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .delay-chip svg { width: 12px; height: 12px; }
+  .delay-chip:hover { background: color-mix(in srgb, var(--warning) 30%, var(--surface)); }
+  .wire-add {
+    position:absolute; z-index:4; transform: translate(-50%,-50%);
+    width: 20px; height:20px; border-radius:50%; background: var(--surface-hi); border:1px solid var(--border);
+    color: var(--muted); display:grid; place-items:center; font-size: 14px; cursor:pointer; opacity: 0; transition: opacity .12s;
+  }
+
+  /* ===== Правая панель — инспектор выбранной ноды ===== */
+  .inspector { background: var(--surface); border-left: 1px solid var(--border); display:flex; flex-direction:column; }
+  .insp-head { padding: 16px; border-bottom: 1px solid var(--border); display:flex; align-items:center; gap:10px; }
+  .insp-head .ico { width:30px; height:30px; border-radius:8px; display:grid; place-items:center; background: color-mix(in srgb, var(--role) 28%, transparent); color: var(--role); }
+  .insp-head .ico svg { width:17px;height:17px; }
+  .insp-head .t { font-size: 14px; font-weight:600; }
+  .insp-head .s { font-size: 11px; color: var(--role); text-transform: uppercase; letter-spacing:0.05em; font-weight:600; }
+  .insp-body { padding: 16px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap: 16px; }
+  .field label { display:block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .field input, .field textarea, .field select {
+    width:100%; padding: 9px 12px; border-radius: 8px; background: var(--bg);
+    border: 1px solid var(--border); color: var(--text); font-size: 13px; font-family: inherit;
+  }
+  .field textarea { resize: vertical; min-height: 64px; }
+  .row { display:flex; gap:10px; }
+  .row .field { flex:1; }
+  .toggle-row { display:flex; align-items:center; justify-content:space-between; padding: 4px 0; }
+  .toggle-row span { font-size: 13px; color: var(--text-2); }
+  .sw { width:44px; height:24px; border-radius: 999px; background: var(--surface-hi); border:1px solid var(--border); position:relative; cursor:pointer; }
+  .sw.on { background: var(--accent); border-color: var(--accent); }
+  .sw::after { content:""; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background: var(--text); transition: left .15s; }
+  .sw.on::after { left: 22px; background: var(--on-accent); }
+  .insp-empty { padding: 40px 20px; text-align:center; color: var(--muted); font-size: 13px; }
+
+  /* Палитра добавления нод */
+  .palette { position:absolute; z-index: 40; background: var(--surface); border:1px solid var(--border); border-radius: 12px; box-shadow: 0 12px 30px rgba(0,0,0,0.4); padding: 6px; display:none; width: 210px; }
+  .palette.open { display:block; }
+  .palette .p-item { display:flex; align-items:center; gap:10px; padding: 9px 10px; border-radius:8px; cursor:pointer; font-size:13px; color: var(--text-2); }
+  .palette .p-item:hover { background: var(--surface-hi); color: var(--text); }
+  .palette .p-item .ico { width:24px;height:24px;border-radius:6px;display:grid;place-items:center;background:color-mix(in srgb,var(--role) 28%,transparent);color:var(--role);}
+  .palette .p-item .ico svg{width:14px;height:14px;}
+
+  .hint { position:absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 20; font-size: 12px; color: var(--muted); background: color-mix(in srgb, var(--surface) 80%, transparent); border:1px solid var(--border); padding: 7px 14px; border-radius: 999px; }
+
+  /* Порт с несколькими выходами (ветвление) */
+  .port.out.multi { top: auto; transform: none; }
+  .port-label { position:absolute; right: 16px; font-size: 10px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; z-index:3; pointer-events:none; }
+
+  /* Живой тянущийся провод рисуется в том же svg.wires */
+
+  /* ===== Миникарта (скрываемая) ===== */
+  .minimap { position:absolute; right: 14px; bottom: 14px; z-index: 25; width: 190px; height: 130px; background: color-mix(in srgb, var(--surface) 90%, transparent); border:1px solid var(--border); border-radius: 12px; overflow:hidden; backdrop-filter: blur(6px); }
+  .minimap.hidden { display:none; }
+  .minimap canvas { width:100%; height:100%; display:block; }
+  .minimap .mm-head { position:absolute; top:0; left:0; right:0; height:24px; display:flex; align-items:center; justify-content:space-between; padding:0 8px; font-size:10px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); }
+  .minimap .mm-close { cursor:pointer; color:var(--muted); font-size:13px; }
+  .minimap .mm-close:hover { color:var(--text); }
+  .mm-toggle { position:absolute; right:14px; bottom:14px; z-index:24; width:34px; height:34px; border-radius:10px; background: color-mix(in srgb, var(--surface) 88%, transparent); border:1px solid var(--border); color:var(--text-2); display:none; place-items:center; cursor:pointer; }
+  .mm-toggle.show { display:grid; }
+  .mm-toggle:hover { color:var(--text); border-color:var(--accent); }
+
+  /* ===== Контекст-меню ===== */
+  .ctx { position:absolute; z-index:60; min-width:180px; background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,0.45); padding:5px; display:none; }
+  .ctx.open { display:block; }
+  .ctx .ci { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:7px; font-size:13px; color:var(--text-2); cursor:pointer; }
+  .ctx .ci:hover { background:var(--surface-hi); color:var(--text); }
+  .ctx .ci.danger { color:var(--error); }
+  .ctx .ci.danger:hover { background:color-mix(in srgb,var(--error) 16%,transparent); }
+  .ctx .sep { height:1px; background:var(--border); margin:4px 6px; }
+  .ctx .ci .k { margin-left:auto; font-size:11px; color:var(--muted); }
+
+  /* ===== Палитра с категориями и поиском ===== */
+  .palette { position:absolute; z-index:40; background:var(--surface); border:1px solid var(--border); border-radius:12px; box-shadow:0 12px 30px rgba(0,0,0,0.45); display:none; width:264px; overflow:hidden; }
+  .palette.open { display:flex; flex-direction:column; max-height:420px; }
+  .palette .p-search { margin:8px; padding:8px 12px; border-radius:8px; background:var(--bg); border:1px solid var(--border); color:var(--text); font-size:13px; font-family:inherit; }
+  .palette .p-list { overflow-y:auto; padding:0 6px 8px; }
+  .palette .p-cat { font-size:10px; text-transform:uppercase; letter-spacing:0.07em; color:var(--muted); padding:8px 8px 4px; }
+  .palette .p-item { display:flex; align-items:center; gap:10px; padding:8px 8px; border-radius:8px; cursor:pointer; font-size:13px; color:var(--text-2); }
+  .palette .p-item:hover { background:var(--surface-hi); color:var(--text); }
+  .palette .p-item .ico { width:26px;height:26px;border-radius:7px;display:grid;place-items:center;background:color-mix(in srgb,var(--role) 28%,transparent);color:var(--role);flex:none;}
+  .palette .p-item .ico svg{width:15px;height:15px;}
+  .palette .p-item .meta { overflow:hidden; }
+  .palette .p-item .meta .nm { font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .palette .p-item .meta .ds { font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .palette .p-empty { padding:20px; text-align:center; color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body data-theme-holder>
+<div class="app">
+
+  <!-- ЛЕВО: библиотека команд (задача 51) -->
+  <aside class="sidebar">
+    <div class="side-head">Команды</div>
+    <input class="search" placeholder="Поиск по имени, тегу, фразе…">
+    <div class="tree">
+      <div class="tree-folder">📁 Общие <span class="count">4</span></div>
+      <div class="tree-cmd active"><span class="dot"></span> Приветствие <span class="warn">⚠</span></div>
+      <div class="tree-cmd"><span class="dot"></span> Погода сегодня</div>
+      <div class="tree-cmd disabled"><span class="dot"></span> Выключить ПК</div>
+      <div class="tree-cmd"><span class="dot"></span> Открыть музыку</div>
+      <div class="tree-folder">📁 Работа <span class="count">7</span></div>
+      <div class="tree-cmd"><span class="dot"></span> Открыть почту</div>
+      <div class="tree-cmd"><span class="dot"></span> Запустить сборку</div>
+      <div class="tree-folder">📁 Игры <span class="count">12</span></div>
+    </div>
+  </aside>
+
+  <!-- ЦЕНТР: холст -->
+  <div class="canvas-wrap">
+    <div class="canvas" id="canvas">
+      <div class="world" id="world">
+        <svg class="wires" id="wires"></svg>
+        <!-- ноды добавляются из JS -->
+      </div>
+    </div>
+
+    <!-- Тулбар -->
+    <div class="toolbar">
+      <div class="cmd-title">Команда: «Приветствие» <span class="badge">включена</span></div>
+      <div class="spacer"></div>
+      <div class="group">
+        <button class="tbtn" id="addBtn">＋ Нода</button>
+        <button class="tbtn" id="arrangeBtn" title="Разложить слева направо">⇄ Упорядочить</button>
+        <button class="tbtn" id="snapBtn" title="Привязка к сетке">▦ Сетка</button>
+      </div>
+      <div class="group">
+        <button class="tbtn active" id="runBtn">▶ Тест</button>
+        <button class="tbtn" id="themeBtn">◐ Тема</button>
+      </div>
+    </div>
+
+    <div class="hint">Тяни от порта — провод · ПКМ — меню · клик по чипу — задержка · поток слева направо</div>
+
+    <!-- Миникарта (скрываемая) -->
+    <div class="minimap" id="minimap">
+      <canvas id="mmCanvas" width="380" height="260"></canvas>
+      <div class="mm-head"><span>Карта</span><span class="mm-close" id="mmClose">✕</span></div>
+    </div>
+    <div class="mm-toggle" id="mmToggle" title="Показать карту">🗺</div>
+
+    <!-- Палитра -->
+    <div class="palette" id="palette">
+      <input class="p-search" id="pSearch" placeholder="Поиск блока…">
+      <div class="p-list" id="pList"></div>
+    </div>
+
+    <!-- Контекст-меню -->
+    <div class="ctx" id="ctx"></div>
+  </div>
+
+  <!-- ПРАВО: инспектор -->
+  <aside class="inspector" id="inspector">
+    <div class="insp-empty">Выбери ноду, чтобы настроить её параметры</div>
+  </aside>
+</div>
+
+<script>
+/* ================= Данные мокапа ================= */
+const ICONS = {
+  trigger: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>',
+  response: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H8l-4 4z"/></svg>',
+  action: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg>',
+  condition: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v6a3 3 0 0 0 3 3h6M6 21v-6M18 12v3a3 3 0 0 1-3 3"/><circle cx="6" cy="3" r="1.6"/><circle cx="18" cy="12" r="1.6"/></svg>',
+  sound: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9v6h4l5 4V5L8 9zM17 8a5 5 0 0 1 0 8"/></svg>',
+};
+const CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
+const ROLES = {
+  trigger:   { color:'var(--info)',        label:'триггер' },
+  response:  { color:'var(--accent)',      label:'ответ' },
+  action:    { color:'var(--role-action)', label:'действие' },
+  condition: { color:'var(--success)',     label:'условие' },
+  sound:     { color:'var(--role-sound)',  label:'звук' },
+};
+// у ноды-условия два выхода; у остальных один
+function outsOf(n){ return n.role==='condition' ? ['then','else'] : ['out']; }
+const OUT_META = { out:{label:'',color:null}, then:{label:'то',color:'var(--success)'}, else:{label:'иначе',color:'var(--error)'} };
+
+// Каталог блоков для палитры (категория → блоки)
+const BLOCKS = [
+  { cat:'Триггеры', items:[
+    { role:'trigger', name:'Голосовая фраза', desc:'запуск по слову/фразе' },
+    { role:'trigger', name:'Горячая клавиша', desc:'сочетание клавиш' },
+    { role:'trigger', name:'Расписание', desc:'время или cron' },
+  ]},
+  { cat:'Речь и звук', items:[
+    { role:'response', name:'Ответ голосом', desc:'TTS-фраза' },
+    { role:'sound', name:'Проиграть звук', desc:'файл или библиотека' },
+  ]},
+  { cat:'Действия', items:[
+    { role:'action', name:'Открыть браузер', desc:'сайт или URL' },
+    { role:'action', name:'Нажать клавишу', desc:'эмуляция ввода' },
+    { role:'action', name:'Запустить программу', desc:'exe / команда' },
+    { role:'action', name:'Управление ПК', desc:'громкость, яркость, питание', danger:true },
+  ]},
+  { cat:'Логика', items:[
+    { role:'condition', name:'Если / иначе', desc:'ветвление по условию' },
+    { role:'condition', name:'Переключатель', desc:'несколько веток' },
+  ]},
+];
+
+// цепочка из примера пользователя: привет → добрый день → (если утро) → открыть браузер
+let nodes = [
+  { id:'n1', role:'trigger',  title:'Голосовой триггер', x:40,  y:180, summary:'Фраза: <b>«привет»</b> · fuzzy', params:{phrase:'привет', fuzzy:true} },
+  { id:'n2', role:'response', title:'Ответ голосом',     x:300, y:180, summary:'Скажет: <b>«Добрый день»</b>', params:{text:'Добрый день'} },
+  { id:'n3', role:'sound',    title:'Звук',              x:300, y:360, summary:'chime.wav · 0.4 с', params:{file:'chime.wav'} },
+  { id:'n5', role:'condition',title:'Если утро',         x:560, y:180, summary:'Время <b>&lt; 12:00</b>', params:{cond:'hour < 12'} },
+  { id:'n2b',role:'response', title:'Утренний ответ',    x:820, y:90,  summary:'Скажет: <b>«Доброе утро»</b>', params:{text:'Доброе утро'} },
+  { id:'n4', role:'action',   title:'Открыть браузер',   x:820, y:280, summary:'URL: <b>ya.ru</b>', params:{url:'ya.ru'} },
+];
+let wires = [
+  { id:'w1', from:'n1', out:'out', to:'n2', delay:0 },
+  { id:'w2', from:'n2', out:'out', to:'n5', delay:1500 },
+  { id:'w3', from:'n1', out:'out', to:'n3', delay:200 },
+  { id:'w4', from:'n5', out:'then', to:'n2b', delay:0 },
+  { id:'w5', from:'n5', out:'else', to:'n4', delay:0 },
+];
+
+/* ================= Состояние вида ================= */
+let view = { x: 0, y: 0, k: 1 };
+let snap = false;
+let selected = null;
+
+const world = document.getElementById('world');
+const wiresSvg = document.getElementById('wires');
+const canvas = document.getElementById('canvas');
+
+/* ================= Рендер нод ================= */
+const NODE_W = 210;
+function renderNodes() {
+  document.querySelectorAll('.node').forEach(n=>n.remove());
+  nodes.forEach(n => {
+    const el = document.createElement('div');
+    el.className = 'node' + (n.disabled?' disabled':'') + (n.danger?' danger':'') + (n.running?' running':'') + (selected===n.id?' selected':'');
+    el.style.left = n.x+'px'; el.style.top = n.y+'px';
+    el.style.setProperty('--role', ROLES[n.role].color);
+    el.dataset.id = n.id;
+    const inFilled  = wires.some(w=>w.to===n.id) ? ' filled':'';
+    const outs = outsOf(n);
+    // выходные порты: один по центру, либо несколько столбиком у правого края
+    let portsHtml = '';
+    outs.forEach((o,i)=>{
+      const filled = wires.some(w=>w.from===n.id && w.out===o) ? ' filled':'';
+      const col = OUT_META[o].color || ROLES[n.role].color;
+      const topPct = outs.length===1 ? 50 : (28 + i*44);
+      portsHtml += `<div class="port out multi${filled}" data-out="${o}" style="top:${topPct}%; border-color:${col}; ${filled?'background:'+col+';':''}"></div>`;
+      if(OUT_META[o].label) portsHtml += `<div class="port-label" style="top:calc(${topPct}% - 6px); color:${col}">${OUT_META[o].label}</div>`;
+    });
+    el.innerHTML = `
+      <div class="accent-bar"></div>
+      <div class="head">
+        <div class="ico">${ICONS[n.role]}</div>
+        <div style="flex:1; overflow:hidden;">
+          <div class="title">${n.title}</div>
+          <div class="role-label">${ROLES[n.role].label}</div>
+        </div>
+        <div class="kebab" data-kebab="${n.id}">⋯</div>
+      </div>
+      <div class="body"><div class="summary">${n.summary}</div></div>
+      ${n.role!=='trigger' ? `<div class="port in${inFilled}"></div>`:''}
+      ${portsHtml}
+    `;
+    world.appendChild(el);
+  });
+  bindNodeDrag(); bindPorts(); bindKebabs();
+}
+
+/* ================= Рендер проводов ================= */
+function nodeById(id){ return nodes.find(n=>n.id===id); }
+const NODE_H = 84;
+function outPos(node, out){
+  const outs = outsOf(node);
+  const idx = Math.max(0, outs.indexOf(out));
+  const topPct = outs.length===1 ? 50 : (28 + idx*44);
+  return { x: node.x + NODE_W, y: node.y + NODE_H*(topPct/100) };
+}
+function inPos(node){ return { x: node.x, y: node.y + NODE_H/2 }; }
+function bezier(p1,p2){
+  const dx = Math.max(60, Math.abs(p2.x-p1.x)*0.5);
+  return `M ${p1.x} ${p1.y} C ${p1.x+dx} ${p1.y}, ${p2.x-dx} ${p2.y}, ${p2.x} ${p2.y}`;
+}
+function glowPath(d,col){
+  return `<path d="${d}" fill="none" style="stroke:${col}" stroke-width="8" stroke-linecap="round" opacity="0.14"/>`
+       + `<path d="${d}" fill="none" style="stroke:${col}" stroke-width="4" stroke-linecap="round" opacity="0.38"/>`
+       + `<path d="${d}" fill="none" style="stroke:${col}" stroke-width="2" stroke-linecap="round" opacity="0.92"/>`;
+}
+function renderWires(live){
+  let paths = '';
+  document.querySelectorAll('.delay-chip,.wire-add').forEach(e=>e.remove());
+  wires.forEach(w=>{
+    const a = nodeById(w.from), b = nodeById(w.to);
+    if(!a||!b) return;
+    const p1 = outPos(a, w.out||'out'), p2 = inPos(b);
+    const d = bezier(p1,p2);
+    const col = OUT_META[w.out||'out'].color || ROLES[a.role].color;
+    paths += glowPath(d, col);
+    const mx = (p1.x+p2.x)/2, my = (p1.y+p2.y)/2;
+    // чип задержки / кнопка + в DOM (в координатах world)
+    const chip = document.createElement('div');
+    if (w.delay>0){
+      chip.className='delay-chip';
+      chip.style.left=mx+'px'; chip.style.top=my+'px';
+      chip.innerHTML = `${CLOCK}${(w.delay/1000).toFixed(w.delay%1000?1:0)} с`;
+      chip.onclick=(e)=>{ e.stopPropagation(); editDelay(w); };
+    } else {
+      chip.className='wire-add';
+      chip.style.left=mx+'px'; chip.style.top=my+'px';
+      chip.textContent='+';
+      chip.title='Добавить задержку';
+      chip.onmouseenter=()=>chip.style.opacity=1;
+      chip.onmouseleave=()=>chip.style.opacity=0;
+      chip.onclick=(e)=>{ e.stopPropagation(); editDelay(w); };
+    }
+    world.appendChild(chip);
+  });
+  if(live && live.d) paths += `<path d="${live.d}" fill="none" style="stroke:${live.col}" stroke-width="2.5" stroke-linecap="round" stroke-dasharray="6 5" opacity="0.9"/>`;
+  wiresSvg.innerHTML = paths;
+  drawMinimap();
+}
+function editDelay(w){
+  const v = prompt('Задержка на связи (мс):', w.delay);
+  if(v!==null){ w.delay = Math.max(0, parseInt(v)||0); renderWires(); }
+}
+
+/* ================= Живой провод от порта ================= */
+let liveWire = null;
+function worldPoint(ev){
+  const r = canvas.getBoundingClientRect();
+  return { x:(ev.clientX-r.left-view.x)/view.k, y:(ev.clientY-r.top-view.y)/view.k };
+}
+function bindPorts(){
+  document.querySelectorAll('.port.out').forEach(p=>{
+    p.addEventListener('mousedown', e=>{
+      e.stopPropagation();
+      const nodeEl = p.closest('.node');
+      const from = nodeEl.dataset.id, out = p.dataset.out||'out';
+      const col = OUT_META[out].color || ROLES[nodeById(from).role].color;
+      liveWire = { from, out, col };
+      function move(ev){
+        const p1 = outPos(nodeById(from), out), p2 = worldPoint(ev);
+        // подсветка валидной цели
+        document.querySelectorAll('.node').forEach(el=>{
+          const over = el.matches(':hover') && el.dataset.id!==from && nodeById(el.dataset.id).role!=='trigger';
+          el.style.outline = over ? '2px solid var(--success)' : '';
+        });
+        renderWires(bezier(p1,p2) ? {d:bezier(p1,p2), col} : null);
+      }
+      function up(ev){
+        document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up);
+        const tgt = document.elementsFromPoint(ev.clientX,ev.clientY).map(x=>x.closest&&x.closest('.node')).find(Boolean);
+        document.querySelectorAll('.node').forEach(el=>el.style.outline='');
+        if(tgt && tgt.dataset.id!==from && nodeById(tgt.dataset.id).role!=='trigger'){
+          wires.push({ id:'w'+(Date.now()%100000), from, out, to:tgt.dataset.id, delay:0 });
+        }
+        liveWire = null; renderNodes(); renderWires();
+      }
+      document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+    });
+  });
+}
+
+/* ================= Перетаскивание нод ================= */
+function bindNodeDrag(){
+  document.querySelectorAll('.node').forEach(el=>{
+    const id = el.dataset.id;
+    el.addEventListener('mousedown', e=>{
+      if(e.target.closest('.port')) return;
+      e.stopPropagation();
+      selectNode(id);
+      const n = nodeById(id);
+      const sx = e.clientX, sy = e.clientY, ox = n.x, oy = n.y;
+      function move(ev){
+        let nx = ox + (ev.clientX-sx)/view.k;
+        let ny = oy + (ev.clientY-sy)/view.k;
+        if(snap){ nx = Math.round(nx/26)*26; ny = Math.round(ny/26)*26; }
+        n.x = nx; n.y = ny;
+        el.style.left=nx+'px'; el.style.top=ny+'px';
+        renderWires();
+      }
+      function up(){ document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up); }
+      document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+    });
+  });
+}
+
+/* ================= Панорама холста ================= */
+canvas.addEventListener('mousedown', e=>{
+  if(e.target!==canvas && !e.target.classList.contains('world')) { if(!e.target.closest('.node') && !e.target.closest('.delay-chip')){} }
+  if(e.target.closest('.node')||e.target.closest('.delay-chip')) return;
+  selectNode(null);
+  canvas.classList.add('panning');
+  const sx=e.clientX, sy=e.clientY, ox=view.x, oy=view.y;
+  function move(ev){ view.x=ox+(ev.clientX-sx); view.y=oy+(ev.clientY-sy); applyView(); }
+  function up(){ canvas.classList.remove('panning'); document.removeEventListener('mousemove',move); document.removeEventListener('mouseup',up); }
+  document.addEventListener('mousemove',move); document.addEventListener('mouseup',up);
+});
+canvas.addEventListener('wheel', e=>{
+  e.preventDefault();
+  const factor = e.deltaY<0 ? 1.1 : 0.9;
+  const nk = Math.min(2.2, Math.max(0.4, view.k*factor));
+  // зум к курсору
+  const rect = canvas.getBoundingClientRect();
+  const mx = e.clientX-rect.left, my = e.clientY-rect.top;
+  view.x = mx - (mx-view.x)*(nk/view.k);
+  view.y = my - (my-view.y)*(nk/view.k);
+  view.k = nk; applyView();
+},{passive:false});
+function applyView(){
+  world.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.k})`;
+  // сетка едет вместе с холстом
+  canvas.style.backgroundPosition = `0 0, ${view.x}px ${view.y}px`;
+  canvas.style.backgroundSize = `100% 100%, ${26*view.k}px ${26*view.k}px`;
+}
+
+/* ================= Выбор + инспектор ================= */
+function selectNode(id){
+  selected = id;
+  document.querySelectorAll('.node').forEach(el=>el.classList.toggle('selected', el.dataset.id===id));
+  renderInspector();
+}
+function field(label, value, type='input'){
+  if(type==='textarea') return `<div class="field"><label>${label}</label><textarea>${value}</textarea></div>`;
+  return `<div class="field"><label>${label}</label><input value="${value}"></div>`;
+}
+function renderInspector(){
+  const insp = document.getElementById('inspector');
+  if(!selected){ insp.innerHTML = '<div class="insp-empty">Выбери ноду, чтобы настроить её параметры</div>'; return; }
+  const n = nodeById(selected);
+  const role = ROLES[n.role];
+  let body='';
+  if(n.role==='trigger'){
+    body = field('Фраза', n.params.phrase)
+      + `<div class="toggle-row"><span>Нечёткое совпадение (fuzzy)</span><div class="sw on"></div></div>`
+      + `<div class="toggle-row"><span>Регулярное выражение</span><div class="sw"></div></div>`
+      + field('Приоритет','5');
+  } else if(n.role==='response'){
+    body = field('Текст ответа', n.params.text, 'textarea')
+      + `<div class="field"><label>Голос</label><select><option>Ayris (по умолчанию)</option><option>Мужской</option></select></div>`
+      + `<div class="row">${field('Скорость','1.0')}${field('Тон','0')}</div>`;
+  } else if(n.role==='action'){
+    body = `<div class="field"><label>Действие</label><select><option>Открыть браузер</option><option>Нажать клавишу</option><option>Запустить программу</option></select></div>`
+      + field('URL', n.params.url)
+      + `<div class="toggle-row"><span>Требует прав администратора</span><div class="sw"></div></div>`;
+  } else if(n.role==='sound'){
+    body = `<div class="field"><label>Источник</label><select><option>Файл</option><option>Библиотека</option><option>Синтез TTS</option></select></div>`
+      + field('Файл', n.params.file)
+      + `<div class="toggle-row"><span>Ждать окончания</span><div class="sw on"></div></div>`;
+  }
+  insp.innerHTML = `
+    <div class="insp-head" style="--role:${role.color}">
+      <div class="ico">${ICONS[n.role]}</div>
+      <div><div class="t">${n.title}</div><div class="s">${role.label}</div></div>
+    </div>
+    <div class="insp-body">
+      ${field('Название', n.title)}
+      ${body}
+      <div class="toggle-row"><span>Нода включена</span><div class="sw ${n.disabled?'':'on'}"></div></div>
+    </div>`;
+  insp.querySelectorAll('.sw').forEach(sw=>sw.onclick=()=>sw.classList.toggle('on'));
+}
+
+/* ================= Тулбар ================= */
+document.getElementById('snapBtn').onclick = (e)=>{ snap=!snap; e.currentTarget.classList.toggle('active',snap); };
+document.getElementById('arrangeBtn').onclick = ()=>{
+  // авто-раскладка СЛЕВА НАПРАВО по «слоям» от триггеров
+  const layer = {}; nodes.forEach(n=>layer[n.id]=0);
+  let changed=true, guard=0;
+  while(changed && guard++<20){ changed=false;
+    wires.forEach(w=>{ if(layer[w.to] < layer[w.from]+1){ layer[w.to]=layer[w.from]+1; changed=true; } });
+  }
+  const byLayer = {};
+  nodes.forEach(n=>{ (byLayer[layer[n.id]] ||= []).push(n); });
+  Object.entries(byLayer).forEach(([l,ns])=>{
+    ns.forEach((n,i)=>{ n.x = 60 + (+l)*270; n.y = 120 + i*170; });
+  });
+  renderNodes(); renderWires();
+};
+document.getElementById('themeBtn').onclick = ()=>{
+  const root = document.documentElement;
+  root.dataset.theme = root.dataset.theme==='light' ? 'dark' : 'light';
+};
+document.getElementById('runBtn').onclick = ()=>{
+  // прогон подсветки «слева направо» по слоям
+  nodes.forEach(n=>n.running=false); renderNodes();
+  const order = [...nodes].sort((a,b)=>a.x-b.x);
+  let i=0;
+  const t=setInterval(()=>{
+    nodes.forEach(n=>n.running=false);
+    if(i<order.length){ nodeById(order[i].id).running=true; i++; renderNodes(); }
+    else { clearInterval(t); nodes.forEach(n=>n.running=false); renderNodes(); }
+  },600);
+};
+
+/* ================= Кебаб на ноде → контекст-меню ================= */
+function bindKebabs(){
+  document.querySelectorAll('.kebab').forEach(k=>{
+    k.addEventListener('click', e=>{ e.stopPropagation(); const r=k.getBoundingClientRect(); openCtx(r.left, r.bottom+4, k.dataset.kebab); });
+  });
+}
+
+/* ================= Контекст-меню ================= */
+const ctx = document.getElementById('ctx');
+function openCtx(x, y, nodeId){
+  const onNode = !!nodeId;
+  const n = onNode ? nodeById(nodeId) : null;
+  const items = onNode ? [
+    {t:'Переименовать', k:'F2', fn:()=>{ const v=prompt('Название ноды:', n.title); if(v){ n.title=v; renderNodes(); renderWires(); selectNode(n.id);} }},
+    {t:'Дублировать', k:'Ctrl+D', fn:()=>{ const id='n'+(Date.now()%100000); nodes.push({...n, id, x:n.x+30, y:n.y+30, title:n.title+' — копия'}); renderNodes(); renderWires(); selectNode(id); }},
+    {t: n.disabled?'Включить':'Выключить', fn:()=>{ n.disabled=!n.disabled; renderNodes(); renderWires(); }},
+    {sep:true},
+    {t:'Удалить', k:'Del', danger:true, fn:()=>{ nodes=nodes.filter(x=>x.id!==n.id); wires=wires.filter(w=>w.from!==n.id&&w.to!==n.id); selected=null; renderNodes(); renderWires(); renderInspector(); }},
+  ] : [
+    {t:'Добавить ноду', fn:()=>{ document.getElementById('addBtn').click(); }},
+    {t:'Упорядочить', fn:()=>document.getElementById('arrangeBtn').click()},
+    {t:'Показать всё', fn:()=>{ view={x:40,y:40,k:0.8}; applyView(); }},
+  ];
+  ctx.innerHTML = items.map(it=> it.sep ? '<div class="sep"></div>'
+    : `<div class="ci ${it.danger?'danger':''}">${it.t}${it.k?`<span class="k">${it.k}</span>`:''}</div>`).join('');
+  let idx=0; ctx.querySelectorAll('.ci').forEach(el=>{ const it=items.filter(x=>!x.sep)[idx++]; el.onclick=()=>{ ctx.classList.remove('open'); it.fn(); }; });
+  ctx.style.left=x+'px'; ctx.style.top=y+'px'; ctx.classList.add('open');
+}
+canvas.addEventListener('contextmenu', e=>{
+  e.preventDefault();
+  const nodeEl = e.target.closest('.node');
+  openCtx(e.clientX, e.clientY, nodeEl?nodeEl.dataset.id:null);
+});
+document.addEventListener('click', e=>{ if(!e.target.closest('#ctx')) ctx.classList.remove('open'); });
+
+/* ================= Миникарта (скрываемая) ================= */
+const minimap = document.getElementById('minimap');
+const mmToggle = document.getElementById('mmToggle');
+document.getElementById('mmClose').onclick = ()=>{ minimap.classList.add('hidden'); mmToggle.classList.add('show'); };
+mmToggle.onclick = ()=>{ minimap.classList.remove('hidden'); mmToggle.classList.remove('show'); drawMinimap(); };
+function drawMinimap(){
+  if(minimap.classList.contains('hidden')) return;
+  const c = document.getElementById('mmCanvas'); const g = c.getContext('2d');
+  g.clearRect(0,0,c.width,c.height);
+  if(!nodes.length) return;
+  let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+  nodes.forEach(n=>{ minX=Math.min(minX,n.x); minY=Math.min(minY,n.y); maxX=Math.max(maxX,n.x+NODE_W); maxY=Math.max(maxY,n.y+NODE_H); });
+  const pad=40; minX-=pad;minY-=pad;maxX+=pad;maxY+=pad;
+  const s = Math.min(c.width/(maxX-minX), c.height/(maxY-minY));
+  const css = getComputedStyle(document.documentElement);
+  wires.forEach(w=>{ const a=nodeById(w.from),b=nodeById(w.to); if(!a||!b)return;
+    g.strokeStyle=css.getPropertyValue('--accent'); g.globalAlpha=0.5; g.beginPath();
+    g.moveTo((a.x+NODE_W-minX)*s,(a.y+NODE_H/2-minY)*s); g.lineTo((b.x-minX)*s,(b.y+NODE_H/2-minY)*s); g.stroke(); });
+  g.globalAlpha=1;
+  nodes.forEach(n=>{ g.fillStyle = ROLES[n.role].color.startsWith('var') ? css.getPropertyValue(ROLES[n.role].color.slice(4,-1)) : ROLES[n.role].color;
+    g.fillRect((n.x-minX)*s,(n.y-minY)*s, NODE_W*s, NODE_H*s); });
+}
+
+/* ================= Палитра с категориями и поиском ================= */
+const palette = document.getElementById('palette');
+const pList = document.getElementById('pList');
+const pSearch = document.getElementById('pSearch');
+function renderPalette(q=''){
+  q=q.trim().toLowerCase(); let html='', any=false;
+  BLOCKS.forEach(cat=>{
+    const hits = cat.items.filter(b=> !q || b.name.toLowerCase().includes(q) || b.desc.toLowerCase().includes(q));
+    if(!hits.length) return; any=true;
+    html += `<div class="p-cat">${cat.cat}</div>`;
+    hits.forEach(b=>{ html += `<div class="p-item" data-role="${b.role}" data-name="${b.name}" data-danger="${b.danger?1:0}" style="--role:${ROLES[b.role].color}">
+      <div class="ico">${ICONS[b.role]}</div><div class="meta"><div class="nm">${b.name}</div><div class="ds">${b.desc}</div></div></div>`; });
+  });
+  pList.innerHTML = any ? html : '<div class="p-empty">Ничего не найдено</div>';
+  pList.querySelectorAll('.p-item').forEach(it=>it.onclick=()=>{
+    const id='n'+(Date.now()%100000);
+    nodes.push({ id, role:it.dataset.role, title:it.dataset.name, danger:it.dataset.danger==='1',
+      x:(-view.x+340)/view.k, y:(-view.y+260)/view.k, summary:'Не настроено', params:{} });
+    palette.classList.remove('open'); renderNodes(); renderWires(); selectNode(id);
+  });
+}
+document.getElementById('addBtn').onclick = (e)=>{
+  const r=e.currentTarget.getBoundingClientRect();
+  palette.style.left=r.left+'px'; palette.style.top=(r.bottom+8)+'px';
+  palette.classList.toggle('open');
+  if(palette.classList.contains('open')){ pSearch.value=''; renderPalette(); pSearch.focus(); }
+};
+pSearch.oninput = ()=>renderPalette(pSearch.value);
+document.addEventListener('click', e=>{ if(!e.target.closest('#palette') && !e.target.closest('#addBtn')) palette.classList.remove('open'); });
+
+/* ================= Инициализация ================= */
+applyView(); renderNodes(); renderWires(); selectNode('n2');
+</script>
+</body>
+</html>

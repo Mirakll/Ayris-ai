@@ -48,6 +48,11 @@ class ColorTokens(_Tokens):
     warning: str
     error: str
     info: str
+    #: Роль ноды «действие» (нодовый редактор, задача 53): бирюзовый, отдельно от
+    #: триггера-info и ответа-accent, иначе три роли схлопнулись бы по одному hue.
+    role_action: str
+    #: Роль ноды «звук» (нодовый редактор, задача 53): голубой.
+    role_sound: str
     overlay: str
     focus: str
     on_accent: str
