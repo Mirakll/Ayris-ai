@@ -17,6 +17,8 @@
     "warning": "#F6C85F",
     "error": "#FF6685",
     "info": "#68B8FF",
+    "role_action": "#3FD6C0",
+    "role_sound": "#5FD0E6",
     "overlay": "#0C0A14C2",
     "focus": "#BCA0FF",
     "on_accent": "#140D22"

@@ -33,6 +33,7 @@ from ayris.gui.widgets.search_field import SearchField
 from ayris.gui.widgets.setting_card import SettingCard
 from ayris.gui.widgets.slider_field import SliderField
 from ayris.gui.widgets.sphere import SphereState, SphereWidget
+from ayris.gui.widgets.spin_box import ThemedSpinBox
 from ayris.gui.widgets.toggle import ToggleSwitch
 
 __all__ = [
@@ -65,6 +66,7 @@ __all__ = [
     "SphereWidget",
     "StatusFilter",
     "ThemedComboBox",
+    "ThemedSpinBox",
     "Toast",
     "ToggleSwitch",
     "TreeFilter",

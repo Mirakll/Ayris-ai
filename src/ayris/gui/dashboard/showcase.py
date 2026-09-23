@@ -7,9 +7,17 @@ Empty areas drag the frameless window.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTime, QTimer, Signal
+from PySide6.QtCore import QSize, Qt, QTime, QTimer, Signal
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ayris.gui.dashboard.sphere_host import SphereLike, make_sphere
 from ayris.gui.theme import ThemeManager
@@ -43,10 +51,16 @@ class ShowcasePanel(QFrame):
     """Logo, centred sphere and caption; empty space moves the window."""
 
     drag_started = Signal()
+    fullscreen_toggle_requested = Signal()
+
+    #: Glyphs for the corner button: outward arrows enter, inward arrows exit.
+    _ENTER_GLYPH = "⤢"
+    _EXIT_GLYPH = "⤡"
 
     def __init__(self, theme: ThemeManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._theme = theme
+        self._flat = False
         self.setObjectName("showcasePanel")
 
         self._layout = QVBoxLayout(self)
@@ -87,11 +101,32 @@ class ShowcasePanel(QFrame):
         self.caption.setObjectName("showcaseCaption")
         self.caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        # Bottom-left corner control: a quiet ghost button that toggles the
+        # window's full-screen mode. A matching spacer on the right keeps the
+        # caption centred despite the button eating space on the left.
+        self.fullscreen_button = QPushButton(self._ENTER_GLYPH, self)
+        self.fullscreen_button.setObjectName("showcaseGhost")
+        self.fullscreen_button.setAccessibleName("Полноэкранный режим")
+        self.fullscreen_button.setToolTip("Во весь экран (F11)")
+        self.fullscreen_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.fullscreen_button.clicked.connect(self.fullscreen_toggle_requested.emit)
+
+        self._footer_spacer = QWidget(self)
+        self._footer_spacer.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+        self._footer = QHBoxLayout()
+        self._footer.setContentsMargins(0, 0, 0, 0)
+        self._footer.addWidget(self.fullscreen_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self._footer.addStretch(1)
+        self._footer.addWidget(self.caption, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._footer.addStretch(1)
+        self._footer.addWidget(self._footer_spacer, 0, Qt.AlignmentFlag.AlignRight)
+
         self._layout.addWidget(
             self._header, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
         )
         self._layout.addWidget(self._sphere_host, 1)
-        self._layout.addWidget(self.caption, 0, Qt.AlignmentFlag.AlignHCenter)
+        self._layout.addLayout(self._footer)
 
         theme.theme_changed.connect(self._refresh_theme)
         self._refresh_theme()
@@ -116,6 +151,24 @@ class ShowcasePanel(QFrame):
         """
         self._sphere_host.setVisible(visible)
 
+    def set_fullscreen(self, active: bool) -> None:
+        """Reflect the window's full-screen state on the corner button.
+
+        Flat corners follow along: on a full screen the panel's rounded left
+        edge would let the desktop show through the window's translucent
+        background, so the radius is dropped while full-screen.
+        """
+        self.fullscreen_button.setText(self._EXIT_GLYPH if active else self._ENTER_GLYPH)
+        self.fullscreen_button.setToolTip(
+            "Выйти из полноэкранного режима (F11)" if active else "Во весь экран (F11)"
+        )
+        self.fullscreen_button.setAccessibleName(
+            "Выйти из полноэкранного режима" if active else "Полноэкранный режим"
+        )
+        if active != self._flat:
+            self._flat = active
+            self._refresh_theme()
+
     # Empty areas drag the frameless window.
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -134,8 +187,9 @@ class ShowcasePanel(QFrame):
         text = color("text_primary")
         secondary = color("text_secondary")
         muted = color("text_muted")
+        surface_high = color("surface_highlight")
         pad = metric("spacing_xl")
-        radius = metric("radius_lg")
+        radius = 0 if self._flat else metric("radius_lg")
 
         # QWebEngineView won't composite transparently on Windows, so blend the
         # sphere in by painting its page the same colour as this panel.
@@ -159,4 +213,11 @@ class ShowcasePanel(QFrame):
             f" font-weight: {typography.weight_medium}; letter-spacing: 1px; }}"
             f"#showcaseCaption {{ color: {muted}; font-size: {typography.caption_size}px;"
             f" letter-spacing: 4px; }}"
+            f"#showcaseGhost {{ background: transparent; border: none; color: {muted};"
+            f" font-size: {typography.h2_size}px; border-radius: {metric('radius_md')}px; }}"
+            f"#showcaseGhost:hover {{ color: {text}; background: {surface_high}; }}"
         )
+
+        control = metric("control_height")
+        self.fullscreen_button.setFixedSize(QSize(control, control))
+        self._footer_spacer.setFixedSize(QSize(control, control))

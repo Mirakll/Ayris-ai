@@ -27,7 +27,14 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
 )
-from PySide6.QtGui import QCloseEvent, QGuiApplication, QKeyEvent, QMoveEvent, QResizeEvent
+from PySide6.QtGui import (
+    QCloseEvent,
+    QGuiApplication,
+    QKeyEvent,
+    QMoveEvent,
+    QResizeEvent,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
@@ -48,6 +55,7 @@ from ayris.core.events import (
     MicToggleRequested,
     ModeChanged,
     OnlineStatusChanged,
+    OpenCommandRequested,
     OverlayToggleRequested,
     OverlayVisibilityRequested,
     TranscriptReady,
@@ -175,6 +183,8 @@ class MainWindow(QMainWindow):
         self._pages: dict[str, SettingsTab] = {}
         self._current_section = "general"
         self._allow_close = False
+        self._fullscreen = False
+        self._pending_fullscreen = False
         self._restoring = True
         self._search_index = SettingsSearchIndex()
         self._unsubscribers: list[Callable[[], None]] = []
@@ -296,6 +306,41 @@ class MainWindow(QMainWindow):
         self._showcase.set_sphere_visible(True)
         self._dialog.focus_command()
 
+    # -- full screen --------------------------------------------------------
+
+    @property
+    def fullscreen(self) -> bool:
+        return self._fullscreen
+
+    def toggle_fullscreen(self) -> None:
+        self.set_fullscreen(not self._fullscreen)
+
+    def set_fullscreen(self, active: bool) -> None:
+        """Enter or leave full screen, flattening the frameless card's corners.
+
+        The window is frameless with a translucent, rounded background, so a
+        plain ``showFullScreen`` would leave the desktop showing through the
+        rounded corners. The panels and the root card drop their radius and
+        border while full-screen, then restore them on the way back.
+        """
+        if active == self._fullscreen:
+            return
+        self._apply_fullscreen_chrome(active)
+        if active:
+            self.showFullScreen()
+        else:
+            self.showNormal()
+        # A deliberate toggle is worth persisting at once, not on the debounce.
+        self._save_window_state()
+
+    def _apply_fullscreen_chrome(self, active: bool) -> None:
+        # Flatten (or restore) the frameless card's corners and the panels; the
+        # actual show/normal transition is the caller's job.
+        self._fullscreen = active
+        self._showcase.set_fullscreen(active)
+        self._dialog.set_flat(active)
+        self._refresh_theme()
+
     # -- lifecycle ----------------------------------------------------------
 
     def exit(self) -> None:
@@ -327,9 +372,37 @@ class MainWindow(QMainWindow):
         self._settings_layer.setGeometry(self._root.rect())
         self._schedule_state_save()
 
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._pending_fullscreen and not self._fullscreen:
+            self._pending_fullscreen = False
+            self.set_fullscreen(True)
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802
+        super().changeEvent(event)
+        # Keep the chrome in sync when something outside set_fullscreen changes
+        # the window state — e.g. a tray restore calling showNormal(). Minimising
+        # keeps the full-screen intent so restoring from the taskbar returns to it.
+        if event.type() == QEvent.Type.WindowStateChange:
+            state = self.windowState()
+            if state & Qt.WindowState.WindowMinimized:
+                return
+            is_fullscreen = bool(state & Qt.WindowState.WindowFullScreen)
+            if is_fullscreen != self._fullscreen:
+                self._apply_fullscreen_chrome(is_fullscreen)
+                self._schedule_state_save()
+
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_F11:
+            self.toggle_fullscreen()
+            event.accept()
+            return
         if event.key() == Qt.Key.Key_Escape and self._settings_layer.is_open:
             self.close_settings()
+            event.accept()
+            return
+        if event.key() == Qt.Key.Key_Escape and self._fullscreen:
+            self.set_fullscreen(False)
             event.accept()
             return
         super().keyPressEvent(event)
@@ -364,6 +437,7 @@ class MainWindow(QMainWindow):
 
         self._showcase = ShowcasePanel(self._theme, self._root)
         self._showcase.drag_started.connect(self._start_system_move)
+        self._showcase.fullscreen_toggle_requested.connect(self.toggle_fullscreen)
 
         separator = QFrame(self._root)
         separator.setObjectName("columnSeam")
@@ -432,6 +506,7 @@ class MainWindow(QMainWindow):
             bus.subscribe(MacroFailed, self._on_macro_failed),
             bus.subscribe(OverlayToggleRequested, self._on_toggle_visibility),
             bus.subscribe(OverlayVisibilityRequested, self._on_visibility),
+            bus.subscribe(OpenCommandRequested, self._on_open_command),
         ]
 
     def _on_mode(self, event: ModeChanged) -> None:
@@ -480,6 +555,16 @@ class MainWindow(QMainWindow):
             self._raise_and_focus()
         else:
             self.hide()
+
+    def _on_open_command(self, event: OpenCommandRequested) -> None:
+        # The «Открыть команду» link in the «Горячие клавиши» tab (task 55): make
+        # sure the settings layer is up, switch to «Команды», and select the command.
+        if not self._settings_layer.is_open:
+            self.open_settings()
+        page = self.open_section("commands")
+        reveal = getattr(page, "reveal_command", None)
+        if callable(reveal):
+            reveal(event.command_id)
 
     # -- interaction --------------------------------------------------------
 
@@ -537,10 +622,11 @@ class MainWindow(QMainWindow):
 
     def _refresh_theme(self, _theme: object | None = None) -> None:
         color = self._theme.theme.color
-        radius = self._theme.metric("radius_lg")
+        radius = 0 if self._fullscreen else self._theme.metric("radius_lg")
+        border = "none" if self._fullscreen else f"1px solid {color('border')}"
         self._root.setStyleSheet(
             f"#windowRoot {{ background: {color('surface')};"
-            f" border: 1px solid {color('border')}; border-radius: {radius}px; }}"
+            f" border: {border}; border-radius: {radius}px; }}"
             f"#columnSeam {{ color: {color('border')}; background: {color('border')};"
             " border: none; }"
         )
@@ -558,20 +644,31 @@ class MainWindow(QMainWindow):
             self.resize(state.width, state.height)  # type: ignore[unreachable]
         key = state.section if any(spec.key == state.section for spec in SECTIONS) else "general"
         self.open_section(key)
+        # Defer full screen to the first show: applying it here would force the
+        # window visible before the caller (and start-minimized) had their say.
+        self._pending_fullscreen = state.fullscreen
 
     def _schedule_state_save(self) -> None:
         if not self._restoring and hasattr(self, "_state_timer"):
             self._state_timer.start()
 
     def _save_window_state(self) -> None:
-        geometry = self.normalGeometry()
-        values = {
-            "window.x": geometry.x(),
-            "window.y": geometry.y(),
-            "window.width": geometry.width(),
-            "window.height": geometry.height(),
+        values: dict[str, object] = {
             "window.section": self._current_section,
+            "window.fullscreen": self._fullscreen,
         }
+        # A full screen has no meaningful position or size to remember; keep the
+        # last normal geometry so leaving full screen returns to it.
+        if not self._fullscreen:
+            geometry = self.normalGeometry()
+            values.update(
+                {
+                    "window.x": geometry.x(),
+                    "window.y": geometry.y(),
+                    "window.width": geometry.width(),
+                    "window.height": geometry.height(),
+                }
+            )
         current = self._manager.settings.window
         if all(
             getattr(current, path.removeprefix("window.")) == value

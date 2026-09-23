@@ -137,6 +137,47 @@ def test_settings_layer_opens_and_closes_in_window(
         window.exit()
 
 
+def test_fullscreen_toggles_chrome_and_persists(
+    theme: ThemeManager, manager: ConfigManager
+) -> None:
+    window = _window(theme, manager)
+    try:
+        window.show()
+        QApplication.instance().processEvents()  # type: ignore[union-attr]
+        assert window.fullscreen is False
+
+        # The corner button drives the toggle.
+        window._showcase.fullscreen_button.click()
+        QApplication.instance().processEvents()  # type: ignore[union-attr]
+        assert window.fullscreen is True
+        assert window.isFullScreen() is True
+        assert window._showcase._flat is True
+        assert window._dialog._flat is True
+        assert manager.settings.window.fullscreen is True
+
+        window.toggle_fullscreen()
+        QApplication.instance().processEvents()  # type: ignore[union-attr]
+        assert window.fullscreen is False
+        assert window._showcase._flat is False
+        assert window._dialog._flat is False
+        assert manager.settings.window.fullscreen is False
+    finally:
+        window.exit()
+
+
+def test_saved_fullscreen_restores_on_show(theme: ThemeManager, manager: ConfigManager) -> None:
+    manager.apply({"window.fullscreen": True})
+    window = _window(theme, manager)
+    try:
+        assert window.fullscreen is False  # deferred until the window is shown
+        window.show()
+        QApplication.instance().processEvents()  # type: ignore[union-attr]
+        assert window.fullscreen is True
+        assert window.isFullScreen() is True
+    finally:
+        window.exit()
+
+
 # --------------------------------------------------------------------------- #
 # Event bus in, dashboard out
 # --------------------------------------------------------------------------- #

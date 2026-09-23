@@ -27,13 +27,15 @@
   }
   canvas { display: block; }
 
-  /* панель управления режимами */
+  /* панель управления режимами — скрыта по умолчанию: в приложении она не нужна
+     и раньше мелькала при загрузке до вызова window.setPanel(false). Показывается
+     только явным window.setPanel(true) (standalone-референс в design/sphere_ref). */
   #panel {
     position: fixed;
     left: 50%;
     bottom: 26px;
     transform: translateX(-50%);
-    display: flex;
+    display: none;
     gap: 8px;
     padding: 8px;
     border-radius: 16px;
@@ -67,6 +69,7 @@
     top: 22px;
     left: 26px;
     z-index: 10;
+    display: none;  /* скрыт по умолчанию — показывает только window.setPanel(true) */
     font-size: 12px;
     line-height: 1.6;
     color: rgba(190, 170, 235, 0.55);
@@ -462,9 +465,10 @@
   window.setPanel = (show) => {
     const p = document.getElementById('panel');
     const h = document.getElementById('hud');
-    const d = show ? '' : 'none';
-    if (p) p.style.display = d;
-    if (h) h.style.display = d;
+    // Элементы скрыты в CSS по умолчанию, поэтому показ задаёт явный display
+    // (flex для панели, block для hud) — пустая строка вернула бы их в none.
+    if (p) p.style.display = show ? 'flex' : 'none';
+    if (h) h.style.display = show ? 'block' : 'none';
   };
   // EffectComposer + bloom выдают непрозрачный кадр, поэтому пустые места канваса
   // становятся чёрными. Красим фон сцены в цвет панели-хоста — чёрного квадрата

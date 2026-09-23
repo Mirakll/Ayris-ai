@@ -103,6 +103,7 @@ class DialogView(QFrame):
         super().__init__(parent)
         self._theme = theme
         self._profiles: tuple[Profile, ...] = ()
+        self._flat = False
         self.setObjectName("dialogPanel")
 
         self._root = QVBoxLayout(self)
@@ -248,6 +249,17 @@ class DialogView(QFrame):
     def focus_command(self) -> None:
         self.input_bar.focus_command()
 
+    def set_flat(self, flat: bool) -> None:
+        """Drop the panel's rounded right corners while the window is full-screen.
+
+        On a full screen the window's translucent background would show the
+        desktop through the rounded corner; a flat edge fills it instead.
+        """
+        if flat == self._flat:
+            return
+        self._flat = flat
+        self._refresh_theme()
+
     # -- interaction --------------------------------------------------------
 
     def _show_profile_menu(self) -> None:
@@ -280,7 +292,7 @@ class DialogView(QFrame):
         muted = color("text_muted")
         accent = color("accent")
         radius_md = metric("radius_md")
-        radius_lg = metric("radius_lg")
+        radius_lg = 0 if self._flat else metric("radius_lg")
         pad = metric("spacing_lg")
         control = metric("control_height")
         control_lg = metric("control_height_lg")

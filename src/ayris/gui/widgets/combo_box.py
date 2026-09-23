@@ -42,6 +42,40 @@ class ThemedComboBox(QComboBox):
         self._chip_inset = 6
         self._chip_radius = 8
         self._arrow_size = 16
+        self._popup_prepared = False
+
+    # --- popup -------------------------------------------------------------
+    def showPopup(self) -> None:  # noqa: N802
+        """Round the popup window itself, not just the list view inside it.
+
+        The stylesheet rounds ``QComboBox QAbstractItemView``, but the view sits
+        inside a top-level container window that Qt leaves square and opaque. Its
+        corners and drop shadow show through the view's rounded corners as gray
+        wedges. Only a translucent, frameless container lets the rounded view be
+        the sole thing painted, so the corners read as fully round.
+
+        Order matters: on Windows the layered-window flag behind
+        ``WA_TranslucentBackground`` is honoured only if it is set *before* the
+        native window is first shown. Setting it after ``super().showPopup()``
+        (which already showed an opaque window) leaves the gray corners behind.
+        ``self.view()`` materialises the container and reparents the view into
+        it, so we can configure it here — once — ahead of the first show.
+        """
+        if not self._popup_prepared:
+            self._prepare_popup_window()
+        super().showPopup()
+
+    def _prepare_popup_window(self) -> None:
+        container = self.view().window()
+        # Before the view is parented into its popup, window() is this combo's own
+        # window; skip and retry on the next open rather than styling the wrong one.
+        if container is None or container is self.window():
+            return
+        container.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        container.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        container.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        container.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
+        self._popup_prepared = True
 
     # --- Qt properties driven from QSS (qproperty-*) -----------------------
     def _get_chip_color(self) -> QColor:

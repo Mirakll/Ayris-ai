@@ -53,6 +53,13 @@ QLabel[role="h2"] {
     font-size: {{typography.h2_size}}px;
     font-weight: {{typography.weight_bold}};
 }
+/* Заголовок третьего уровня (название строки/карточки, например действие в
+   таблице хоткеев): размер body, но насыщеннее — отделяется от описания под ним
+   не только цветом, но и весом. Завершает шкалу h1 → h2 → h3, которой раньше не
+   хватало последней ступени. */
+QLabel[role="h3"] {
+    font-weight: {{typography.weight_medium}};
+}
 QLabel[status="warning"] { color: {{color.warning}}; }
 QListWidget#settingsSidebar, QListWidget {
     background-color: {{color.surface}};
@@ -90,9 +97,49 @@ QTreeView::item:selected {
     color: {{color.on_accent}};
     background-color: {{color.accent}};
 }
-QTreeView::branch {
+/* Ветви. У листа-команды колонку раскрытия обнуляем полностью: ни фона, ни
+   «ниточек»-линий, ни картинки-заглушки — именно её Fusion на Windows оставляет
+   серым квадратом слева от команды. У папки (has-children) стрелку раскрытия не
+   трогаем: её по-прежнему рисует стиль, иначе дерево не свернуть. Выделение и
+   ховер в колонке ветви тоже прозрачны, чтобы за узлом не появлялся прямоугольник. */
+QTreeView::branch { background: transparent; }
+QTreeView::branch:!has-children,
+QTreeView::branch:has-siblings:!adjoins-item,
+QTreeView::branch:has-siblings:adjoins-item,
+QTreeView::branch:!has-children:!has-siblings:adjoins-item {
+    background: transparent;
+    border-image: none;
+    image: none;
+}
+QTreeView::branch:selected,
+QTreeView::branch:hover {
     background: transparent;
 }
+/* Вкладки редактора команд («Обзор», «Действия», …). Панель контента без рамки и
+   фона: иначе штатный QTabWidget обводил бы прямоугольником всю область под
+   вкладками (палитра + холст + параметры) — та самая «квадратная рамка вокруг окна».
+   Полоса вкладок — плоская, активная вкладка подчёркнута акцентом. */
+QTabWidget::pane {
+    border: none;
+    background: transparent;
+    top: 0;
+}
+QTabBar { background: transparent; }
+QTabBar::tab {
+    background: transparent;
+    color: {{color.text_secondary}};
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: {{metric.spacing_sm}}px {{metric.spacing_md}}px;
+    margin-right: {{metric.spacing_xs}}px;
+    font-weight: {{typography.weight_medium}};
+}
+QTabBar::tab:hover { color: {{color.text_primary}}; }
+QTabBar::tab:selected {
+    color: {{color.text_primary}};
+    border-bottom: 2px solid {{color.accent}};
+}
+QTabBar::tab:focus { outline: none; }
 QPushButton, QLineEdit, QSpinBox, QComboBox {
     min-height: {{metric.control_height}}px;
     border: {{metric.border_width}}px solid {{color.border}};
@@ -145,10 +192,45 @@ ThemedComboBox {
     qproperty-chipRadius: {{metric.radius_sm}};
     qproperty-arrowSize: {{metric.icon_sm}};
 }
+/* Спинбокс: штатный стиль рисует справа два крохотных стрелка-кнопки друг над
+   другом — они читаются как «двойной переключатель» и, как и стрелка комбобокса,
+   двоятся на дробном DPI. ThemedSpinBox (widgets/spin_box.py) убирает обе кнопки
+   и сам рисует один вертикальный чип ▴/▾. Тушим кнопки на любом QSpinBox, чтобы
+   не проступали под чипом. */
+QSpinBox::up-button, QSpinBox::down-button {
+    width: 0;
+    border: none;
+    background: transparent;
+}
+QSpinBox::up-arrow, QSpinBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+}
+/* ThemedSpinBox — единственный, кто рисует стрелки; кормим ему цвета и размеры
+   Qt-свойствами, как ThemedComboBox. Чип уже вертикальной (два шеврона друг над
+   другом), поэтому он и уже комбобоксового. */
+ThemedSpinBox {
+    qproperty-chipColor: {{color.surface_highlight}};
+    qproperty-chipColorActive: {{color.accent}};
+    qproperty-arrowColor: {{color.text_secondary}};
+    qproperty-arrowColorActive: {{color.on_accent}};
+    qproperty-arrowColorDisabled: {{color.text_muted}};
+    qproperty-chipSize: {{metric.icon_md}};
+    qproperty-chipInset: {{metric.spacing_xs}};
+    qproperty-chipRadius: {{metric.radius_sm}};
+    qproperty-arrowSize: {{metric.icon_sm}};
+}
+/* Всплывающий список комбобокса. Углы прямые (radius 0): скруглённый список
+   лежит внутри отдельного окна-контейнера, которое Qt рисует квадратным и
+   непрозрачным, и за скруглением проступали серые уголки этого контейнера.
+   Квадратный список закрывает контейнер целиком — стыковаться нечему. Контейнер
+   вдобавок translucent+frameless (widgets/combo_box.py) как защита от рамки и
+   тени. Обводка — акцентный фиолетовый, в меру яркий. */
 QComboBox QAbstractItemView {
     background: {{color.surface}};
-    border: {{metric.border_width}}px solid {{color.border}};
-    border-radius: {{metric.radius_md}}px;
+    border: {{metric.border_width}}px solid {{color.accent}};
+    border-radius: 0px;
     padding: {{metric.spacing_xs}}px;
     outline: none;
     selection-background-color: {{color.accent}};
@@ -178,6 +260,65 @@ QPushButton[iconButton="true"] {
     min-width: {{metric.control_height}}px;
     max-width: {{metric.control_height}}px;
     padding: 0;
+}
+/* Сегмент истории редактора (отменить · версии · повторить): три кнопки слиты
+   в один «островок» на поверхности, прикреплённый к верху холста, вместо
+   разрозненных системных QToolButton без темы. */
+QFrame[toolgroup="true"] {
+    background-color: {{color.surface}};
+    border: {{metric.border_width}}px solid {{color.border}};
+    border-radius: {{metric.radius_md}}px;
+}
+QFrame[toolgroup="true"] QToolButton {
+    background: transparent;
+    border: none;
+    border-radius: {{metric.radius_sm}}px;
+    padding: 0 {{metric.spacing_sm}}px;
+    min-height: {{metric.control_height}}px;
+    color: {{color.text_secondary}};
+    font-weight: {{typography.weight_medium}};
+}
+QFrame[toolgroup="true"] QToolButton:hover {
+    background-color: {{color.surface_highlight}};
+    color: {{color.text_primary}};
+}
+QFrame[toolgroup="true"] QToolButton:pressed {
+    background-color: {{color.accent}};
+    color: {{color.on_accent}};
+}
+QFrame[toolgroup="true"] QToolButton:disabled {
+    background: transparent;
+    color: {{color.text_muted}};
+}
+QFrame[toolgroup="true"] QToolButton::menu-indicator {
+    image: none;
+    width: 0;
+    height: 0;
+}
+/* Плоская ссылка (например «← К списку команд»): без рамки и фона, левый край
+   без отступа — так стрелка встаёт вровень с левым краем панели под кнопкой. */
+QPushButton[link="true"] {
+    background: transparent;
+    border: none;
+    padding: 0;
+    min-height: 0;
+    color: {{color.text_secondary}};
+    text-align: left;
+}
+QPushButton[link="true"]:hover {
+    background: transparent;
+    border: none;
+    color: {{color.accent}};
+}
+QPushButton[link="true"]:pressed { border: none; }
+QPushButton[link="true"]:focus { border: none; }
+/* Тонкая разделительная линия (например под заголовком инспектора параметров):
+   один горизонтальный штрих цветом границы, без рамки-рельефа QFrame. */
+QFrame[rule="true"] {
+    border: none;
+    background: {{color.border}};
+    max-height: {{metric.border_width}}px;
+    min-height: {{metric.border_width}}px;
 }
 QFrame[notice="true"] {
     background-color: {{color.surface_highlight}};
@@ -247,26 +388,37 @@ QSlider::handle:horizontal {
     border-radius: 6px;
     background: {{color.accent}};
 }
+/* Полосы прокрутки живут внутри скруглённых карт-контейнеров (дерево, список
+   настроек — radius_lg). Трек красим цветом карты (surface), а не тёмным фоном
+   окна: иначе за бегунком и в его торцах проступала тёмная («чёрная») колонка —
+   это универсальное правило QWidget заливало полосу фоном окна. Отступ сверху и
+   снизу держит бегунок в прямой части борта, подальше от скруглённого угла. */
 QScrollBar:vertical {
     width: {{metric.spacing_md}}px;
-    background: {{color.background}};
+    background: {{color.surface}};
     border-radius: 6px;
     margin: 0;
 }
 QScrollBar:horizontal {
     height: {{metric.spacing_md}}px;
-    background: {{color.background}};
+    background: {{color.surface}};
     border-radius: 6px;
     margin: 0;
 }
+/* Бегунок отступает от концов через СВОЙ margin, а не через margin полосы: зазор
+   бегунка заливается фоном полосы (surface), тогда как margin самой полосы
+   пропускал бы тёмный фон окна («чёрный» торец). Отступ ≈ радиусу угла карты,
+   чтобы бегунок держался в прямой части борта и не заезжал на скругление. */
 QScrollBar::handle:vertical {
     min-height: {{metric.control_height_lg}}px;
+    margin: {{metric.radius_lg}}px 2px;
     border-radius: 6px;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 {{color.accent_hover}}, stop:1 {{color.accent_pressed}});
 }
 QScrollBar::handle:horizontal {
     min-width: {{metric.control_height_lg}}px;
+    margin: 2px {{metric.radius_lg}}px;
     border-radius: 6px;
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
         stop:0 {{color.accent_hover}}, stop:1 {{color.accent_pressed}});
@@ -282,9 +434,12 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     background: transparent;
     border: none;
 }
+/* Дорожка над и под бегунком — цветом карты, а не прозрачная: прозрачная
+   пропускала тёмный фон окна из-под полосы, и он читался «чёрной» колонкой за
+   бегунком и в его торцах. */
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical,
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-    background: transparent;
+    background: {{color.surface}};
 }
 QToolTip {
     color: {{color.text_primary}};
