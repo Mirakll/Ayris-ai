@@ -245,7 +245,8 @@ MAX_DEPTH: Final = 24
 #: The largest exponent ``**`` will compute, so ``10 ** 10 ** 10`` cannot eat the memory
 #: of a machine on a thread the user cannot see.
 MAX_POWER: Final = 64
-#: The largest repetition ``*`` will build, so ``"a" * 10000000`` is refused as well.
+#: The longest sequence ``*`` will build: ``len(seq) * abs(count)`` past this is refused, so
+#: neither ``"a" * 10000000`` nor the chain ``"a" * 5000 * 5000`` gets to allocate it.
 MAX_REPEAT: Final = 10_000
 #: How many decimal places ``round`` will go to. ``round(x, 100000)`` is not a rounding.
 MAX_PLACES: Final = 12
@@ -369,10 +370,23 @@ class _Scope:
 
 
 def _guard(scope: _Scope, action: Callable[[], Any]) -> Any:
-    """Run one operator, turning "these values do not go together" into a typed error."""
+    """Run one operator, turning "these values do not go together" into a typed error.
+
+    ``MemoryError`` is caught alongside the rest as a backstop: :func:`_check_repeat`
+    refuses an oversized ``*`` before it runs, but an allocation that slips past any ceiling
+    has to surface as a :class:`MacroExpressionError`, not crash the macro's thread.
+    """
     try:
         return action()
-    except (TypeError, ValueError, ZeroDivisionError, KeyError, IndexError, OverflowError) as exc:
+    except (
+        TypeError,
+        ValueError,
+        ZeroDivisionError,
+        KeyError,
+        IndexError,
+        OverflowError,
+        MemoryError,
+    ) as exc:
         raise MacroExpressionError(scope.expression, f"cannot evaluate ({exc})") from exc
 
 
@@ -417,10 +431,17 @@ def _check_power(left: Any, right: Any, scope: _Scope) -> None:
 
 
 def _check_repeat(left: Any, right: Any, scope: _Scope) -> None:
-    """Refuse ``"a" * 10_000_000``, which is a memory bomb rather than a condition."""
+    """Refuse ``"a" * 10_000_000``, and the chain ``"a" * 5000 * 5000`` that slips past it.
+
+    The ceiling is on the *result*, ``len(seq) * abs(count)``, not on the count alone: a
+    chain can keep every factor under :data:`MAX_REPEAT` while the product explodes, so
+    ``"a" * 5000 * 5000`` would build 25 million characters if only the count were checked.
+    Bounding what each ``*`` produces catches it on the next step, where the string the
+    first ``*`` built is itself the sequence being repeated.
+    """
     for value, count in ((left, right), (right, left)):
-        if isinstance(value, str | list | tuple) and isinstance(count, int):
-            if abs(count) > MAX_REPEAT:
+        if isinstance(value, str | bytes | list | tuple) and isinstance(count, int):
+            if len(value) * abs(count) > MAX_REPEAT:
                 raise MacroExpressionError(scope.expression, "repetition is too large")
             return
 

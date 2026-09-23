@@ -47,6 +47,7 @@ from ayris.actions.macros.expressions import (
     FUNCTIONS,
     MAX_DEPTH,
     MAX_EXPRESSION,
+    MAX_REPEAT,
     coerce_value,
     empty_value,
     evaluate_expression,
@@ -595,6 +596,39 @@ class TestLimits:
 
     def test_a_small_repetition_still_works(self) -> None:
         assert value_of("'ab' * 3") == "ababab"
+
+    def test_a_repetition_chain_cannot_slip_past_the_ceiling(self) -> None:
+        """``"a" * 5000 * 5000`` keeps each factor under the ceiling; the product must not.
+
+        The first ``*`` builds a 5000-character string, comfortably under :data:`MAX_REPEAT`;
+        multiplying that again would build 25 million characters. The ceiling is on the length
+        of what each step produces, so the second ``*`` is refused and the 25-megabyte string
+        is never allocated — the bypass this task closed.
+        """
+        assert refused("'a' * 5000 * 5000")
+        assert refused("[0] * 6000 * 6000")
+
+    def test_a_repetition_bomb_comes_back_typed_and_never_as_a_memory_error(self) -> None:
+        """The next link of the chain would ``MemoryError`` a thread the user cannot see.
+
+        ``refused`` asserts :class:`MacroExpressionError` specifically, so a raw
+        ``MemoryError`` — or a giant value built anyway — fails this test rather than passing
+        it as "it raised something".
+        """
+        assert refused("'a' * 5000 * 5000 * 5000")
+        assert refused("[0] * 6000 * 6000 * 6000")
+
+    def test_repetition_up_to_the_ceiling_builds_and_one_past_it_is_refused(self) -> None:
+        """The boundary is inclusive: exactly :data:`MAX_REPEAT` is allowed, one more is not."""
+        assert len(value_of(f"'a' * {MAX_REPEAT}")) == MAX_REPEAT
+        assert len(value_of(f"[0] * {MAX_REPEAT}")) == MAX_REPEAT
+        assert refused(f"'a' * {MAX_REPEAT + 1}")
+        assert refused(f"[0] * {MAX_REPEAT + 1}")
+
+    def test_the_repetition_ceiling_counts_the_result_and_not_the_count(self) -> None:
+        """A count within the ceiling still overflows when the sequence itself is long."""
+        assert value_of(f"'ab' * {MAX_REPEAT // 2}") == "ab" * (MAX_REPEAT // 2)
+        assert refused(f"'abc' * {MAX_REPEAT}")
 
     def test_deep_nesting_is_refused_and_not_a_recursion_error(self) -> None:
         """Depth is counted in nodes, not in characters: ``((1))`` is one node, not three."""
