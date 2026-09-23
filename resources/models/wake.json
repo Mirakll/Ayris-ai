@@ -53,6 +53,19 @@
       "target": "alexa.onnx"
     },
     {
+      "id": "oww-airis-ru",
+      "name": "«Айрис» (русская фраза активации)",
+      "engine": "openwakeword",
+      "language": "ru",
+      "version": "0.1",
+      "description": "Обученная фраза активации «Айрис». Требует общие части openWakeWord.",
+      "url": "https://raw.githubusercontent.com/Mirakll/Ayris-ai/main/resources/models/wake/%D0%B0%D0%B9%D1%80%D0%B8%D1%81.onnx",
+      "sha256": "57e9bd894735badb0e69828cd0d151e7e32edfcb6b534d9d8b0f744f853af42d",
+      "size_bytes": 859394,
+      "requires_ram_mb": 256,
+      "target": "айрис.onnx"
+    },
+    {
       "id": "silero-vad",
       "name": "Silero VAD",
       "engine": "openwakeword",

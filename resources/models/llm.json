@@ -3,6 +3,30 @@
   "kind": "llm",
   "models": [
     {
+      "id": "qwen25-0_5b-instruct-q4",
+      "name": "Qwen2.5 0.5B Instruct (Q4_K_M)",
+      "engine": "llamacpp",
+      "language": "multi",
+      "version": "q4_k_m",
+      "description": "Самая экономная: меньше половины гигабайта, ужимается примерно в гигабайт памяти. Годится только для простейших команд — на связном разговоре и сложных просьбах ошибается часто.",
+      "url": "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+      "sha256": "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+      "size_bytes": 491400032,
+      "requires_ram_mb": 1024
+    },
+    {
+      "id": "gemma3-1b-it-q4",
+      "name": "Gemma 3 1B Instruct (Q4_K_M)",
+      "engine": "llamacpp",
+      "language": "multi",
+      "version": "q4_k_m",
+      "description": "Самая лёгкая в списке: меньше гигабайта, отвечает мгновенно даже на слабом железе. Русский понимает слабее старших моделей и путается в сложных просьбах — берите для простых команд.",
+      "url": "https://huggingface.co/ggml-org/gemma-3-1b-it-GGUF/resolve/main/gemma-3-1b-it-Q4_K_M.gguf",
+      "sha256": "8ccc5cd1f1b3602548715ae25a66ed73fd5dc68a210412eea643eb20eb75a135",
+      "size_bytes": 806058240,
+      "requires_ram_mb": 2048
+    },
+    {
       "id": "qwen25-1_5b-instruct-q4",
       "name": "Qwen2.5 1.5B Instruct (Q4_K_M)",
       "engine": "llamacpp",
@@ -48,6 +72,18 @@
       "url": "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q6_k.gguf",
       "sha256": "12da1a5d3fa6905111d8798b00ed49e0f6425441598c8c41bb37a2c36d49d0f3",
       "size_bytes": 2793410976,
+      "requires_ram_mb": 4096
+    },
+    {
+      "id": "gemma3-4b-it-q4",
+      "name": "Gemma 3 4B Instruct (Q4_K_M)",
+      "engine": "llamacpp",
+      "language": "multi",
+      "version": "q4_k_m",
+      "description": "Свежая модель Google: при размере около 2.4 ГБ отвечает быстро и заметно смышлёнее 3B на сложных просьбах. Хорошо понимает русский.",
+      "url": "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf",
+      "sha256": "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863",
+      "size_bytes": 2489757856,
       "requires_ram_mb": 4096
     }
   ]
