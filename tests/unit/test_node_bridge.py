@@ -16,15 +16,21 @@ from ayris.actions.macros.blocks.catalog import BlockCatalog
 from ayris.actions.macros.schema import ActionBlock, CommandModel
 from ayris.gui.widgets.node_editor.bridge import (
     MAIN_PORT,
+    DisplayEdge,
     GraphEdge,
     GraphNode,
     NodeGraph,
     NodeRole,
     can_connect,
+    collapse_delays,
     command_from_graph,
+    delay_ms_of,
+    format_delay,
     graph_from_command,
+    is_delay_block,
     layout_from_json,
     layout_to_json,
+    make_delay_block,
     role_of,
     summary_of,
 )
@@ -415,3 +421,157 @@ def test_summary_of_empty_block_is_short(catalog: BlockCatalog) -> None:
     # Ничего не настроено: сводка либо пустая, либо короткое описание из каталога.
     summary = summary_of(ActionBlock(type="Say"), catalog)
     assert len(summary) <= 64
+
+
+# ----------------------------------------------------------------------
+# задержка на проводе: «Пауза» (Sleep), свёрнутая в чип на связи
+# ----------------------------------------------------------------------
+
+
+def test_format_delay_reads_ms_then_seconds() -> None:
+    assert format_delay(0) == "0 мс"
+    assert format_delay(-5) == "0 мс"
+    assert format_delay(250) == "250 мс"
+    assert format_delay(999) == "999 мс"
+    # От секунды и выше — с русской запятой и без хвостовых нулей.
+    assert format_delay(1000) == "1 с"
+    assert format_delay(1500) == "1,5 с"
+    assert format_delay(2250) == "2,25 с"
+
+
+def test_is_delay_block_only_for_sleep() -> None:
+    assert is_delay_block(ActionBlock(type="Sleep", params={"ms": 100})) is True
+    assert is_delay_block(ActionBlock(type="Say", params={"text": "x"})) is False
+
+
+def test_delay_ms_of_normalises_ms_and_seconds() -> None:
+    assert delay_ms_of(ActionBlock(type="Sleep", params={"ms": 500})) == 500
+    # Строковый мусор в ms не читается как число — падать нельзя, читаем как 0.
+    assert delay_ms_of(ActionBlock(type="Sleep", params={"ms": "500"})) == 0
+    # Секунды переводятся в миллисекунды.
+    assert delay_ms_of(ActionBlock(type="Sleep", params={"seconds": 1.5})) == 1500
+    # Ничего не задано либо булево (не число) — ноль.
+    assert delay_ms_of(ActionBlock(type="Sleep")) == 0
+    assert delay_ms_of(ActionBlock(type="Sleep", params={"ms": True})) == 0
+    # Отрицательное подрезается до нуля.
+    assert delay_ms_of(ActionBlock(type="Sleep", params={"ms": -10})) == 0
+
+
+def test_make_delay_block_is_a_sleep_in_ms() -> None:
+    block = make_delay_block(750)
+    assert is_delay_block(block)
+    assert block.params == {"ms": 750}
+    assert make_delay_block(-3).params == {"ms": 0}
+
+
+def _delay_command(*sleeps_ms: int, disabled: bool = False) -> CommandModel:
+    """Команда A → (паузы) → B: между двумя «Say» стоит цепочка «Пауза»."""
+    actions: list[ActionBlock] = [ActionBlock(type="Say", params={"text": "A"})]
+    for ms in sleeps_ms:
+        actions.append(ActionBlock(type="Sleep", params={"ms": ms}, enabled=not disabled))
+    actions.append(ActionBlock(type="Say", params={"text": "B"}))
+    return CommandModel(name="Задержка", actions=actions)
+
+
+def test_collapse_delays_folds_linear_sleep_onto_wire(catalog: BlockCatalog) -> None:
+    graph = graph_from_command(_delay_command(500), catalog=catalog)
+    hidden, display = collapse_delays(graph)
+    # «Пауза» между A и B прячется: карточка не рисуется, чип живёт на проводе A→B.
+    assert hidden == {"actions[1]"}
+    assert len(display) == 1
+    edge = display[0]
+    assert edge.source_id == "actions[0]"
+    assert edge.source_port == MAIN_PORT
+    assert edge.target_id == "actions[2]"
+    assert edge.delay_ms == 500
+    assert edge.sleep_ids == ["actions[1]"]
+
+
+def test_collapse_delays_sums_a_chain_of_pauses(catalog: BlockCatalog) -> None:
+    graph = graph_from_command(_delay_command(300, 200), catalog=catalog)
+    hidden, display = collapse_delays(graph)
+    assert hidden == {"actions[1]", "actions[2]"}
+    assert len(display) == 1
+    assert display[0].delay_ms == 500
+    assert display[0].sleep_ids == ["actions[1]", "actions[2]"]
+    assert display[0].target_id == "actions[3]"
+
+
+def test_collapse_delays_plain_wire_has_zero_delay(catalog: BlockCatalog) -> None:
+    command = CommandModel(
+        name="Без пауз",
+        actions=[
+            ActionBlock(type="Say", params={"text": "A"}),
+            ActionBlock(type="Say", params={"text": "B"}),
+        ],
+    )
+    hidden, display = collapse_delays(graph_from_command(command, catalog=catalog))
+    assert hidden == set()
+    assert len(display) == 1
+    assert display[0].delay_ms == 0
+    assert display[0].sleep_ids == []
+
+
+def test_collapse_delays_keeps_disabled_pause_visible(catalog: BlockCatalog) -> None:
+    # Выключенная пауза не должна тихо прятаться в чип: её состояние «выкл» надо видеть.
+    hidden, _display = collapse_delays(
+        graph_from_command(_delay_command(500, disabled=True), catalog=catalog)
+    )
+    assert hidden == set()
+
+
+def test_collapse_delays_keeps_root_and_trailing_pause_visible(catalog: BlockCatalog) -> None:
+    # Пауза-корень (в начале) и пауза-хвост (без следующего блока) не сворачиваются: им
+    # некуда лечь чипом, поэтому они остаются карточками.
+    root_first = CommandModel(
+        name="Пауза-корень",
+        actions=[
+            ActionBlock(type="Sleep", params={"ms": 500}),
+            ActionBlock(type="Say", params={"text": "B"}),
+        ],
+    )
+    trailing = CommandModel(
+        name="Пауза-хвост",
+        actions=[
+            ActionBlock(type="Say", params={"text": "A"}),
+            ActionBlock(type="Sleep", params={"ms": 500}),
+        ],
+    )
+    assert collapse_delays(graph_from_command(root_first, catalog=catalog))[0] == set()
+    assert collapse_delays(graph_from_command(trailing, catalog=catalog))[0] == set()
+
+
+def test_collapse_delays_folds_a_branch_wire(catalog: BlockCatalog) -> None:
+    # Пауза в начале ветки «то» тоже сворачивается — на провод от условия к первому блоку.
+    command = CommandModel(
+        name="Пауза в ветке",
+        actions=[
+            ActionBlock(
+                type="If",
+                params={"condition": "{x}"},
+                then=[
+                    ActionBlock(type="Sleep", params={"ms": 400}),
+                    ActionBlock(type="Say", params={"text": "да"}),
+                ],
+            ),
+        ],
+    )
+    hidden, display = collapse_delays(graph_from_command(command, catalog=catalog))
+    assert "actions[0].then[0]" in hidden
+    then_edge = next(e for e in display if e.source_port == "then")
+    assert then_edge.delay_ms == 400
+    assert then_edge.target_id == "actions[0].then[1]"
+
+
+def test_round_trip_preserves_sleep_block(catalog: BlockCatalog) -> None:
+    # Свёртка — только для рисующего слоя: конвертация держит «Пауза» обычной нодой, так
+    # что round-trip списка с паузой остаётся побайтово равным.
+    command = _delay_command(500)
+    rebuilt = command_from_graph(graph_from_command(command, catalog=catalog), command)
+    assert rebuilt.model_dump() == command.model_dump()
+    assert [b.type for b in rebuilt.actions] == ["Say", "Sleep", "Say"]
+
+
+def test_display_edge_key_is_source_port_target() -> None:
+    edge = DisplayEdge("a", MAIN_PORT, "b", delay_ms=250, sleep_ids=["s"])
+    assert edge.key == ("a", MAIN_PORT, "b")

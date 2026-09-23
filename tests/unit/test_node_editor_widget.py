@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QEvent, QPointF, Qt
@@ -23,6 +24,7 @@ from ayris.gui.theme import ThemeManager
 from ayris.gui.widgets.action_list import ActionListModel
 from ayris.gui.widgets.node_editor import NodeEditor
 from ayris.gui.widgets.node_editor.bridge import MAIN_PORT
+from ayris.gui.widgets.node_editor.edge_item import EdgeItem
 from ayris.gui.widgets.node_editor.scene import NodeScene
 from ayris.gui.widgets.node_editor.view import NodeView
 
@@ -841,3 +843,202 @@ def test_select_path_is_exclusive_so_delete_hits_the_right_node(
     assert editor._model.command is not None
     # The third block ("2") is gone; the first two survive in order.
     assert [b.params["text"] for b in editor._model.command.actions] == ["0", "1"]
+
+
+# ----------------------------------------------------------------------
+# задержка на проводе: «Пауза» свёрнута в чип, клик правит модель
+# ----------------------------------------------------------------------
+
+
+def _delay_model(ms: int = 500, *, comment: str | None = None) -> ActionListModel:
+    # A → Пауза → B: линейный «Sleep» между двумя «Say» сворачивается в чип на проводе.
+    sleep = ActionBlock(type="Sleep", params={"ms": ms})
+    if comment is not None:
+        sleep.comment = comment
+    return _model(
+        CommandModel(
+            name="Пауза на проводе",
+            actions=[
+                ActionBlock(type="Say", params={"text": "A"}),
+                sleep,
+                ActionBlock(type="Say", params={"text": "B"}),
+            ],
+        )
+    )
+
+
+def _plain_model() -> ActionListModel:
+    return _model(
+        CommandModel(
+            name="Без паузы",
+            actions=[
+                ActionBlock(type="Say", params={"text": "A"}),
+                ActionBlock(type="Say", params={"text": "B"}),
+            ],
+        )
+    )
+
+
+def _wire_between(scene: NodeScene, source_id: str, target_id: str) -> EdgeItem:
+    for wire in scene._edges:
+        if wire.source_id == source_id and wire.target_id == target_id:
+            return wire
+    raise AssertionError(f"нет провода {source_id}→{target_id}")
+
+
+def test_folded_pause_has_no_card(theme: ThemeManager, catalog: BlockCatalog) -> None:
+    # Линейная «Пауза» между A и B не рисуется карточкой: остаются две видимые ноды.
+    scene = NodeScene(_delay_model(500), theme, catalog=catalog)
+    scene.rebuild()
+    assert scene.node_item("actions[1]") is None
+    assert set(scene._nodes) == {"actions[0]", "actions[2]"}
+    assert len(scene._edges) == 1
+
+
+def test_wire_carries_the_folded_delay(theme: ThemeManager, catalog: BlockCatalog) -> None:
+    scene = NodeScene(_delay_model(500), theme, catalog=catalog)
+    scene.rebuild()
+    wire = _wire_between(scene, "actions[0]", "actions[2]")
+    assert wire.delay_ms == 500
+    assert wire.edge.sleep_ids == ["actions[1]"]
+
+
+def test_plain_wire_has_a_zero_chip(theme: ThemeManager, catalog: BlockCatalog) -> None:
+    scene = NodeScene(_plain_model(), theme, catalog=catalog)
+    scene.rebuild()
+    wire = _wire_between(scene, "actions[0]", "actions[1]")
+    assert wire.delay_ms == 0
+    assert wire.edge.sleep_ids == []
+
+
+def test_edge_at_chip_finds_the_wire_under_a_point(
+    theme: ThemeManager, catalog: BlockCatalog
+) -> None:
+    scene = NodeScene(_delay_model(500), theme, catalog=catalog)
+    scene.rebuild()
+    wire = _wire_between(scene, "actions[0]", "actions[2]")
+    centre = wire.path().pointAtPercent(0.5)
+    assert scene.edge_at_chip(centre) is wire
+    assert scene.edge_at_chip(QPointF(-99_999.0, -99_999.0)) is None
+
+
+def test_set_wire_delay_updates_an_existing_pause(
+    theme: ThemeManager, catalog: BlockCatalog
+) -> None:
+    model = _delay_model(500)
+    scene = NodeScene(model, theme, catalog=catalog)
+    scene.rebuild()
+    wire = _wire_between(scene, "actions[0]", "actions[2]")
+    assert scene.set_wire_delay(wire.edge, 750) is True
+    assert model.command is not None
+    assert [b.type for b in model.command.actions] == ["Say", "Sleep", "Say"]
+    assert model.command.actions[1].params["ms"] == 750
+    assert _wire_between(scene, "actions[0]", "actions[2]").delay_ms == 750
+
+
+def test_set_wire_delay_zero_drops_the_pause(theme: ThemeManager, catalog: BlockCatalog) -> None:
+    model = _delay_model(500)
+    scene = NodeScene(model, theme, catalog=catalog)
+    scene.rebuild()
+    wire = _wire_between(scene, "actions[0]", "actions[2]")
+    assert scene.set_wire_delay(wire.edge, 0) is True
+    assert model.command is not None
+    # «Пауза» удалена из модели, провод стал прямым A→B с нулевым чипом.
+    assert [b.type for b in model.command.actions] == ["Say", "Say"]
+    assert _wire_between(scene, "actions[0]", "actions[1]").delay_ms == 0
+
+
+def test_set_wire_delay_inserts_a_pause_on_a_plain_wire(
+    theme: ThemeManager, catalog: BlockCatalog
+) -> None:
+    model = _plain_model()
+    scene = NodeScene(model, theme, catalog=catalog)
+    scene.rebuild()
+    wire = _wire_between(scene, "actions[0]", "actions[1]")
+    assert scene.set_wire_delay(wire.edge, 300) is True
+    assert model.command is not None
+    # Прямой провод обзавёлся «Паузой»: она встала между A и B в модели.
+    assert [b.type for b in model.command.actions] == ["Say", "Sleep", "Say"]
+    assert model.command.actions[1].params["ms"] == 300
+    assert _wire_between(scene, "actions[0]", "actions[2]").delay_ms == 300
+
+
+def test_set_wire_delay_keeps_a_reused_pause_comment(
+    theme: ThemeManager, catalog: BlockCatalog
+) -> None:
+    # Правка задержки на одиночной «Паузе» сохраняет её комментарий, а не сбрасывает.
+    model = _delay_model(500, comment="подожди тут")
+    scene = NodeScene(model, theme, catalog=catalog)
+    scene.rebuild()
+    wire = _wire_between(scene, "actions[0]", "actions[2]")
+    assert scene.set_wire_delay(wire.edge, 750) is True
+    assert model.command is not None
+    assert model.command.actions[1].comment == "подожди тут"
+
+
+def test_highlight_folded_pause_lights_its_wire(theme: ThemeManager, catalog: BlockCatalog) -> None:
+    # У свёрнутой «Паузы» нет карточки: отладка подсвечивает её провод, а не роняет сцену.
+    scene = NodeScene(_delay_model(500), theme, catalog=catalog)
+    scene.rebuild()
+    wire = _wire_between(scene, "actions[0]", "actions[2]")
+    scene.highlight_block("actions[1]")
+    assert scene.running_item() is None
+    assert scene._running_id == "actions[1]"
+    assert wire._running is True
+    scene.clear_running()
+    assert scene._running_id is None
+    assert wire._running is False
+
+
+def test_editor_edit_delay_writes_through_the_dialog(
+    theme: ThemeManager, catalog: BlockCatalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Клик по чипу открывает QInputDialog; подтверждение правит «Паузу» через сцену и модель.
+    model = _delay_model(500)
+    editor = NodeEditor(model, theme, catalog=catalog)
+    editor.rebuild()
+    wire = _wire_between(editor._scene, "actions[0]", "actions[2]")
+    stub = SimpleNamespace(getInt=lambda *_a, **_k: (750, True))
+    monkeypatch.setattr("ayris.gui.widgets.node_editor.editor.QInputDialog", stub)
+    editor._edit_delay(wire)
+    assert model.command is not None
+    assert model.command.actions[1].params["ms"] == 750
+
+
+def test_editor_edit_delay_cancelled_leaves_model_untouched(
+    theme: ThemeManager, catalog: BlockCatalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = _delay_model(500)
+    editor = NodeEditor(model, theme, catalog=catalog)
+    editor.rebuild()
+    wire = _wire_between(editor._scene, "actions[0]", "actions[2]")
+    stub = SimpleNamespace(getInt=lambda *_a, **_k: (0, False))
+    monkeypatch.setattr("ayris.gui.widgets.node_editor.editor.QInputDialog", stub)
+    editor._edit_delay(wire)
+    assert model.command is not None
+    # Отмена (ok=False) ничего не меняет, даже если возвращённое значение 0.
+    assert model.command.actions[1].params["ms"] == 500
+
+
+def test_view_click_on_chip_emits_delay_chip_clicked(
+    theme: ThemeManager, catalog: BlockCatalog
+) -> None:
+    scene = NodeScene(_delay_model(500), theme, catalog=catalog)
+    view = NodeView(scene)
+    view.resize(800, 600)
+    scene.rebuild()
+    wire = _wire_between(scene, "actions[0]", "actions[2]")
+    fired: list[object] = []
+    view.delay_chip_clicked.connect(fired.append)
+    centre = wire.path().pointAtPercent(0.5)
+    local = QPointF(view.mapFromScene(centre))
+    press = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        local,
+        local,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    view.mousePressEvent(press)
+    assert fired == [wire]

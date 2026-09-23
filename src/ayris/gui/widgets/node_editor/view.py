@@ -45,6 +45,9 @@ class NodeView(QGraphicsView):
     breakpoint_toggled = Signal(str)
     #: Emitted when the user presses Delete/Backspace to remove the selected node.
     delete_requested = Signal()
+    #: Emitted when a wire's delay chip is clicked, carrying its :class:`EdgeItem` so the
+    #: editor can open the «Пауза» prompt for that connection.
+    delay_chip_clicked = Signal(object)
 
     def __init__(self, scene: NodeScene, parent: QWidget | None = None) -> None:
         super().__init__(scene, parent)
@@ -157,6 +160,14 @@ class NodeView(QGraphicsView):
             return
         if event.button() == Qt.MouseButton.LeftButton:
             scene_point = self.mapToScene(event.position().toPoint())
+            # A wire's delay chip wins the click: it sits in empty space between the two
+            # nodes, so testing it first lets a click there edit the «Пауза» instead of
+            # falling through to a rubber-band selection.
+            chip = self._node_scene.edge_at_chip(scene_point)
+            if chip is not None:
+                self.delay_chip_clicked.emit(chip)
+                event.accept()
+                return
             node = self._node_scene.node_at_point(scene_point)
             if node is not None:
                 port = node.output_port_at(scene_point)

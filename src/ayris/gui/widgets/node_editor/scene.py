@@ -18,11 +18,17 @@ from PySide6.QtWidgets import QGraphicsScene, QGraphicsSceneMouseEvent
 from ayris.actions.macros.blocks.catalog import BlockCatalog
 from ayris.gui.widgets.action_list import ActionListModel, BlockPath
 from ayris.gui.widgets.node_editor.bridge import (
+    MAIN_PORT,
+    DisplayEdge,
     GraphEdge,
+    GraphNode,
     NodeGraph,
     can_connect,
+    collapse_delays,
     command_from_graph,
     graph_from_command,
+    make_delay_block,
+    role_of,
     summary_of,
 )
 from ayris.gui.widgets.node_editor.edge_item import EdgeItem, bezier_path
@@ -145,13 +151,20 @@ class NodeScene(QGraphicsScene):
             return
         self._path_by_id = {row.path_text: row.path for row in self._model.rows()}
         graph = graph_from_command(command, catalog=self._catalog, positions=self._positions)
-        if any(node.id not in self._positions for node in graph.nodes):
-            auto_layout(graph)
-            for node in graph.nodes:  # saved coordinates win over the auto pass
+        # Fold every linear «Пауза» onto its wire: such a block draws as a delay chip on the
+        # connection, not as its own card. ``hidden`` names the folded nodes to skip and
+        # ``display`` the wires to draw, each carrying the summed delay. A pause that cannot
+        # fold (the root, disabled, or with no successor) is absent from ``hidden`` and keeps
+        # its card, so a delay is never hidden without a place left to edit it.
+        hidden, display = collapse_delays(graph)
+        visible = [node for node in graph.nodes if node.id not in hidden]
+        if any(node.id not in self._positions for node in visible):
+            self._layout_collapsed(graph, visible, display)
+            for node in visible:  # saved coordinates win over the auto pass
                 if node.id in self._positions:
                     node.x, node.y = self._positions[node.id]
         self._graph = graph
-        for node in graph.nodes:
+        for node in visible:
             danger = self._is_dangerous(node.block.type)
             item = NodeItem(
                 node,
@@ -162,12 +175,19 @@ class NodeScene(QGraphicsScene):
             )
             self.addItem(item)
             self._nodes[node.id] = item
-        for edge in graph.edges:
-            source = self._nodes.get(edge.source_id)
-            target = self._nodes.get(edge.target_id)
+        for wire_edge in display:
+            source = self._nodes.get(wire_edge.source_id)
+            target = self._nodes.get(wire_edge.target_id)
             if source is None or target is None:
                 continue
-            wire = EdgeItem(source, edge.source_port, target, self._theme)
+            wire = EdgeItem(
+                source,
+                wire_edge.source_port,
+                target,
+                self._theme,
+                edge=wire_edge,
+                delay_ms=wire_edge.delay_ms,
+            )
             self.addItem(wire)
             self._edges.append(wire)
         self._positions = self.layout()
@@ -182,6 +202,40 @@ class NodeScene(QGraphicsScene):
     def _is_dangerous(self, block_type: str) -> bool:
         meta = self._catalog.try_get(block_type)
         return bool(meta is not None and meta.is_dangerous)
+
+    def _layout_collapsed(
+        self,
+        graph: NodeGraph,
+        visible: list[GraphNode],
+        display: list[DisplayEdge],
+    ) -> None:
+        """Auto-layout only the visible nodes, wired by the collapsed display edges.
+
+        Folding a «Пауза» onto a wire removes its card, so laying out the *full* graph would
+        leave the folded pause's column empty and stretch the wire across the gap. Laying out
+        a throwaway graph of just the visible nodes — joined by the display edges, which
+        already skip the folded pauses — packs the flow one column per visible step. The
+        :class:`GraphNode` objects are shared, so their ``x``/``y`` are written straight onto
+        the real graph.
+        """
+        compact = NodeGraph(
+            nodes=visible,
+            edges=[GraphEdge(edge.source_id, edge.source_port, edge.target_id) for edge in display],
+            root_id=graph.root_id,
+        )
+        auto_layout(compact)
+
+    def auto_arrange(self) -> None:
+        """Re-lay-out the visible flow left-to-right (folded pauses excluded) and keep it.
+
+        The toolbar's «Упорядочить» runs this: it lays out the collapsed topology so a wire
+        with a delay does not open a hole where its chip-folded pause used to sit, then keeps
+        the fresh coordinates for the rebuild that frames the graph.
+        """
+        hidden, display = collapse_delays(self._graph)
+        visible = [node for node in self._graph.nodes if node.id not in hidden]
+        self._layout_collapsed(self._graph, visible, display)
+        self.set_layout({node.id: (node.x, node.y) for node in visible})
 
     # -- selection ----------------------------------------------------------
 
@@ -314,6 +368,70 @@ class NodeScene(QGraphicsScene):
         self._graph.edges = kept
         return self._rebuild_from_graph() is not None
 
+    def edge_at_chip(self, scene_point: QPointF) -> EdgeItem | None:
+        """The wire whose delay chip is under a scene point — the click target for editing."""
+        for wire in self._edges:
+            if wire.chip_contains(scene_point):
+                return wire
+        return None
+
+    def set_wire_delay(self, display: DisplayEdge, ms: int) -> bool:
+        """Set the «Пауза» a wire carries (0 removes it), editing the model through the graph.
+
+        The chip maps onto a graph edit, uniform with connect/disconnect: the run of folded
+        pause nodes on the wire is replaced by a single «Пауза» of ``ms`` — or, when ``ms`` is
+        0, by a direct wire with no pause at all — then the command is rebuilt so both views
+        and the ``.ayris`` file agree. A lone existing pause keeps its comment and flags; extra
+        folded pauses collapse into the one. Returns ``False`` when there is nothing to edit (no
+        command loaded, or the wire's ends are gone).
+        """
+        if self._model.command is None:
+            return False
+        source = self._graph.node_by_id(display.source_id)
+        target = self._graph.node_by_id(display.target_id)
+        if source is None or target is None:
+            return False
+        ms = max(0, int(ms))
+        reused = self._graph.node_by_id(display.sleep_ids[0]) if display.sleep_ids else None
+        doomed = set(display.sleep_ids)
+        run_key = (display.source_id, display.source_port, display.target_id)
+        self._graph.nodes = [node for node in self._graph.nodes if node.id not in doomed]
+        self._graph.edges = [
+            edge
+            for edge in self._graph.edges
+            if edge.source_id not in doomed and edge.target_id not in doomed and edge.key != run_key
+        ]
+        if ms <= 0:
+            self._graph.edges.append(
+                GraphEdge(display.source_id, display.source_port, display.target_id)
+            )
+        else:
+            node = self._make_delay_node(reused, ms)
+            self._graph.nodes.append(node)
+            self._graph.edges.append(GraphEdge(display.source_id, display.source_port, node.id))
+            self._graph.edges.append(GraphEdge(node.id, MAIN_PORT, display.target_id))
+        return self._rebuild_from_graph() is not None
+
+    def _make_delay_node(self, reused: GraphNode | None, ms: int) -> GraphNode:
+        """A «Пауза» graph node of ``ms``, reusing an existing pause's id, comment and flags."""
+        block = make_delay_block(ms)
+        if reused is not None:
+            block.enabled = reused.block.enabled
+            block.comment = reused.block.comment
+            block.on_error = reused.block.on_error
+            if reused.block.sound is not None:
+                block.sound = reused.block.sound.model_copy(deep=True)
+            node_id = reused.id
+        else:
+            node_id = "__wire_delay__"
+        meta = self._catalog.try_get(block.type)
+        return GraphNode(
+            id=node_id,
+            block=block,
+            role=role_of(block.type, self._catalog),
+            title=meta.title_ru if meta is not None else block.type,
+        )
+
     def _selected_edge(self) -> EdgeItem | None:
         for wire in self._edges:
             if wire.isSelected():
@@ -394,14 +512,26 @@ class NodeScene(QGraphicsScene):
     # -- debug --------------------------------------------------------------
 
     def highlight_block(self, block_path: str) -> None:
-        """Mark the node at ``block_path`` (``actions[1].then[0]``) as running."""
+        """Mark the block at ``block_path`` (``actions[1].then[0]``) as running.
+
+        Usually that block is a node card; but a running «Пауза» folded onto a wire has no
+        card, so its wire is lit instead — the delay chip turns to the running colour.
+        """
         self.clear_running()
         item = self._nodes.get(block_path)
         if item is not None:
             item.set_running(True)
             self._running_id = block_path
+            return
+        for wire in self._edges:
+            if block_path in wire.edge.sleep_ids:
+                wire.set_running(True)
+                self._running_id = block_path
+                return
 
     def clear_running(self) -> None:
+        for wire in self._edges:
+            wire.set_running(False)
         if self._running_id is not None:
             item = self._nodes.get(self._running_id)
             if item is not None:

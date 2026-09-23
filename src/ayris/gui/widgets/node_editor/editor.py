@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QInputDialog,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -25,7 +26,8 @@ from ayris.actions.macros.blocks.catalog import BlockCatalog
 from ayris.gui.widgets.action_list import ActionListModel, BlockPath
 from ayris.gui.widgets.block_palette import BlockPalette
 from ayris.gui.widgets.node_editor.bridge import layout_from_json, layout_to_json
-from ayris.gui.widgets.node_editor.layout import auto_layout, free_slot
+from ayris.gui.widgets.node_editor.edge_item import EdgeItem
+from ayris.gui.widgets.node_editor.layout import free_slot
 from ayris.gui.widgets.node_editor.minimap import Minimap
 from ayris.gui.widgets.node_editor.scene import NodeScene
 from ayris.gui.widgets.node_editor.view import NodeView
@@ -87,6 +89,7 @@ class NodeEditor(QWidget):
         # source of truth for the set, so the host persists off that.
         self._scene.breakpoint_changed.connect(self.breakpoints_changed)
         self._view.delete_requested.connect(self.delete_selected)
+        self._view.delay_chip_clicked.connect(self._edit_delay)
         self._mm_toggle.clicked.connect(self._show_minimap)
         theme.theme_changed.connect(self._on_theme_changed)
 
@@ -230,6 +233,30 @@ class NodeEditor(QWidget):
     def _on_scene_selection(self, path: object) -> None:
         self._delete_button.setEnabled(bool(path))
 
+    # -- wire delay ---------------------------------------------------------
+
+    def _edit_delay(self, edge: object) -> None:
+        """Edit the «Пауза» a wire carries, from a click on its delay chip.
+
+        Opens a small millisecond prompt seeded with the wire's current delay; confirming
+        sets it on the model through the scene (which rebuilds and announces the change), so
+        «0» drops the pause and any other value folds a single «Пауза» onto the wire.
+        Cancelling leaves everything untouched.
+        """
+        if not isinstance(edge, EdgeItem):
+            return
+        value, ok = QInputDialog.getInt(
+            self,
+            "Задержка на связи",
+            "Пауза перед следующим блоком, мс:",
+            edge.delay_ms,
+            0,
+            3_600_000,
+            50,
+        )
+        if ok:
+            self._scene.set_wire_delay(edge.edge, value)
+
     # -- list-view contract -------------------------------------------------
 
     def rebuild(self) -> None:
@@ -246,9 +273,12 @@ class NodeEditor(QWidget):
         self._scene.select_path(path)
 
     def arrange(self) -> None:
-        """Auto-layout the graph left-to-right and frame it."""
-        auto_layout(self._scene.graph)
-        self._scene.set_layout(self._scene.graph.positions())
+        """Auto-layout the graph left-to-right and frame it.
+
+        Delays folded onto wires are excluded from the layout, so «Упорядочить» packs one
+        column per visible node instead of leaving a hole where a chip-folded «Пауза» sits.
+        """
+        self._scene.auto_arrange()
         self.rebuild()
         self._view.fit_all()
 
