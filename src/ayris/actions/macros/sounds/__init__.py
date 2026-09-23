@@ -9,6 +9,11 @@ from ayris.actions.macros.sounds.library import (
     SoundLibraryError,
 )
 from ayris.actions.macros.sounds.mixer import MixPolicy, PlayerOutput, SoundHandle, SoundMixer
+from ayris.actions.macros.sounds.runtime import (
+    active_sound_library,
+    build_sound_library,
+    set_active_sound_library,
+)
 
 __all__ = [
     "CatalogSound",
@@ -22,6 +27,9 @@ __all__ = [
     "SoundLibrary",
     "SoundLibraryError",
     "SoundMixer",
+    "active_sound_library",
     "bindings_for_stage",
+    "build_sound_library",
     "import_sound",
+    "set_active_sound_library",
 ]

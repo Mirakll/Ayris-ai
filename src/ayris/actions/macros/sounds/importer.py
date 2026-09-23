@@ -129,18 +129,30 @@ def _decode(source: Path, decoder: SoundDecoder | None) -> AudioChunk:
         ) from exc
     try:
         with av.open(str(source)) as container:
-            frames = list(container.decode(audio=0))
-        if not frames:
+            stream = container.streams.audio[0]
+            channels = int(stream.layout.nb_channels)
+            # PyAV 18 dropped AudioFrame.to_ndarray(format=...); reformat to packed
+            # signed 16-bit through a resampler instead, keeping the source layout
+            # and rate. Packed s16 gives interleaved samples in a (1, N·channels)
+            # array — exactly what _mono downmixes below.
+            resampler = av.AudioResampler(format="s16", layout=stream.layout)
+            parts: list[NDArray[np.int16]] = []
+            rate: int | None = None
+            for frame in container.decode(audio=0):
+                for out in resampler.resample(frame):
+                    if rate is None:
+                        rate = int(out.sample_rate)
+                    parts.append(np.asarray(out.to_ndarray(), dtype=np.int16).reshape(-1))
+            for out in resampler.resample(None):  # flush the resampler's tail
+                parts.append(np.asarray(out.to_ndarray(), dtype=np.int16).reshape(-1))
+        if not parts or rate is None:
             raise ValueError("no audio stream")
-        rate = int(frames[0].sample_rate)
-        arrays = [np.asarray(frame.to_ndarray(format="s16"), dtype=np.int16) for frame in frames]
-        data = np.concatenate(arrays, axis=-1)
+        data = np.concatenate(parts)
     except Exception as exc:
         raise SoundImportError(
             "compressed decode failed", user_message=f"Не удалось декодировать «{source.name}»."
         ) from exc
-    channels = int(data.shape[0]) if data.ndim == 2 else 1
-    return AudioChunk(data.T.astype("<i2").tobytes(), rate, channels)
+    return AudioChunk(data.astype("<i2").tobytes(), rate, channels)
 
 
 def _pcm16(raw: bytes, width: int) -> NDArray[np.int16]:

@@ -177,6 +177,41 @@ def test_mp3_uses_decoder_and_bad_files_are_explained(tmp_path: Path) -> None:
     assert "исправным WAV" in caught.value.user_message
 
 
+def test_mp3_real_decode_round_trip(tmp_path: Path) -> None:
+    # Настоящий путь PyAV — тот, что падал у пользователя на av 18 из-за
+    # to_ndarray(format=...). Кодируем стерео-mp3 через av и импортируем обратно:
+    # проверяем, что кадры читаются, каналы сводятся в моно и WAV сохраняется.
+    av = pytest.importorskip("av")
+    import numpy as np
+
+    source = tmp_path / "стерео.mp3"
+    rate = 44_100
+    samples = rate  # одна секунда
+    time = np.arange(samples, dtype=np.float64) / rate
+    left = np.sin(2 * np.pi * 220 * time)
+    right = np.sin(2 * np.pi * 440 * time)
+    interleaved = (np.stack([left, right], axis=1).reshape(-1) * 20_000).astype(np.int16)
+
+    with av.open(str(source), "w") as container:
+        stream = container.add_stream("mp3", rate=rate)
+        frame = av.AudioFrame.from_ndarray(
+            interleaved.reshape(1, -1), format="s16", layout="stereo"
+        )
+        frame.sample_rate = rate
+        for packet in stream.encode(frame):
+            container.mux(packet)
+        for packet in stream.encode(None):  # промыть хвост кодера
+            container.mux(packet)
+
+    result = import_sound(source, tmp_path / "sounds")
+    assert result.path.suffix == ".wav"
+    with wave.open(str(result.path), "rb") as saved:
+        assert saved.getnchannels() == 1  # сведено в моно
+        assert saved.getframerate() == 48_000  # ресемпл до внутренней частоты
+        assert saved.getnframes() > 0
+    assert result.duration_s == pytest.approx(1.0, abs=0.1)
+
+
 def test_queue_and_duck_policy_keep_independent_gain() -> None:
     queue_output = Output(speaking=True)
     duck_output = Output(speaking=True)
