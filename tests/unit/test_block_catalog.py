@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from ayris.actions.macros.blocks.catalog import BLOCKS_BY_CATEGORY, BlockCatalog, BlockCategory
-from ayris.actions.macros.blocks.web import set_transport
+from ayris.actions.macros.blocks.web import set_resolver, set_transport
 from ayris.actions.macros.docs import generate_block_docs
 from ayris.actions.macros.engine import MacroEngine
 from ayris.actions.macros.errors import MacroTimeoutError
@@ -148,6 +148,7 @@ def test_web_request_parses_json_path_into_variable() -> None:
     set_transport(
         httpx.MockTransport(lambda _request: httpx.Response(200, json={"data": [{"value": 42}]}))
     )
+    set_resolver(lambda _host: ["93.184.216.34"])
     fake = FakeRegistry()
     try:
         with MacroEngine(fake) as engine:
@@ -166,6 +167,7 @@ def test_web_request_parses_json_path_into_variable() -> None:
             )
     finally:
         set_transport(None)
+        set_resolver(None)
     assert report.ok
     assert fake.calls == [("Echo", {"value": 42})]
 

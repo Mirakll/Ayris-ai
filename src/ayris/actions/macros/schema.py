@@ -589,6 +589,7 @@ def _logic_blocks() -> dict[str, LogicBlockSpec]:
                 "json_path",
                 "into",
                 "max_bytes",
+                "allow_local",
             ),
         ),
         LogicBlockSpec(

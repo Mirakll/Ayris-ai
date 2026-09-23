@@ -217,6 +217,7 @@ _NATIVE_FIELDS: Final[dict[str, tuple[ParamField, ...]]] = {
         _field("json_path", required=False),
         _field("into", required=False),
         _field("max_bytes", FieldKind.INTEGER, required=False, default=1000000),
+        _field("allow_local", FieldKind.BOOLEAN, required=False, default=False),
     ),
     "ToastNotify": (
         _field("title"),
