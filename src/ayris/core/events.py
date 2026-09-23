@@ -70,6 +70,7 @@ __all__ = [
     "ActiveModelChanged",
     "AudioLevelChanged",
     "CancelRequested",
+    "CommandReloaded",
     "CommandsChanged",
     "ConfigChanged",
     "DebugFinished",
@@ -99,6 +100,7 @@ __all__ = [
     "ModelRemoved",
     "NotificationRequested",
     "OnlineStatusChanged",
+    "OpenCommandRequested",
     "OverlayToggleRequested",
     "OverlayVisibilityRequested",
     "PipelineStateChanged",
@@ -514,6 +516,18 @@ class ProfileSwitchRequested(Event):
     profile_id: int
 
 
+@dataclass(frozen=True, slots=True)
+class OpenCommandRequested(Event):
+    """The UI asked to open the «Команды» tab with one command revealed.
+
+    Published by the «Горячие клавиши» tab (task 55) when the user follows the
+    «Открыть команду» link next to a command hotkey. The main window switches to
+    the commands section and asks its tree (task 51) to select the node.
+    """
+
+    command_id: int
+
+
 # ----------------------------------------------------------------------
 # assistant state
 # ----------------------------------------------------------------------
@@ -737,6 +751,22 @@ class CommandsChanged(Event):
     """
 
     command_id: int | None = None
+    change: str = COMMANDS_CHANGE_SAVED
+
+
+@dataclass(frozen=True, slots=True)
+class CommandReloaded(Event):
+    """One command was re-applied without a restart and is live in its new form.
+
+    Published by :mod:`ayris.actions.macros.hot_reload` after a save has been
+    written, its version recorded and its triggers re-registered — the point-fine
+    counterpart of :class:`CommandsChanged`, which the trigger subsystems already
+    reload from. The tree of task 51 and the overlay listen for this to drop the
+    dirty mark and refresh a label; ``change`` says whether the command was saved,
+    disabled or deleted, so a subscriber can tell «стало иначе» from «больше нет».
+    """
+
+    command_id: int
     change: str = COMMANDS_CHANGE_SAVED
 
 

@@ -418,9 +418,33 @@ class CommandRepository(_Repository):
 
     # --- versions -----------------------------------------------------
 
-    def save_version(self, command: Command, *, comment: str = "") -> CommandVersion:
-        """Snapshot a command. The version number increments per command."""
+    def save_version(
+        self,
+        command: Command,
+        *,
+        comment: str = "",
+        important: bool = False,
+        triggers: Sequence[Trigger] | None = None,
+    ) -> CommandVersion:
+        """Snapshot a command. The version number increments per command.
+
+        The snapshot is whole: the command row *and* its triggers, so a version
+        can be diffed and exported later without re-reading the live rows — which
+        by then hold a different version. ``triggers`` defaults to the command's
+        current trigger rows; a caller that snapshots the *previous* state (the
+        editor, before it replaces the trigger set) leaves it unset and gets the
+        rows as they still stand, which is exactly the previous set.
+        """
         command_id = _require_id(command.id, "command")
+        if triggers is None:
+            triggers = [
+                Trigger.from_row(row)
+                for row in self._db.query_all(
+                    "SELECT id, command_id, type, payload_json, fuzzy, priority "
+                    'FROM "triggers" WHERE command_id = ? ORDER BY id',
+                    (command_id,),
+                )
+            ]
         snapshot: JsonObject = {
             "name": command.name,
             "description": command.description,
@@ -431,6 +455,15 @@ class CommandRepository(_Repository):
             "require_admin": command.require_admin,
             "actions": list(command.actions),
             "folder_id": command.folder_id,
+            "triggers": [
+                {
+                    "type": str(trigger.type),
+                    "payload": trigger.payload,
+                    "fuzzy": trigger.fuzzy,
+                    "priority": trigger.priority,
+                }
+                for trigger in triggers
+            ],
         }
         now = utc_now()
         with self._db.transaction():
@@ -447,10 +480,17 @@ class CommandRepository(_Repository):
             version_id = self._db.insert(
                 """
                 INSERT INTO command_versions
-                    (command_id, version, snapshot_json, comment, created_at)
-                VALUES (?, ?, ?, ?, ?)
+                    (command_id, version, snapshot_json, comment, created_at, important)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (command_id, next_version, dump_json(snapshot), comment, to_db_timestamp(now)),
+                (
+                    command_id,
+                    next_version,
+                    dump_json(snapshot),
+                    comment,
+                    to_db_timestamp(now),
+                    int(important),
+                ),
             )
         return CommandVersion(
             id=version_id,
@@ -459,12 +499,13 @@ class CommandRepository(_Repository):
             snapshot=snapshot,
             comment=comment,
             created_at=now,
+            important=important,
         )
 
     def list_versions(self, command_id: int, *, limit: int = 50) -> list[CommandVersion]:
         rows = self._db.query_all(
             """
-            SELECT id, command_id, version, snapshot_json, comment, created_at
+            SELECT id, command_id, version, snapshot_json, comment, created_at, important
               FROM command_versions WHERE command_id = ?
              ORDER BY version DESC LIMIT ?
             """,
@@ -475,12 +516,21 @@ class CommandRepository(_Repository):
     def get_version(self, command_id: int, version: int) -> CommandVersion | None:
         row = self._db.query_one(
             """
-            SELECT id, command_id, version, snapshot_json, comment, created_at
+            SELECT id, command_id, version, snapshot_json, comment, created_at, important
               FROM command_versions WHERE command_id = ? AND version = ?
             """,
             (command_id, version),
         )
         return CommandVersion.from_row(row) if row is not None else None
+
+    def mark_version_important(
+        self, command_id: int, version: int, *, important: bool = True
+    ) -> None:
+        """Pin or unpin a version so the prune keeps it regardless of its age."""
+        self._db.execute(
+            "UPDATE command_versions SET important = ? WHERE command_id = ? AND version = ?",
+            (int(important), command_id, version),
+        )
 
     def restore_version(self, command_id: int, version: int) -> Command:
         """Roll a command back to a snapshot.
@@ -520,13 +570,19 @@ class CommandRepository(_Repository):
             return self.update(restored, save_version=True, comment=f"откат к версии {version}")
 
     def prune_versions(self, command_id: int, *, keep: int = 20) -> int:
-        """Drop all but the newest ``keep`` versions. Returns rows deleted."""
+        """Drop old versions past the newest ``keep``, but never a pinned one.
+
+        A version the user marked important survives regardless of age — that is
+        the whole point of the mark — so it is excluded from the delete and does
+        not count against ``keep`` either: pinning three versions still leaves
+        ``keep`` recent ones beside them.
+        """
         cursor = self._db.execute(
             """
             DELETE FROM command_versions
-             WHERE command_id = ? AND version NOT IN (
+             WHERE command_id = ? AND important = 0 AND version NOT IN (
                    SELECT version FROM command_versions
-                    WHERE command_id = ? ORDER BY version DESC LIMIT ?
+                    WHERE command_id = ? AND important = 0 ORDER BY version DESC LIMIT ?
              )
             """,
             (command_id, command_id, keep),

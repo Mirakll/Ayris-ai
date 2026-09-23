@@ -416,6 +416,19 @@ _AUDIT_UI_INDEXES: Final = (
 )
 
 
+# Task 54 keeps a version per save, so the table grows without bound and the
+# editor prunes it — but a version the user marked important must survive the
+# prune. A flag column, defaulting to 0, is that mark; existing snapshots read
+# back as ordinary, which is what they were before anyone could pin one.
+_VERSION_IMPORTANT: Final = (
+    "ALTER TABLE command_versions ADD COLUMN important INTEGER NOT NULL DEFAULT 0 "
+    "CHECK (important IN (0, 1))",
+    # The prune keeps «the newest N, plus every important one»; a partial index
+    # on the flag makes «every important one» a lookup instead of a table scan.
+    "CREATE INDEX idx_versions_important ON command_versions (command_id) WHERE important = 1",
+)
+
+
 #: Every migration ever released, in order. Append only.
 MIGRATIONS: Final[tuple[Migration, ...]] = (
     Migration(
@@ -452,6 +465,11 @@ MIGRATIONS: Final[tuple[Migration, ...]] = (
         version=7,
         description="индексы выборок журнала аудита",
         statements=_AUDIT_UI_INDEXES,
+    ),
+    Migration(
+        version=8,
+        description="пометка важных версий команды (не вытесняются)",
+        statements=_VERSION_IMPORTANT,
     ),
 )
 

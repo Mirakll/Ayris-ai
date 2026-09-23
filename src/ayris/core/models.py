@@ -306,9 +306,15 @@ class CommandVersion:
     id: int | None = None
     comment: str = ""
     created_at: datetime | None = None
+    #: A version the user pinned so the prune of task 54 never evicts it.
+    important: bool = False
+    #: Bytes the stored snapshot occupies, shown in the history table. ``0`` when
+    #: the row was read without its ``size`` column.
+    size_bytes: int = 0
 
     @classmethod
     def from_row(cls, row: Row) -> Self:
+        keys = row.keys()
         return cls(
             id=row["id"],
             command_id=row["command_id"],
@@ -316,6 +322,8 @@ class CommandVersion:
             snapshot=load_json_object(row["snapshot_json"]),
             comment=row["comment"],
             created_at=from_db_timestamp(row["created_at"]),
+            important=bool(row["important"]) if "important" in keys else False,
+            size_bytes=len(row["snapshot_json"].encode("utf-8")) if "snapshot_json" in keys else 0,
         )
 
 

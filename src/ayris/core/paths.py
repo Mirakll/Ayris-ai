@@ -173,6 +173,15 @@ class AppPaths:
         return self.root / "cache"
 
     @property
+    def command_drafts_dir(self) -> Path:
+        """Unsaved command edits (task 54), one file per command id.
+
+        Under ``cache`` on purpose: a draft is throw-away state, not part of the
+        library, so «Очистить кэш» may take it and a profile export never does.
+        """
+        return self.cache_dir / "command_drafts"
+
+    @property
     def models_dir(self) -> Path:
         return self.root / "models"
 

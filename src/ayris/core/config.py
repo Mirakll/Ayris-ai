@@ -506,6 +506,14 @@ class WakePhrase(ConfigSection):
         le=1.0,
         description="Порог срабатывания: выше — чаще ложные, ниже — чаще пропуски",
     )
+    engine_model: str = Field(
+        default="",
+        max_length=255,
+        description=(
+            "Файл модели для этой фразы (для openWakeWord). "
+            "Пусто — движок ищет модель по самой фразе"
+        ),
+    )
     enabled: bool = Field(default=True, description="Учитывать этот вариант")
 
     @field_validator("phrase")
@@ -529,9 +537,9 @@ class WakeConfig(ConfigSection):
     )
     phrases: tuple[WakePhrase, ...] = Field(
         default=(
-            WakePhrase(phrase="айрис"),
-            WakePhrase(phrase="аирис"),
-            WakePhrase(phrase="ирис", sensitivity=0.65),
+            WakePhrase(phrase="айрис", sensitivity=0.111, engine_model="айрис.onnx"),
+            WakePhrase(phrase="аирис", sensitivity=0.111, engine_model="айрис.onnx"),
+            WakePhrase(phrase="ирис", sensitivity=0.111, engine_model="айрис.onnx"),
         ),
         description="Варианты произношения. Пустой список отключает активацию голосом",
         json_schema_extra=_restart(RestartScope.WAKE),
@@ -817,6 +825,22 @@ class CommandsConfig(ConfigSection):
         ge=0.0,
         le=300.0,
         description="Сколько ждать ответа на уточняющий вопрос",
+    )
+    draft_autosave_s: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=120.0,
+        description="Как часто сохранять черновик несохранённой команды (0 — не сохранять)",
+    )
+    version_history_limit: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+        description="Сколько версий команды хранить, кроме помеченных важными",
+    )
+    action_view: Literal["nodes", "list"] = Field(
+        default="nodes",
+        description="Каким показывать редактор действий команды: нодовым холстом или списком",
     )
 
 
@@ -1784,6 +1808,7 @@ class WindowConfig(ConfigSection):
     width: int = Field(default=1100, ge=640, le=16384, description="Ширина окна")
     height: int = Field(default=760, ge=480, le=16384, description="Высота окна")
     section: str = Field(default="general", description="Последний открытый раздел")
+    fullscreen: bool = Field(default=False, description="Открывать окно во весь экран")
 
 
 class Settings(BaseSettings):
