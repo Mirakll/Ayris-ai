@@ -25,6 +25,7 @@ from ayris.utils.hotkeys import HotkeyNotationError, canonical_hotkey
 _HOTKEY = re.compile(r"^(?P<hotkey>[^:;]+?)::(?P<inline>.*)$")
 _ASSIGN = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::=|=(?!=))\s*(?P<value>.*)$")
 _SEND_TOKEN = re.compile(r"\{([^{}]+)\}")
+_MAX_SCRIPT_BYTES = 32 * 1024 * 1024
 
 
 class UnknownLinePolicy(StrEnum):
@@ -135,6 +136,8 @@ class AutoHotkeyImporter(Importer):
 
 
 def _read_script(path: Path) -> str:
+    if path.stat().st_size > _MAX_SCRIPT_BYTES:
+        raise ValueError(f"AHK-файл больше {_MAX_SCRIPT_BYTES // 1024 // 1024} МиБ")
     raw = path.read_bytes()
     encodings = ("utf-8-sig", "utf-16", "cp1251")
     for encoding in encodings:
