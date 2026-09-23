@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Скроллбар — варианты</title>
+<style>
+  :root {
+    --background: #16131F;
+    --surface: #1C1830;
+    --surface_highlight: #29223C;
+    --border: #2E2742;
+    --accent: #9B6DFF;
+    --accent_hover: #B092FF;
+    --accent_pressed: #8458E8;
+    --text_primary: #ECE7F6;
+    --text_secondary: #C3BAD9;
+    --text_muted: #948AAC;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--background);
+    color: var(--text_primary);
+    font-family: "Inter", "Segoe UI", Arial, sans-serif;
+    padding: 32px;
+  }
+  h1 { font-size: 28px; font-weight: 700; margin: 0 0 4px; }
+  .lead { color: var(--text_secondary); margin: 0 0 28px; max-width: 720px; line-height: 1.5; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 24px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+  }
+  .card h2 { font-size: 16px; font-weight: 700; margin: 0 0 2px; }
+  .card .tag { color: var(--text_muted); font-size: 12px; margin: 0 0 16px; }
+  .scroll {
+    height: 220px;
+    overflow-y: scroll;
+    background: var(--surface_highlight);
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .scroll p { margin: 0 0 12px; color: var(--text_secondary); line-height: 1.55; font-size: 14px; }
+  .scroll p:first-child { color: var(--text_primary); font-weight: 500; }
+  .hint { color: var(--text_muted); font-size: 12px; margin: 12px 0 0; line-height: 1.4; }
+
+  /* ─── Вариант A. Тонкий минимал (без кнопок) ─── */
+  .v-a .scroll::-webkit-scrollbar { width: 8px; }
+  .v-a .scroll::-webkit-scrollbar-track { background: transparent; }
+  .v-a .scroll::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 8px;
+  }
+  .v-a .scroll::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+  /* ─── Вариант B. Плавающая пилюля с отступом ─── */
+  .v-b .scroll::-webkit-scrollbar { width: 14px; }
+  .v-b .scroll::-webkit-scrollbar-track { background: transparent; }
+  .v-b .scroll::-webkit-scrollbar-thumb {
+    background: var(--surface_highlight);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: 10px;
+    min-height: 40px;
+  }
+  .v-b .scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--text_muted);
+    background-clip: padding-box;
+  }
+
+  /* ─── Вариант C. Акцентный бегунок на дорожке ─── */
+  .v-c .scroll::-webkit-scrollbar { width: 12px; }
+  .v-c .scroll::-webkit-scrollbar-track {
+    background: var(--background);
+    border-radius: 10px;
+    margin: 4px;
+  }
+  .v-c .scroll::-webkit-scrollbar-thumb {
+    background: var(--accent);
+    border-radius: 10px;
+    min-height: 44px;
+  }
+  .v-c .scroll::-webkit-scrollbar-thumb:hover { background: var(--accent_hover); }
+
+  /* ─── Вариант D. Градиентный бегунок ─── */
+  .v-d .scroll::-webkit-scrollbar { width: 12px; }
+  .v-d .scroll::-webkit-scrollbar-track {
+    background: var(--background);
+    border-radius: 10px;
+  }
+  .v-d .scroll::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, var(--accent_hover), var(--accent_pressed));
+    border-radius: 10px;
+    min-height: 44px;
+  }
+  .v-d .scroll::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, var(--accent), var(--accent_pressed));
+  }
+
+  /* ─── Текущий (для сравнения) ─── */
+  .v-now .scroll { scrollbar-width: auto; }
+  .v-now .scroll::-webkit-scrollbar { width: 16px; }
+  .v-now .scroll::-webkit-scrollbar-track {
+    background: #3a3a3a;
+    border-left: 1px solid #555;
+  }
+  .v-now .scroll::-webkit-scrollbar-thumb {
+    background: #6b6b6b;
+    border: 1px solid #444;
+  }
+  .v-now .scroll::-webkit-scrollbar-button {
+    background: #565656;
+    height: 16px;
+    display: block;
+    border: 1px solid #444;
+  }
+  .v-now h2 { color: var(--text_muted); }
+</style>
+</head>
+<body>
+  <h1>Скроллбар настроек — варианты</h1>
+  <p class="lead">Сейчас полоса прокрутки рисуется системой Windows (штриховка + квадратные кнопки со стрелками), потому что в QSS-теме для неё нет ни одного правила. Ниже — четыре варианта в цветах вашей тёмно-фиолетовой темы, все воспроизводимы в QSS. Покрутите содержимое в каждой карточке и наведите курсор на полосу.</p>
+
+  <div class="grid">
+    <div class="card v-a">
+      <h2>A. Тонкий минимал</h2>
+      <p class="tag">8 px · без кнопок · бегунок подсвечивается акцентом при наведении</p>
+      <div class="scroll">
+        <p>Наведи курсор на полосу справа.</p>
+        <p>Самый спокойный вариант: узкая полоса цвета границы, которая не спорит с контентом. Кнопки-стрелки убраны совсем.</p>
+        <p>При наведении бегунок становится фиолетовым — понятно, что за него можно схватиться.</p>
+        <p>Хорошо подходит для длинных списков настроек, где полоса не должна отвлекать.</p>
+        <p>Дорожка полностью прозрачная — видно фон карточки.</p>
+        <p>Ещё немного текста для прокрутки.</p>
+        <p>И ещё строка.</p>
+      </div>
+      <p class="hint">Минимализм. Ближе всего к macOS / VS Code.</p>
+    </div>
+
+    <div class="card v-b">
+      <h2>B. Плавающая пилюля</h2>
+      <p class="tag">14 px · бегунок с отступом от края · нейтральный, светлеет при наведении</p>
+      <div class="scroll">
+        <p>Наведи курсор на полосу справа.</p>
+        <p>Бегунок «висит» с отступом от края за счёт прозрачной рамки — получается аккуратная пилюля, а не полоса вплотную к стенке.</p>
+        <p>Цвет нейтральный, при наведении чуть светлеет. Без акцента, чтобы не перетягивать внимание.</p>
+        <p>Дорожки как таковой нет — только бегунок на фоне контента.</p>
+        <p>Такой стиль часто у Telegram и современных десктоп-приложений.</p>
+        <p>Ещё немного текста для прокрутки.</p>
+        <p>И ещё строка.</p>
+      </div>
+      <p class="hint">Нейтрально и современно. Не привязан к акценту темы.</p>
+    </div>
+
+    <div class="card v-c">
+      <h2>C. Акцентный бегунок</h2>
+      <p class="tag">12 px · тёмная дорожка + фиолетовый бегунок · заметный</p>
+      <div class="scroll">
+        <p>Наведи курсор на полосу справа.</p>
+        <p>Здесь бегунок всегда фиолетовый — сразу видно и позицию, и что это интерактивный элемент.</p>
+        <p>Под ним — тёмная утопленная дорожка со скруглением, она задаёт «жёлоб».</p>
+        <p>Хорошо перекликается с уже стилизованным слайдером (у него бегунок тоже акцентный).</p>
+        <p>Чуть заметнее варианта A, единый почерк с остальными контролами.</p>
+        <p>Ещё немного текста для прокрутки.</p>
+        <p>И ещё строка.</p>
+      </div>
+      <p class="hint">В одном почерке со слайдером и кнопками.</p>
+    </div>
+
+    <div class="card v-d">
+      <h2>D. Градиентный бегунок</h2>
+      <p class="tag">12 px · дорожка + градиент акцента · самый «фирменный»</p>
+      <div class="scroll">
+        <p>Наведи курсор на полосу справа.</p>
+        <p>То же, что C, но бегунок с вертикальным градиентом от светлого к тёмному акценту — выглядит объёмнее.</p>
+        <p>Самый выразительный вариант, добавляет теме характера.</p>
+        <p>Риск: на очень длинных списках может казаться чуть перегруженным.</p>
+        <p>Дорожка утопленная, скруглённая.</p>
+        <p>Ещё немного текста для прокрутки.</p>
+        <p>И ещё строка.</p>
+      </div>
+      <p class="hint">Максимально «брендовый». Заметный акцент.</p>
+    </div>
+
+    <div class="card v-now">
+      <h2>Сейчас (системный)</h2>
+      <p class="tag">≈16 px · штриховка + квадратные кнопки — то, что на скриншоте</p>
+      <div class="scroll">
+        <p>Наведи курсор на полосу справа.</p>
+        <p>Это грубая имитация нативной полосы Windows: широкая, с кнопками-стрелками и серым бегунком, выбивается из тёмной темы.</p>
+        <p>Именно от неё уходим.</p>
+        <p>Ещё немного текста для прокрутки.</p>
+        <p>И ещё строка.</p>
+        <p>И ещё одна.</p>
+      </div>
+      <p class="hint">Текущее состояние для сравнения.</p>
+    </div>
+  </div>
+</body>
+</html>

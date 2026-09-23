@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Ayris — неоновый каркасный глобус (прототип)</title>
+<style>
+  :root {
+    /* Токены темы Ayris (dark_purple.json) — прототип держит их вручную,
+       в приложении цвета придут из ThemeManager. */
+    --bg: #090712;
+    --accent: #9B6DFF;   /* фиолетовый */
+    --info:   #68B8FF;   /* синий/голубой */
+    --error:  #FF6685;
+    --text:   #F7F3FF;
+    --muted:  #9287AA;
+    --surface: #141022;
+    --border: #3A3154;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* Панель подгонки */
+  #panel {
+    position: fixed; top: 12px; right: 12px; width: 268px;
+    background: rgba(20, 16, 34, 0.82);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 12px 14px; color: var(--text);
+    font: 12px/1.4 "Segoe UI", system-ui, sans-serif;
+    backdrop-filter: blur(8px);
+    max-height: calc(100vh - 24px); overflow-y: auto;
+  }
+  #panel h1 { font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  #panel .row { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px;
+    align-items: center; margin: 7px 0; }
+  #panel label { color: var(--text); }
+  #panel .val { color: var(--info); font-variant-numeric: tabular-nums; min-width: 40px; text-align: right; }
+  #panel input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); margin: 0; }
+  #panel input[type=color] { width: 40px; height: 22px; padding: 0; border: 1px solid var(--border);
+    border-radius: 5px; background: none; }
+  #panel .sep { height: 1px; background: var(--border); margin: 11px 0 9px; border: 0; }
+  #states { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    display: flex; gap: 8px; }
+  #states button {
+    background: var(--surface); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 8px 14px; font: 13px "Segoe UI", system-ui, sans-serif; cursor: pointer;
+  }
+  #states button:hover { border-color: var(--accent); background: #211A35; }
+  #states button.active { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  #hud { position: fixed; left: 12px; bottom: 12px; color: var(--muted);
+    font: 12px ui-monospace, monospace; }
+  #err { position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+    color: var(--text); font: 15px "Segoe UI", sans-serif; text-align: center; padding: 40px;
+    background: var(--bg); }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+
+<div id="panel">
+  <h1>Подгонка глобуса</h1>
+
+  <div class="row"><label>Цвет верх (accent)</label><input type="color" id="colTop" value="#9B6DFF"></div>
+  <div class="row"><label>Цвет низ (info)</label><input type="color" id="colBot" value="#68B8FF"></div>
+
+  <hr class="sep">
+  <div class="row"><label>Параллелей</label><span class="val" id="vLat">18</span>
+    <input type="range" id="lat" min="6" max="40" step="1" value="18"></div>
+  <div class="row"><label>Меридианов</label><span class="val" id="vLon">24</span>
+    <input type="range" id="lon" min="6" max="48" step="1" value="24"></div>
+
+  <hr class="sep">
+  <div class="row"><label>Амплитуда волны</label><span class="val" id="vAmp">0.045</span>
+    <input type="range" id="amp" min="0" max="0.15" step="0.005" value="0.045"></div>
+  <div class="row"><label>Частота волны</label><span class="val" id="vFreq">2.4</span>
+    <input type="range" id="freq" min="0.5" max="6" step="0.1" value="2.4"></div>
+  <div class="row"><label>Скорость волны</label><span class="val" id="vWspd">0.9</span>
+    <input type="range" id="wspd" min="0" max="3" step="0.1" value="0.9"></div>
+
+  <hr class="sep">
+  <div class="row"><label>Свечение (bloom)</label><span class="val" id="vBloom">0.90</span>
+    <input type="range" id="bloom" min="0" max="2.5" step="0.05" value="0.9"></div>
+  <div class="row"><label>Порог bloom</label><span class="val" id="vThr">0.22</span>
+    <input type="range" id="thr" min="0" max="1" step="0.02" value="0.22"></div>
+  <div class="row"><label>Радиус bloom</label><span class="val" id="vRad">0.45</span>
+    <input type="range" id="rad" min="0" max="1.5" step="0.05" value="0.45"></div>
+
+  <hr class="sep">
+  <div class="row"><label>Скорость вращения</label><span class="val" id="vRot">0.22</span>
+    <input type="range" id="rot" min="0" max="1.5" step="0.02" value="0.22"></div>
+  <div class="row"><label>Глубина: затухание</label><span class="val" id="vDepth">0.85</span>
+    <input type="range" id="depth" min="0" max="1" step="0.02" value="0.85"></div>
+  <div class="row"><label>Толщина линий</label><span class="val" id="vLw">1.4</span>
+    <input type="range" id="lw" min="0.5" max="3" step="0.1" value="1.4"></div>
+
+  <hr class="sep">
+  <div class="row"><label>Уровень микрофона</label><span class="val" id="vLvl">0.35</span>
+    <input type="range" id="lvl" min="0" max="1" step="0.01" value="0.35"></div>
+</div>
+
+<div id="states">
+  <button data-state="idle" class="active">Покой</button>
+  <button data-state="listening">Слушаю</button>
+  <button data-state="thinking">Думаю</button>
+  <button data-state="speaking">Говорю</button>
+  <button data-state="error">Ошибка</button>
+</div>
+
+<div id="hud">—</div>
+<div id="err"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.185.1/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.185.1/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const stage = document.getElementById('stage');
+
+// ---- рендерер: один на страницу, alpha, pixelRatio ≤ 2 (threejs.csv №6,7,8) ----
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 0);
+// ACES тон-маппинг гасит выбивание в белый там, где пересекаются линии,
+// сохраняя неоновый цвет вместо пересвета (threejs.csv №40).
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.35;
+stage.appendChild(renderer.domElement);
+renderer.domElement.setAttribute('role', 'img');
+renderer.domElement.setAttribute('aria-label', 'Неоновый каркасный глобус-ассистент');
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 100);
+camera.position.set(0, 0, 3.2);
+camera.lookAt(0, 0, 0);
+
+// ---- параметры, которыми крутит панель ----
+const P = {
+  colorTop: new THREE.Color('#9B6DFF'),
+  colorBot: new THREE.Color('#68B8FF'),
+  colorError: new THREE.Color('#FF6685'),
+  lat: 18, lon: 24,
+  amp: 0.045, freq: 2.4, waveSpeed: 0.9,
+  bloom: 0.9, bloomThreshold: 0.22, bloomRadius: 0.45,
+  rot: 0.22, depthFalloff: 0.85, lineWidth: 1.4,
+  level: 0.35,
+};
+
+// ---- состояния ----
+const STATES = {
+  idle:      { rot: 0.22, amp: 0.045, freq: 2.4, chaos: 0.0, error: 0.0, pulse: 0.0 },
+  listening: { rot: 0.30, amp: 0.055, freq: 2.4, chaos: 0.0, error: 0.0, pulse: 1.0 },
+  thinking:  { rot: 1.05, amp: 0.11,  freq: 4.2, chaos: 1.0, error: 0.0, pulse: 0.0 },
+  speaking:  { rot: 0.40, amp: 0.07,  freq: 3.0, chaos: 0.15, error: 0.0, pulse: 0.0, waves: 1.0 },
+  error:     { rot: 0.05, amp: 0.05,  freq: 2.4, chaos: 0.3, error: 1.0, pulse: 0.0, shake: 1.0 },
+};
+let stateName = 'idle';
+let cur = { ...STATES.idle, waves: 0, shake: 0 };
+const target = () => STATES[stateName];
+
+// ---- шейдер каркаса: градиент по вертикали, глубина по view-space z, дыхание ----
+const uniforms = {
+  uTime:        { value: 0 },
+  uColorTop:    { value: P.colorTop },
+  uColorBot:    { value: P.colorBot },
+  uColorError:  { value: P.colorError },
+  uAmp:         { value: P.amp },
+  uFreq:        { value: P.freq },
+  uWaveSpeed:   { value: P.waveSpeed },
+  uDepthFalloff:{ value: P.depthFalloff },
+  uError:       { value: 0 },
+  uRadiusScale: { value: 1.0 },
+  uChaos:       { value: 0.0 },
+  uWaves:       { value: 0.0 },
+};
+
+const vertexShader = /* glsl */`
+  uniform float uTime;
+  uniform float uAmp;
+  uniform float uFreq;
+  uniform float uWaveSpeed;
+  uniform float uRadiusScale;
+  uniform float uChaos;
+  varying float vDepth;      // 0 = дальняя точка, 1 = ближняя
+  varying float vY;          // -1..1, для вертикального градиента
+  varying float vWave;
+
+  // дешёвый 3D-шум на синусах — органическая деформация без текстур
+  float wave(vec3 p, float t) {
+    float w = sin(p.x * uFreq + t) * 0.6
+            + sin(p.y * uFreq * 1.3 - t * 0.8) * 0.3
+            + sin(p.z * uFreq * 0.7 + t * 1.2) * 0.4;
+    return w;
+  }
+
+  void main() {
+    vec3 dir = normalize(position);
+    float t = uTime * uWaveSpeed;
+    float w = wave(position, t);
+    float chaos = uChaos * sin(dot(position, vec3(12.9, 78.2, 37.7)) + uTime * 6.0) * 0.5;
+    float disp = 1.0 + (w * uAmp) + chaos * uAmp;
+    vec3 p = dir * disp * uRadiusScale;
+    vWave = w;
+
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    // view-space z: у камеры на +Z ближние точки имеют больший z (ближе к 0/положит.)
+    vDepth = clamp((mv.z + 1.0) / 2.0, 0.0, 1.0);
+    vY = dir.y;
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const fragmentShader = /* glsl */`
+  uniform vec3 uColorTop;
+  uniform vec3 uColorBot;
+  uniform vec3 uColorError;
+  uniform float uDepthFalloff;
+  uniform float uError;
+  uniform float uWaves;
+  uniform float uTime;
+  varying float vDepth;
+  varying float vY;
+  varying float vWave;
+
+  void main() {
+    // вертикальный градиент фиолетовый (верх) → синий (низ)
+    float g = clamp(vY * 0.5 + 0.5, 0.0, 1.0);
+    vec3 base = mix(uColorBot, uColorTop, g);
+    base = mix(base, uColorError, uError);
+
+    // Глубина линейная (без квадрата): заднюю полусферу гасим, но не в ноль —
+    // иначе глобус выглядит прозрачным призраком, а не сплошным шаром.
+    float depth = mix(1.0 - uDepthFalloff, 1.0, vDepth);
+
+    // ВОЛНА ПО ПОВЕРХНОСТИ: подсвечиваем гребни деформации vWave — они бегут
+    // по глобусу вместе с фазой uTime из вершинного шейдера. Раньше vWave на
+    // яркость не влиял вовсе, поэтому линии стояли мёртвые.
+    float w = clamp(vWave / 1.3, -1.0, 1.0);
+    float crest = smoothstep(0.0, 0.85, w);           // живая волна покоя, всегда
+    float speak = uWaves * smoothstep(0.25, 1.0, w);  // резче и ярче в Speaking
+    float glow = crest * 0.65 + speak * 0.9;
+
+    // Непрозрачность: перед плотный, зад приглушён (пол 0.14), гребень ярче.
+    float alpha = clamp(0.18 + 0.82 * depth + glow * 0.45, 0.14, 1.0);
+    // Эмиссия выше 1.0 на переде и на гребнях — их и подхватывает bloom-пасс,
+    // а тусклый зад остаётся ниже порога и линии не расплываются в туман.
+    vec3 col = base * (0.7 + 1.2 * glow) * (0.55 + 0.8 * depth);
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const material = new THREE.ShaderMaterial({
+  uniforms,
+  vertexShader,
+  fragmentShader,
+  transparent: true,
+  blending: THREE.NormalBlending,
+  depthWrite: false,
+  depthTest: false,
+});
+
+// ---- построение каркасной сетки как LineSegments ----
+let globe = null;
+function buildGlobe() {
+  if (globe) { globe.geometry.dispose(); scene.remove(globe); }
+  const verts = [];
+  const STEP = 96;               // сегментов на кольцо/меридиан
+  const lat = Math.round(P.lat); // параллели
+  const lon = Math.round(P.lon); // меридианы
+
+  // параллели (кольца по широте)
+  for (let i = 1; i <= lat; i++) {
+    const theta = Math.PI * i / (lat + 1);      // 0..pi
+    const r = Math.sin(theta), y = Math.cos(theta);
+    for (let s = 0; s < STEP; s++) {
+      const a0 = 2 * Math.PI * s / STEP, a1 = 2 * Math.PI * (s + 1) / STEP;
+      verts.push(r * Math.cos(a0), y, r * Math.sin(a0));
+      verts.push(r * Math.cos(a1), y, r * Math.sin(a1));
+    }
+  }
+  // меридианы (дуги от полюса до полюса)
+  for (let j = 0; j < lon; j++) {
+    const phi = 2 * Math.PI * j / lon;
+    for (let s = 0; s < STEP; s++) {
+      const t0 = Math.PI * s / STEP, t1 = Math.PI * (s + 1) / STEP;
+      verts.push(Math.sin(t0) * Math.cos(phi), Math.cos(t0), Math.sin(t0) * Math.sin(phi));
+      verts.push(Math.sin(t1) * Math.cos(phi), Math.cos(t1), Math.sin(t1) * Math.sin(phi));
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  globe = new THREE.LineSegments(geo, material);
+  scene.add(globe);
+}
+buildGlobe();
+
+// ---- постобработка: bloom ----
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(
+  new THREE.Vector2(window.innerWidth, window.innerHeight),
+  P.bloom, P.bloomRadius, P.bloomThreshold
+);
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+// ---- анимация ----
+const clock = new THREE.Clock();
+let angleY = 0, tclock = 0, shakePhase = 0;
+const hud = document.getElementById('hud');
+let frames = 0, fpsTime = 0, fps = 0;
+
+function lerp(a, b, k) { return a + (b - a) * k; }
+
+function frame() {
+  const dt = clock.getDelta();     // ровно один раз за кадр (threejs.csv №31)
+  tclock += dt;
+
+  // плавная интерполяция состояния (threejs.csv №32)
+  const tgt = target();
+  const k = 1 - Math.exp(-dt / 0.22);
+  cur.rot   = lerp(cur.rot,   tgt.rot,   k);
+  cur.amp   = lerp(cur.amp,   tgt.amp,   k);
+  cur.freq  = lerp(cur.freq,  tgt.freq,  k);
+  cur.chaos = lerp(cur.chaos, tgt.chaos, k);
+  cur.error = lerp(cur.error, tgt.error, k);
+  cur.pulse = lerp(cur.pulse, tgt.pulse ?? 0, k);
+  cur.waves = lerp(cur.waves, tgt.waves ?? 0, k);
+  cur.shake = lerp(cur.shake, tgt.shake ?? 0, k);
+
+  // Listening — пульсация радиуса от уровня микрофона
+  const pulse = 1.0 + cur.pulse * P.level * 0.12 * (0.6 + 0.4 * Math.sin(tclock * 6.2));
+
+  angleY += dt * (cur.rot * P.rot / 0.22);
+  globe.rotation.y = angleY;
+  globe.rotation.x = -0.18 + Math.sin(tclock * 0.35) * 0.06;
+
+  // дрожание в Error
+  shakePhase += dt * 60;
+  const sh = cur.shake * 0.02;
+  globe.position.x = Math.sin(shakePhase) * sh;
+  globe.position.y = Math.cos(shakePhase * 0.8) * sh;
+
+  uniforms.uTime.value = tclock;
+  uniforms.uAmp.value = cur.amp;
+  uniforms.uFreq.value = cur.freq;
+  uniforms.uWaveSpeed.value = P.waveSpeed;
+  uniforms.uDepthFalloff.value = P.depthFalloff;
+  uniforms.uError.value = cur.error;
+  uniforms.uChaos.value = cur.chaos;
+  uniforms.uRadiusScale.value = pulse;
+  uniforms.uWaves.value = cur.waves;
+
+  material.linewidth = P.lineWidth; // подсказка; в WebGL толщина линий обычно = 1
+
+  composer.render();
+
+  frames++; fpsTime += dt;
+  if (fpsTime >= 0.5) { fps = frames / fpsTime; frames = 0; fpsTime = 0;
+    hud.textContent = `${fps.toFixed(0)} FPS · ${stateName} · ${Math.round(P.lat)}×${Math.round(P.lon)} · WebGL`;
+  }
+}
+
+renderer.setAnimationLoop(frame);
+// пауза скрытой вкладки (threejs.csv №34) — «ноль нагрузки в простое»
+document.addEventListener('visibilitychange', () => {
+  renderer.setAnimationLoop(document.hidden ? null : frame);
+});
+
+// ---- ресайз ----
+window.addEventListener('resize', () => {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setSize(w, h); composer.setSize(w, h);
+});
+
+// ---- панель ----
+function bind(id, valId, apply, fmt = (v) => v) {
+  const el = document.getElementById(id), out = document.getElementById(valId);
+  const upd = () => { const v = parseFloat(el.value); apply(v); if (out) out.textContent = fmt(v); };
+  el.addEventListener('input', upd); upd();
+}
+bind('lat', 'vLat', v => { P.lat = v; buildGlobe(); }, v => v.toFixed(0));
+bind('lon', 'vLon', v => { P.lon = v; buildGlobe(); }, v => v.toFixed(0));
+bind('amp', 'vAmp', v => { P.amp = v; STATES.idle.amp = v; }, v => v.toFixed(3));
+bind('freq', 'vFreq', v => { P.freq = v; STATES.idle.freq = v; }, v => v.toFixed(1));
+bind('wspd', 'vWspd', v => P.waveSpeed = v, v => v.toFixed(1));
+bind('bloom', 'vBloom', v => { P.bloom = v; bloomPass.strength = v; }, v => v.toFixed(2));
+bind('thr', 'vThr', v => { P.bloomThreshold = v; bloomPass.threshold = v; }, v => v.toFixed(2));
+bind('rad', 'vRad', v => { P.bloomRadius = v; bloomPass.radius = v; }, v => v.toFixed(2));
+bind('rot', 'vRot', v => { P.rot = v; STATES.idle.rot = v; }, v => v.toFixed(2));
+bind('depth', 'vDepth', v => P.depthFalloff = v, v => v.toFixed(2));
+bind('lw', 'vLw', v => P.lineWidth = v, v => v.toFixed(1));
+bind('lvl', 'vLvl', v => P.level = v, v => v.toFixed(2));
+
+document.getElementById('colTop').addEventListener('input', e => P.colorTop.set(e.target.value));
+document.getElementById('colBot').addEventListener('input', e => P.colorBot.set(e.target.value));
+
+document.querySelectorAll('#states button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#states button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    stateName = btn.dataset.state;
+  });
+});
+
+// ---- если модуль не загрузился (нет сети / CDN недоступен) ----
+window.addEventListener('error', (e) => {
+  if (e.message && /import|module|fetch|three/i.test(e.message)) {
+    document.getElementById('err').style.display = 'flex';
+    document.getElementById('err').textContent =
+      'Не удалось загрузить three.js с CDN (нет сети?). Прототип требует доступа к jsdelivr.';
+  }
+});
+</script>
+</body>
+</html>

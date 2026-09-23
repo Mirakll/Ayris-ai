@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>Combobox — итог (вариант B)</title>
+<style>
+  :root {
+    --background:#16131F; --surface:#1C1830; --surface_highlight:#29223C;
+    --border:#2E2742; --accent:#9B6DFF; --text_primary:#ECE7F6;
+    --text_secondary:#C3BAD9; --text_muted:#948AAC; --on_accent:#140D22;
+  }
+  body{margin:0;padding:40px;background:var(--background);color:var(--text_primary);
+    font-family:"Inter","Segoe UI",Arial,sans-serif;font-size:14px}
+  h1{font-size:20px;margin:0 0 4px}
+  .sub{color:var(--text_muted);font-size:13px;margin:0 0 28px}
+  .row{display:flex;flex-direction:column;gap:6px;margin-bottom:18px;max-width:360px}
+  .lbl{font-size:12px;color:var(--text_secondary)}
+  /* контрол ровно как в QSS: control_height_lg=44, чип=control_height=36,
+     margin 8/4, radius_sm=8, стрелка icon_sm=16 */
+  .cb{display:flex;align-items:center;justify-content:space-between;
+    height:44px;padding:0 4px 0 14px;background:var(--surface);
+    border:1px solid var(--border);border-radius:12px}
+  .chip{width:36px;height:36px;margin:4px;border-radius:8px;
+    display:flex;align-items:center;justify-content:center;background:var(--surface_highlight)}
+  .cb.hover{border-color:var(--accent);background:var(--surface_highlight)}
+  .cb.hover .chip{background:var(--accent)}
+  .cb.dis{color:var(--text_muted)}
+  .cb.dis .chip{background:transparent}
+  svg{display:block}
+</style>
+</head>
+<body>
+  <h1>Итог — вариант B, стрелка теперь картинкой</h1>
+  <p class="sub">Точь-в-точь метрики и цвета из QSS. Слева покой, потом наведение, потом выключено.</p>
+
+  <div class="row">
+    <span class="lbl">Тема — покой</span>
+    <div class="cb"><span>Тёмная фиолетовая</span><span class="chip">
+      <svg width="16" height="16" viewBox="0 0 16 16"><path d="M4 6 L8 10 L12 6" fill="none" stroke="#C3BAD9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </span></div>
+  </div>
+
+  <div class="row">
+    <span class="lbl">Тема — наведение</span>
+    <div class="cb hover"><span>Тёмная фиолетовая</span><span class="chip">
+      <svg width="16" height="16" viewBox="0 0 16 16"><path d="M4 6 L8 10 L12 6" fill="none" stroke="#140D22" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </span></div>
+  </div>
+
+  <div class="row">
+    <span class="lbl">Язык — выключено</span>
+    <div class="cb dis"><span>Русский</span><span class="chip">
+      <svg width="16" height="16" viewBox="0 0 16 16"><path d="M4 6 L8 10 L12 6" fill="none" stroke="#948AAC" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </span></div>
+  </div>
+</body>
+</html>

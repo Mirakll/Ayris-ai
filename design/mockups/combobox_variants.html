@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Варианты выпадающих списков</title>
+<style>
+  :root {
+    --background: #16131F;
+    --surface: #1C1830;
+    --surface_highlight: #29223C;
+    --border: #2E2742;
+    --accent: #9B6DFF;
+    --accent_hover: #B092FF;
+    --text_primary: #ECE7F6;
+    --text_secondary: #C3BAD9;
+    --text_muted: #948AAC;
+    --radius_md: 12px;
+    --radius_lg: 20px;
+    --control_h: 36px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 40px;
+    background: var(--background);
+    color: var(--text_primary);
+    font-family: "Inter", "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+    font-size: 14px;
+  }
+  h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+  .sub { color: var(--text_muted); font-size: 13px; margin: 0 0 32px; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(320px, 1fr));
+    gap: 28px;
+  }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius_lg);
+    padding: 22px 24px 26px;
+  }
+  .card h2 {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 0 0 2px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .tag {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    background: rgba(155,109,255,0.14);
+    border: 1px solid rgba(155,109,255,0.32);
+    border-radius: 999px;
+    padding: 2px 9px;
+  }
+  .desc { color: var(--text_muted); font-size: 12px; margin: 4px 0 18px; line-height: 1.5; }
+  .row { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+  .row:last-child { margin-bottom: 0; }
+  .lbl { font-size: 12px; color: var(--text_secondary); }
+
+  /* ---- база (как сейчас) ---- */
+  .cb-base {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    height: var(--control_h);
+    padding: 0 6px 0 12px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius_md);
+    color: var(--text_primary);
+    width: 100%;
+  }
+  .cb-base .native {
+    width: 20px; height: 100%;
+    border-left: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text_secondary);
+  }
+
+  /* общий базовый комбобокс для вариантов */
+  .cb {
+    display: inline-flex;
+    align-items: center;
+    justify-content: space-between;
+    height: var(--control_h);
+    padding: 0 12px 0 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius_md);
+    color: var(--text_primary);
+    width: 100%;
+    cursor: pointer;
+    transition: border-color .15s, background .15s;
+    gap: 12px;
+  }
+  .cb .chev { display: flex; align-items: center; color: var(--text_muted); }
+  .cb:hover { border-color: var(--accent_hover); background: var(--surface_highlight); }
+
+  /* Вариант A: чистый шеврон, дыхание */
+  .cb-a { padding-right: 12px; }
+  .cb-a:hover .chev { color: var(--text_secondary); }
+
+  /* Вариант B: выше + акцентный шеврон в кружке */
+  .cb-b { height: 42px; border-radius: 14px; padding-right: 6px; }
+  .cb-b .chev {
+    width: 30px; height: 30px;
+    border-radius: 9px;
+    background: rgba(155,109,255,0.12);
+    justify-content: center;
+    color: var(--accent);
+    transition: background .15s;
+  }
+  .cb-b:hover .chev { background: rgba(155,109,255,0.22); }
+
+  /* Вариант C: pill, акцентный левый маркер */
+  .cb-c {
+    height: 40px;
+    border-radius: 999px;
+    padding: 0 14px 0 16px;
+  }
+  .cb-c .val { display: flex; align-items: center; gap: 10px; }
+  .cb-c .dot { width: 7px; height: 7px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 8px rgba(155,109,255,.7); }
+  .cb-c .chev { color: var(--accent); }
+
+  /* Вариант D: разделённая зона стрелки, но мягкая */
+  .cb-d { padding-right: 0; overflow: hidden; }
+  .cb-d .dd {
+    align-self: stretch;
+    width: 34px;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text_secondary);
+    background: var(--surface_highlight);
+    border-left: 1px solid var(--border);
+    transition: background .15s, color .15s;
+  }
+  .cb-d:hover .dd { background: rgba(155,109,255,0.16); color: var(--accent); }
+
+  .note { margin-top: 34px; color: var(--text_muted); font-size: 12px; line-height: 1.6; }
+  .note code { color: var(--text_secondary); background: var(--surface_highlight); padding: 1px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+  <h1>Выпадающие списки — варианты оформления</h1>
+  <p class="sub">Реальные цвета темы «Тёмная фиолетовая». Ничего в приложении не менял.</p>
+
+  <div class="grid">
+
+    <div class="card">
+      <h2>Сейчас <span class="tag" style="color:var(--text_muted);background:rgba(148,138,172,.12);border-color:rgba(148,138,172,.3)">как в приложении</span></h2>
+      <p class="desc">Нативная стрелка в тесной рамке справа — из-за неё и ощущение «вжатости».</p>
+      <div class="row">
+        <span class="lbl">Язык</span>
+        <div class="cb-base"><span>Русский</span><span class="native">▾</span></div>
+      </div>
+      <div class="row">
+        <span class="lbl">Тема</span>
+        <div class="cb-base"><span>Тёмная фиолетовая</span><span class="native">▾</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Вариант A <span class="tag">минимализм</span></h2>
+      <p class="desc">Убрал рамку у стрелки, добавил воздух. Тонкий шеврон вместо системного треугольника.</p>
+      <div class="row">
+        <span class="lbl">Язык</span>
+        <div class="cb cb-a"><span>Русский</span><span class="chev">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span></div>
+      </div>
+      <div class="row">
+        <span class="lbl">Тема</span>
+        <div class="cb cb-a"><span>Тёмная фиолетовая</span><span class="chev">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Вариант B <span class="tag">акцентный</span></h2>
+      <p class="desc">Чуть выше (42px), стрелка в мягком акцентном кружке. Читается как активный контрол.</p>
+      <div class="row">
+        <span class="lbl">Язык</span>
+        <div class="cb cb-b"><span>Русский</span><span class="chev">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span></div>
+      </div>
+      <div class="row">
+        <span class="lbl">Тема</span>
+        <div class="cb cb-b"><span>Тёмная фиолетовая</span><span class="chev">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Вариант C <span class="tag">pill</span></h2>
+      <p class="desc">Скруглённая капсула с акцентной точкой-маркером. Самый «мягкий» силуэт.</p>
+      <div class="row">
+        <span class="lbl">Язык</span>
+        <div class="cb cb-c"><span class="val"><span class="dot"></span>Русский</span><span class="chev">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span></div>
+      </div>
+      <div class="row">
+        <span class="lbl">Тема</span>
+        <div class="cb cb-c"><span class="val"><span class="dot"></span>Тёмная фиолетовая</span><span class="chev">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Вариант D <span class="tag">зона стрелки</span></h2>
+      <p class="desc">Оставил отдельную зону справа, но мягкую и на подсветке — знакомо, но не тесно.</p>
+      <div class="row">
+        <span class="lbl">Язык</span>
+        <div class="cb cb-d"><span style="padding-left:2px">Русский</span><span class="dd">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span></div>
+      </div>
+      <div class="row">
+        <span class="lbl">Тема</span>
+        <div class="cb cb-d"><span style="padding-left:2px">Тёмная фиолетовая</span><span class="dd">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="note">
+    Всё это делается в <code>src/ayris/gui/theme/qss.py</code> добавлением правил
+    <code>QComboBox::drop-down</code> и <code>QComboBox::down-arrow</code> (плюс, при желании, чуть больше <code>control_height</code>).
+    Скажи, какой вариант — применю в тему.
+  </p>
+</body>
+</html>

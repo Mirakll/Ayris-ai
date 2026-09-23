@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ayris — Neural Sphere (reference)</title>
+<style>
+  :root {
+    --bg-0: #08040f;
+    --bg-1: #1a0a2e;
+    --bg-2: #2b0f47;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #08040f; }
+  body {
+    font-family: "Segoe UI", system-ui, sans-serif;
+    color: #cdbce8;
+  }
+  /* фон как на референсе: тёмный радиальный градиент фиолетовый -> почти чёрный */
+  #scene {
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(120% 120% at 18% 12%, #3a1160 0%, rgba(58,17,96,0) 42%),
+      radial-gradient(120% 120% at 82% 88%, #17264a 0%, rgba(23,38,74,0) 45%),
+      radial-gradient(100% 100% at 50% 50%, #140829 0%, #08040f 70%);
+  }
+  canvas { display: block; }
+
+  /* панель управления режимами */
+  #panel {
+    position: fixed;
+    left: 50%;
+    bottom: 26px;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 8px;
+    padding: 8px;
+    border-radius: 16px;
+    background: rgba(20, 10, 36, 0.55);
+    backdrop-filter: blur(14px);
+    border: 1px solid rgba(140, 110, 210, 0.18);
+    box-shadow: 0 8px 40px rgba(0,0,0,0.45);
+    z-index: 10;
+  }
+  #panel button {
+    appearance: none;
+    border: 1px solid rgba(150, 120, 220, 0.22);
+    background: rgba(40, 22, 70, 0.5);
+    color: #b9a6df;
+    font-size: 13px;
+    letter-spacing: 0.02em;
+    padding: 9px 16px;
+    border-radius: 11px;
+    cursor: pointer;
+    transition: all 0.22s ease;
+  }
+  #panel button:hover { color: #eae2ff; border-color: rgba(150,120,220,0.5); }
+  #panel button.active {
+    background: linear-gradient(135deg, rgba(120,70,220,0.75), rgba(60,120,230,0.7));
+    color: #fff;
+    border-color: rgba(180,160,255,0.7);
+    box-shadow: 0 4px 20px rgba(110,80,230,0.4);
+  }
+  #hud {
+    position: fixed;
+    top: 22px;
+    left: 26px;
+    z-index: 10;
+    font-size: 12px;
+    line-height: 1.6;
+    color: rgba(190, 170, 235, 0.55);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    pointer-events: none;
+  }
+  #hud b { color: #d9ccff; font-weight: 600; }
+</style>
+</head>
+<body>
+  <div id="scene"></div>
+  <div id="hud">Ayris · neural sphere<br />режим: <b id="mode-label">спокойствие</b></div>
+  <div id="panel">
+    <button data-mode="calm" class="active">Спокойствие</button>
+    <button data-mode="listening">Слушает</button>
+    <button data-mode="thinking">Думает</button>
+    <button data-mode="speaking">Говорит</button>
+    <button data-mode="error">Ошибка</button>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+  import * as THREE from 'three';
+  import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+  import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+  import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+  // ---------------------------------------------------------------------------
+  // Сцена / камера / рендер
+  // ---------------------------------------------------------------------------
+  const container = document.getElementById('scene');
+  const scene = new THREE.Scene();
+
+  const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100);
+  camera.position.set(0, 0, 6.2);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setClearColor(0x000000, 0); // фон рисует CSS
+  container.appendChild(renderer.domElement);
+
+  // группа сферы — слегка наклоняем, как на референсе
+  const group = new THREE.Group();
+  group.rotation.z = -0.12;
+  group.rotation.x = 0.14;
+  scene.add(group);
+
+  // ---------------------------------------------------------------------------
+  // Геометрия: сетка меридианов + параллелей из отрезков (LineSegments).
+  // Именно это даёт «квадратную» сетку lat/lon, а не триангуляцию.
+  // ---------------------------------------------------------------------------
+  const R = 1.6;
+  const LAT = 46;   // число параллелей
+  const LON = 60;   // число меридианов
+  const SEG = 3;    // подразбиение каждого ребра — линии гнутся плавно при деформации
+
+  function buildGrid() {
+    const positions = [];
+
+    const P = (lat, lon) => {
+      // lat: -PI/2..PI/2 ; lon: 0..2PI
+      const cx = Math.cos(lat);
+      return new THREE.Vector3(
+        R * cx * Math.cos(lon),
+        R * Math.sin(lat),
+        R * cx * Math.sin(lon)
+      );
+    };
+    const pushSeg = (a, b) => { positions.push(a.x, a.y, a.z, b.x, b.y, b.z); };
+    const lerp = (a, b, t) => a.clone().lerp(b, t);
+
+    // параллели (горизонтальные кольца)
+    for (let i = 1; i < LAT; i++) {
+      const lat = -Math.PI / 2 + (Math.PI * i) / LAT;
+      for (let j = 0; j < LON; j++) {
+        const lon0 = (2 * Math.PI * j) / LON;
+        const lon1 = (2 * Math.PI * (j + 1)) / LON;
+        const a = P(lat, lon0), b = P(lat, lon1);
+        for (let s = 0; s < SEG; s++) pushSeg(lerp(a, b, s / SEG), lerp(a, b, (s + 1) / SEG));
+      }
+    }
+    // меридианы (вертикальные дуги от полюса к полюсу)
+    for (let j = 0; j < LON; j++) {
+      const lon = (2 * Math.PI * j) / LON;
+      for (let i = 0; i < LAT; i++) {
+        const lat0 = -Math.PI / 2 + (Math.PI * i) / LAT;
+        const lat1 = -Math.PI / 2 + (Math.PI * (i + 1)) / LAT;
+        const a = P(lat0, lon), b = P(lat1, lon);
+        for (let s = 0; s < SEG; s++) pushSeg(lerp(a, b, s / SEG), lerp(a, b, (s + 1) / SEG));
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    return geo;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Шейдер: деформация радиуса шумом + низкочастотная «волна»; цвет-градиент;
+  // усиление кромки (fresnel), чтобы силуэт светился как на референсе.
+  // ---------------------------------------------------------------------------
+  const uniforms = {
+    uTime:      { value: 0 },
+    uAmp:       { value: 0.06 },   // амплитуда шумовой деформации
+    uFreq:      { value: 1.7 },    // частота шума
+    uSpeed:     { value: 0.18 },   // скорость эволюции шума
+    uWaveAmp:   { value: 0.05 },   // амплитуда бегущей волны
+    uWaveFreq:  { value: 2.2 },
+    uTwist:     { value: 0.0 },    // закрутка вокруг Y (режим «думает»)
+    uJitter:    { value: 0.0 },    // высокочастотная дрожь (режим «ошибка»)
+    uBreath:    { value: 0.0 },    // добавка к масштабу (дыхание)
+    uColorA:    { value: new THREE.Color('#5a2ea8') }, // низ — фиолетовый
+    uColorB:    { value: new THREE.Color('#37d6ff') }, // верх — циан
+    uColorEdge: { value: new THREE.Color('#9ad8ff') }, // свечение кромки
+    uOpacity:   { value: 0.9 },
+    uCamPos:    { value: new THREE.Vector3() },
+  };
+
+  const vertexShader = /* glsl */`
+    uniform float uTime, uAmp, uFreq, uSpeed, uWaveAmp, uWaveFreq, uTwist, uJitter, uBreath;
+    varying float vShade;   // 0..1 по высоте
+    varying vec3  vWorld;
+    varying vec3  vNormal;
+
+    // --- simplex noise 3D (Ashima / Stefan Gustavson) ---
+    vec4 permute(vec4 x){return mod(((x*34.0)+1.0)*x,289.0);}
+    vec4 taylorInvSqrt(vec4 r){return 1.79284291400159-0.85373472095314*r;}
+    float snoise(vec3 v){
+      const vec2 C=vec2(1.0/6.0,1.0/3.0); const vec4 D=vec4(0.0,0.5,1.0,2.0);
+      vec3 i=floor(v+dot(v,C.yyy)); vec3 x0=v-i+dot(i,C.xxx);
+      vec3 g=step(x0.yzx,x0.xyz); vec3 l=1.0-g; vec3 i1=min(g.xyz,l.zxy); vec3 i2=max(g.xyz,l.zxy);
+      vec3 x1=x0-i1+1.0*C.xxx; vec3 x2=x0-i2+2.0*C.xxx; vec3 x3=x0-1.0+3.0*C.xxx;
+      i=mod(i,289.0);
+      vec4 p=permute(permute(permute(i.z+vec4(0.0,i1.z,i2.z,1.0))+i.y+vec4(0.0,i1.y,i2.y,1.0))+i.x+vec4(0.0,i1.x,i2.x,1.0));
+      float n_=1.0/7.0; vec3 ns=n_*D.wyz-D.xzx;
+      vec4 j=p-49.0*floor(p*ns.z*ns.z);
+      vec4 x_=floor(j*ns.z); vec4 y_=floor(j-7.0*x_);
+      vec4 x=x_*ns.x+ns.yyyy; vec4 y=y_*ns.x+ns.yyyy; vec4 h=1.0-abs(x)-abs(y);
+      vec4 b0=vec4(x.xy,y.xy); vec4 b1=vec4(x.zw,y.zw);
+      vec4 s0=floor(b0)*2.0+1.0; vec4 s1=floor(b1)*2.0+1.0; vec4 sh=-step(h,vec4(0.0));
+      vec4 a0=b0.xzyw+s0.xzyw*sh.xxyy; vec4 a1=b1.xzyw+s1.xzyw*sh.zzww;
+      vec3 p0=vec3(a0.xy,h.x); vec3 p1=vec3(a0.zw,h.y); vec3 p2=vec3(a1.xy,h.z); vec3 p3=vec3(a1.zw,h.w);
+      vec4 norm=taylorInvSqrt(vec4(dot(p0,p0),dot(p1,p1),dot(p2,p2),dot(p3,p3)));
+      p0*=norm.x; p1*=norm.y; p2*=norm.z; p3*=norm.w;
+      vec4 m=max(0.6-vec4(dot(x0,x0),dot(x1,x1),dot(x2,x2),dot(x3,x3)),0.0); m=m*m;
+      return 42.0*dot(m*m,vec4(dot(p0,x0),dot(p1,x1),dot(p2,x2),dot(p3,x3)));
+    }
+
+    void main() {
+      vec3 pos = position;
+      vec3 n = normalize(pos);                 // нормаль сферы
+      float lat = n.y;                         // -1..1
+
+      // закрутка вокруг Y — тем сильнее, чем выше/ниже (режим «думает»)
+      float ang = uTwist * lat;
+      float cs = cos(ang), sn = sin(ang);
+      pos = vec3(pos.x*cs - pos.z*sn, pos.y, pos.x*sn + pos.z*cs);
+      n   = vec3(n.x*cs - n.z*sn, n.y, n.x*sn + n.z*cs);
+
+      // шумовая деформация радиуса (мягкие «холмы»)
+      float t = uTime * uSpeed;
+      float noise = snoise(n * uFreq + vec3(0.0, t, 0.0));
+      noise += 0.5 * snoise(n * uFreq * 2.0 + vec3(t * 1.3, 0.0, 0.0));
+
+      // бегущая волна снизу вверх — создаёт «каплю» и текучесть силуэта
+      float wave = sin(lat * uWaveFreq - uTime * 1.6);
+      float bottom = smoothstep(0.2, -1.0, lat);        // усиление у низа
+      float disp = uAmp * noise + uWaveAmp * wave * (0.4 + bottom);
+
+      // высокочастотная дрожь для режима «ошибка»
+      disp += uJitter * snoise(n * 9.0 + uTime * 22.0) * 0.6;
+
+      float scale = 1.0 + uBreath;
+      pos += n * disp * R_CONST * scale;
+      pos *= scale;
+
+      vShade  = clamp(lat * 0.5 + 0.5, 0.0, 1.0);
+      vNormal = normalize(normalMatrix * n);
+      vec4 wp = modelMatrix * vec4(pos, 1.0);
+      vWorld  = wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }
+  `.replace(/R_CONST/g, R.toFixed(3));
+
+  const fragmentShader = /* glsl */`
+    precision highp float;
+    uniform vec3 uColorA, uColorB, uColorEdge, uCamPos;
+    uniform float uOpacity;
+    varying float vShade;
+    varying vec3  vWorld;
+    varying vec3  vNormal;
+
+    void main() {
+      vec3 base = mix(uColorA, uColorB, vShade);
+      // fresnel: чем более ребром к камере — тем ярче свечение кромки
+      vec3 V = normalize(uCamPos - vWorld);
+      float fres = pow(1.0 - abs(dot(normalize(vNormal), V)), 2.2);
+      vec3 col = mix(base, uColorEdge, fres * 0.85);
+      col += fres * 0.35;                  // общий подсвет силуэта
+      float alpha = uOpacity * (0.55 + 0.45 * fres);
+      gl_FragColor = vec4(col, alpha);
+    }
+  `;
+
+  const material = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader,
+    fragmentShader,
+    transparent: true,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+
+  const sphere = new THREE.LineSegments(buildGrid(), material);
+  group.add(sphere);
+
+  // ---------------------------------------------------------------------------
+  // Постобработка: bloom даёт мягкое неоновое свечение
+  // ---------------------------------------------------------------------------
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.9, 0.7, 0.0);
+  composer.addPass(bloom);
+
+  // ---------------------------------------------------------------------------
+  // Режимы. Каждый — целевые значения uniform, между ними плавно интерполируем.
+  // ---------------------------------------------------------------------------
+  const MODES = {
+    calm: {
+      label: 'спокойствие',
+      amp: 0.055, freq: 1.7, speed: 0.16, waveAmp: 0.045, waveFreq: 2.0,
+      twist: 0.0, jitter: 0.0, spin: 0.05, breathHz: 0.35, breathAmp: 0.02,
+      colorA: '#4a2a9e', colorB: '#35c9ff', edge: '#9ad8ff', bloom: 0.8,
+    },
+    listening: {
+      label: 'слушает',
+      amp: 0.09, freq: 2.1, speed: 0.4, waveAmp: 0.06, waveFreq: 2.6,
+      twist: 0.1, jitter: 0.0, spin: 0.12, breathHz: 1.6, breathAmp: 0.05,
+      colorA: '#3763d6', colorB: '#5cf0ff', edge: '#cfffff', bloom: 1.05,
+    },
+    thinking: {
+      label: 'думает',
+      amp: 0.08, freq: 3.0, speed: 0.55, waveAmp: 0.04, waveFreq: 3.4,
+      twist: 0.9, jitter: 0.0, spin: 0.5, breathHz: 0.8, breathAmp: 0.03,
+      colorA: '#7a2bd0', colorB: '#8f6bff', edge: '#d7c4ff', bloom: 0.95,
+    },
+    speaking: {
+      label: 'говорит',
+      amp: 0.13, freq: 2.3, speed: 0.9, waveAmp: 0.11, waveFreq: 2.4,
+      twist: 0.15, jitter: 0.0, spin: 0.18, breathHz: 3.2, breathAmp: 0.06,
+      colorA: '#4b34c4', colorB: '#4ad6ff', edge: '#e6f7ff', bloom: 1.25,
+    },
+    error: {
+      label: 'ошибка',
+      amp: 0.15, freq: 2.6, speed: 0.6, waveAmp: 0.05, waveFreq: 3.0,
+      twist: 0.05, jitter: 0.09, spin: 0.08, breathHz: 6.0, breathAmp: 0.03,
+      colorA: '#c01f4a', colorB: '#ff7a3c', edge: '#ffd0a0', bloom: 1.1,
+    },
+  };
+
+  let current = { ...flatten(MODES.calm) };
+  let target  = { ...flatten(MODES.calm) };
+  let modeMeta = MODES.calm;
+
+  function flatten(m) {
+    return {
+      amp: m.amp, freq: m.freq, speed: m.speed, waveAmp: m.waveAmp, waveFreq: m.waveFreq,
+      twist: m.twist, jitter: m.jitter, bloom: m.bloom,
+      colorA: new THREE.Color(m.colorA), colorB: new THREE.Color(m.colorB), edge: new THREE.Color(m.edge),
+    };
+  }
+
+  function setMode(name) {
+    const m = MODES[name];
+    if (!m) return;
+    modeMeta = m;
+    target = flatten(m);
+    document.getElementById('mode-label').textContent = m.label;
+    document.querySelectorAll('#panel button').forEach(b =>
+      b.classList.toggle('active', b.dataset.mode === name));
+  }
+  document.querySelectorAll('#panel button').forEach(b =>
+    b.addEventListener('click', () => setMode(b.dataset.mode)));
+
+  // ---------------------------------------------------------------------------
+  // Цикл анимации
+  // ---------------------------------------------------------------------------
+  const clock = new THREE.Clock();
+  const damp = (a, b, l) => a + (b - a) * l;
+
+  function tick() {
+    const dt = clock.getDelta();
+    const t  = clock.elapsedTime;
+    const k  = 1 - Math.pow(0.001, dt); // плавность перехода между режимами
+
+    for (const key of ['amp','freq','speed','waveAmp','waveFreq','twist','jitter','bloom'])
+      current[key] = damp(current[key], target[key], k);
+    current.colorA.lerp(target.colorA, k);
+    current.colorB.lerp(target.colorB, k);
+    current.edge.lerp(target.edge, k);
+
+    uniforms.uTime.value     = t;
+    uniforms.uAmp.value      = current.amp;
+    uniforms.uFreq.value     = current.freq;
+    uniforms.uSpeed.value    = current.speed;
+    uniforms.uWaveAmp.value  = current.waveAmp;
+    uniforms.uWaveFreq.value = current.waveFreq;
+    uniforms.uTwist.value    = current.twist;
+    uniforms.uJitter.value   = current.jitter;
+    uniforms.uColorA.value.copy(current.colorA);
+    uniforms.uColorB.value.copy(current.colorB);
+    uniforms.uColorEdge.value.copy(current.edge);
+
+    // дыхание масштаба
+    uniforms.uBreath.value = Math.sin(t * modeMeta.breathHz * Math.PI * 2) * modeMeta.breathAmp;
+
+    // медленное вращение вокруг вертикали
+    group.rotation.y += modeMeta.spin * dt;
+
+    camera.getWorldPosition(uniforms.uCamPos.value);
+    bloom.strength = current.bloom;
+
+    composer.render();
+    requestAnimationFrame(tick);
+  }
+  tick();
+
+  // ---------------------------------------------------------------------------
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+    composer.setSize(innerWidth, innerHeight);
+  });
+
+  // отладка из консоли: window.setMode('speaking')
+  window.setMode = setMode;
+  </script>
+</body>
+</html>
