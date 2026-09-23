@@ -55,6 +55,8 @@ __all__ = ["ParamForm"]
 _INT_LIMIT = 2_147_483_647
 #: Widest span still worth a slider; beyond it a spin box is the honest control.
 _SLIDER_SPAN = 100_000
+#: Shown when a selected block simply has no parameters to edit.
+_NO_PARAMS = "У блока нет параметров."
 
 
 class _Row:
@@ -108,10 +110,16 @@ class ParamForm(QWidget):
         self._form.setContentsMargins(0, 0, 0, 0)
         self._form.setHorizontalSpacing(theme.metric("spacing_md"))
         self._form.setVerticalSpacing(theme.metric("spacing_sm"))
-        self._empty = QLabel("У блока нет параметров.")
+        # The empty state carries its weight like the mockup's `.insp-empty`: a
+        # centred, padded prompt that fills the panel, not a bare line lost against
+        # the card. Its text tells the two empty cases apart — no block selected vs.
+        # a selected block with no parameters — set through :meth:`set_schema`.
+        self._empty = QLabel(_NO_PARAMS)
         self._empty.setProperty("role", "secondary")
         self._empty.setWordWrap(True)
-        self._outer.addWidget(self._empty)
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setContentsMargins(*(theme.metric("spacing_lg"),) * 4)
+        self._outer.addWidget(self._empty, 1)
         self._outer.addWidget(self._form_host)
         if fields:
             self.set_schema(fields)
@@ -125,11 +133,17 @@ class ParamForm(QWidget):
         self._completions = _tokens(names)
         self._completer_model.setStringList(list(self._completions))
 
-    def set_schema(self, fields: Sequence[ParamField]) -> None:
-        """Rebuild the whole form for a new block, discarding the old widgets."""
+    def set_schema(self, fields: Sequence[ParamField], *, empty_text: str = _NO_PARAMS) -> None:
+        """Rebuild the whole form for a new block, discarding the old widgets.
+
+        With no fields the panel shows *empty_text*: the editor passes a «select a
+        node» prompt when nothing is selected, and the default «no parameters» line
+        for a selected block that genuinely has none.
+        """
         self._loading = True
         self._clear()
         listed = tuple(fields)
+        self._empty.setText(empty_text)
         self._empty.setVisible(not listed)
         self._form_host.setVisible(bool(listed))
         for field in listed:

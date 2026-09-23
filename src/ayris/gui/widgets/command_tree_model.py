@@ -44,9 +44,11 @@ from PySide6.QtCore import (
     Signal,
 )
 
+from ayris.actions.macros.debug_session import DebugSessionStore
 from ayris.actions.macros.serializer import (
     FolderEntry,
     command_from_rows,
+    command_from_snapshot,
     command_to_row,
     dump_command,
     dump_commands,
@@ -57,6 +59,7 @@ from ayris.core.errors import AyrisError
 from ayris.core.models import (
     Command,
     CommandFolder,
+    CommandVersion,
     Trigger,
     TriggerType,
     VariableScope,
@@ -206,13 +209,35 @@ def _trigger_key(trigger: Trigger) -> tuple[str, str] | None:
 class CommandTreeStore:
     """Pure data access and mutation over the command library of one profile."""
 
-    def __init__(self, repositories: Repositories, profile_id: int) -> None:
+    def __init__(
+        self, repositories: Repositories, profile_id: int, *, version_limit: int = 20
+    ) -> None:
         self._repos = repositories
         self._profile_id = profile_id
+        self._version_limit = version_limit
+        self._debug_store: DebugSessionStore | None = None
 
     @property
     def profile_id(self) -> int:
         return self._profile_id
+
+    @property
+    def debug_store(self) -> DebugSessionStore:
+        """The per-command debugger session store (breakpoints, watches, slots).
+
+        Built over the same database as the library, so breakpoints set in the node
+        editor land in ``macro_debug_sessions`` — the very table
+        :class:`~ayris.actions.macros.debugger.MacroDebugger` restores from when a
+        debug run starts. Cached: the store is stateless glue over the database.
+        """
+        if self._debug_store is None:
+            self._debug_store = DebugSessionStore(self._repos.database)
+        return self._debug_store
+
+    @property
+    def version_limit(self) -> int:
+        """How many versions per command survive a prune, pins aside (task 54)."""
+        return self._version_limit
 
     # -- reads --------------------------------------------------------------
 
@@ -483,11 +508,19 @@ class CommandTreeStore:
             update={"folder_id": folder_id, "folder": [], "updated_at": _now()}
         )
         row = replace(command_to_row(placed, profile_id=self._profile_id), folder_id=folder_id)
-        self._repos.commands.update(row, save_version=True, comment="редактор")
-        self._repos.triggers.replace_for_command(
-            command_id, triggers_to_rows(placed, command_id=command_id)
-        )
-        self._sync_declarations(placed)
+        # One transaction for the whole save: the row, its version snapshot, its
+        # triggers and its declarations commit together or not at all. Task 54: a
+        # failure at any step must roll the lot back and leave the previously
+        # registered version working, never a half-written command. update() saves
+        # the *previous* state as a version first (triggers still un-replaced, so
+        # the snapshot's triggers are the old set), then writes the new row.
+        with self._repos.database.transaction():
+            self._repos.commands.update(row, save_version=True, comment="редактор")
+            self._repos.triggers.replace_for_command(
+                command_id, triggers_to_rows(placed, command_id=command_id)
+            )
+            self._sync_declarations(placed)
+            self._repos.commands.prune_versions(command_id, keep=self._version_limit)
         return self._command_model(command_id)
 
     def _sync_declarations(self, model: CommandModel) -> None:
@@ -509,6 +542,38 @@ class CommandTreeStore:
                 var_type=declared.type,
                 persistent=declared.persistent,
             )
+
+    # -- versions -----------------------------------------------------------
+
+    def versions(self, command_id: int) -> list[CommandVersion]:
+        """The stored versions of a command, newest first (task 54 history)."""
+        return self._repos.commands.list_versions(command_id, limit=self._version_limit + 50)
+
+    def version_model(self, command_id: int, version: int) -> CommandModel:
+        """One stored version rebuilt into a :class:`CommandModel`, for diff/preview.
+
+        Raises:
+            AyrisError: the version does not exist.
+        """
+        stored = self._repos.commands.get_version(command_id, version)
+        if stored is None:
+            raise AyrisError(
+                f"version {version} of command {command_id} not found",
+                user_message=f"Версия {version} не найдена.",
+            )
+        current = self._repos.commands.get(command_id)
+        folder = self.folder_path(current.folder_id) if current is not None else ()
+        return command_from_snapshot(stored.snapshot, command_id=command_id, folder=folder)
+
+    def mark_version_important(
+        self, command_id: int, version: int, *, important: bool = True
+    ) -> None:
+        """Pin or unpin a version so the prune keeps it (task 54)."""
+        self._repos.commands.mark_version_important(command_id, version, important=important)
+
+    def export_version(self, command_id: int, version: int) -> str:
+        """One stored version as a ``.ayris`` document (task 54)."""
+        return dump_command(self.version_model(command_id, version))
 
     # -- export / import ----------------------------------------------------
 
@@ -665,6 +730,9 @@ class CommandTreeModel(QAbstractItemModel):
         self._filter = TreeFilter()
         self._root = _Node(NodeKind.FOLDER, -1, "", True, ())
         self._index_by_key: dict[tuple[str, int], _Node] = {}
+        #: The command open in the editor with unsaved edits, marked in the tree
+        #: (task 54); ``None`` when nothing is dirty.
+        self._dirty_command: int | None = None
         self.reload()
 
     @property
@@ -850,6 +918,9 @@ class CommandTreeModel(QAbstractItemModel):
         if role == int(Qt.ItemDataRole.DisplayRole):
             if node.kind is NodeKind.FOLDER:
                 return f"{node.name} ({node.count})"
+            if node.kind is NodeKind.COMMAND and node.entity_id == self._dirty_command:
+                # A bullet marks the command being edited with unsaved changes.
+                return f"● {node.name}"
             return node.name
         if role == int(Qt.ItemDataRole.EditRole):
             return node.name
@@ -1027,6 +1098,23 @@ class CommandTreeModel(QAbstractItemModel):
     def index_for(self, kind: NodeKind, entity_id: int) -> QModelIndex:
         node = self._index_by_key.get((str(kind), entity_id))
         return self._index_of(node) if node is not None else QModelIndex()
+
+    def set_dirty_command(self, command_id: int | None) -> None:
+        """Mark one command as having unsaved edits, or clear the mark (task 54).
+
+        Repaints only the two rows that change — the one losing the mark and the one
+        gaining it — so the dirty bullet appears and clears without a tree rebuild.
+        """
+        if command_id == self._dirty_command:
+            return
+        previous = self._dirty_command
+        self._dirty_command = command_id
+        for entity_id in (previous, command_id):
+            if entity_id is None:
+                continue
+            index = self.index_for(NodeKind.COMMAND, entity_id)
+            if index.isValid():
+                self.dataChanged.emit(index, index, [int(Qt.ItemDataRole.DisplayRole)])
 
 
 def _search_terms(command: Command, phrases: tuple[str, ...]) -> tuple[str, tuple[str, ...]]:

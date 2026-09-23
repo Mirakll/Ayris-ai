@@ -158,20 +158,31 @@ class EditorHeader(QWidget):
         self._tags.changed.connect(self._on_tags)
         outer.addWidget(_labelled("Теги", self._tags, theme))
 
-        switches = QHBoxLayout()
-        switches.setSpacing(theme.metric("spacing_lg"))
-        self._enabled = ToggleSwitch(theme, label="Включена", checked=True)
+        self._enabled = ToggleSwitch(theme, label="Команда включена", checked=True)
         self._enabled.toggled.connect(self._on_field_changed)
+        outer.addWidget(
+            _switch_row(
+                "Команда включена",
+                "Выключенная команда остаётся в списке, но не срабатывает по триггерам.",
+                self._enabled,
+                theme,
+            )
+        )
+
         self._require_admin = ToggleSwitch(theme, label="Права администратора")
         self._require_admin.setToolTip(
             "Команда запросит повышение прав (UAC) перед запуском действий, "
             "которым нужны права администратора."
         )
         self._require_admin.toggled.connect(self._on_field_changed)
-        switches.addWidget(self._enabled)
-        switches.addWidget(self._require_admin)
-        switches.addStretch(1)
-        outer.addLayout(switches)
+        outer.addWidget(
+            _switch_row(
+                "Права администратора",
+                "Перед запуском команда запросит повышение прав через UAC.",
+                self._require_admin,
+                theme,
+            )
+        )
 
         numbers = QHBoxLayout()
         numbers.setSpacing(theme.metric("spacing_lg"))
@@ -263,6 +274,36 @@ def _labelled(text: str, widget: QWidget, theme: ThemeManager) -> QWidget:
     caption.setProperty("role", "muted")
     layout.addWidget(caption)
     layout.addWidget(widget)
+    return box
+
+
+def _switch_row(title: str, description: str, toggle: QWidget, theme: ThemeManager) -> QWidget:
+    """A titled row for a toggle: title over description on the left, switch on the right.
+
+    Mirrors :class:`~ayris.gui.widgets.setting_card.SettingCard` — the shape every other
+    page gives a switch — so the command's switches read the same, but stays transparent
+    because the «Команда» section is already a themed card and a card-in-card would double
+    the surface.
+    """
+    box = QWidget()
+    box.setProperty("transparent", True)
+    row = QHBoxLayout(box)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(theme.metric("spacing_md"))
+
+    texts = QVBoxLayout()
+    texts.setContentsMargins(0, 0, 0, 0)
+    texts.setSpacing(theme.metric("spacing_xs"))
+    heading = QLabel(title)
+    heading.setProperty("role", "h2")
+    heading.setWordWrap(True)
+    caption = QLabel(description)
+    caption.setProperty("role", "secondary")
+    caption.setWordWrap(True)
+    texts.addWidget(heading)
+    texts.addWidget(caption)
+    row.addLayout(texts, 1)
+    row.addWidget(toggle, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     return box
 
 

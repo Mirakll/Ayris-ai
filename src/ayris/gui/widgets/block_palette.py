@@ -1,15 +1,18 @@
 """The block palette: the task-33 catalog as a searchable, draggable tree.
 
-Blocks are grouped by the catalog's own categories, each with its Russian title and
-icon glyph. A search box filters by title and description across all categories. A
-block is added by double-click (the palette emits :attr:`block_chosen`) or dragged
-onto the action list — the drag carries the block type as text, the same mime the
-action list reads, so a drop lands a new block of that type.
+Blocks are grouped by the catalog's own categories, each with its Russian title. A
+search box filters by title and description across all categories. A block is added by
+double-click (the palette emits :attr:`block_chosen`) or dragged onto the action
+list — the drag carries the block type as text, the same mime the action list reads, so
+a drop lands a new block of that type.
 
-Dangerous blocks (``is_dangerous``) and unavailable actions (``available`` false in
-this build) are marked in the row: the danger glyph and a muted, disabled row with the
-reason in its tooltip. The palette never builds a command or touches the database; it
-only names what the editor may insert.
+Category rows carry a leading disclosure chevron (▴ open, ▾ collapsed) so they read
+apart from the block titles beneath them; block titles line up in a single column with
+nothing before them. A single click anywhere on a category row toggles it open or shut.
+Dangerous blocks (``is_dangerous``) carry a trailing ⚠ after the title, and unavailable
+actions (``available`` false in this build) are a muted, disabled row with the reason in
+its tooltip. The palette never builds a command or touches the database; it only names
+what the editor may insert.
 """
 
 from __future__ import annotations
@@ -35,6 +38,13 @@ BLOCK_MIME = "application/x-ayris-block-type"
 #: Roles the tree items carry, above the display text.
 _TYPE_ROLE = Qt.ItemDataRole.UserRole
 _HAYSTACK_ROLE = Qt.ItemDataRole.UserRole + 1
+#: On a category row: its bare title, so the chevron can be re-prefixed on toggle.
+_TITLE_ROLE = Qt.ItemDataRole.UserRole + 2
+
+#: Disclosure chevrons prefixed to category titles: up when open, down when collapsed.
+#: Small-triangle glyphs read lighter than the full-size ▲▼.
+_CHEVRON_OPEN = "▴"  # ▴
+_CHEVRON_SHUT = "▾"  # ▾
 
 
 class _PaletteTree(QTreeWidget):
@@ -81,10 +91,24 @@ class BlockPalette(QWidget):
 
         self._tree = _PaletteTree()
         self._tree.setHeaderHidden(True)
+        # No branch decoration and no indent: the category's own chevron (▴/▾, part of
+        # its text) is the only disclosure marker, so Qt's decoration square would just
+        # sit redundantly before it and push every row right. Off, everything lines up
+        # flush left in one column — categories by their chevron, blocks by nothing.
+        self._tree.setRootIsDecorated(False)
+        self._tree.setIndentation(0)
         self._tree.setDragEnabled(True)
         self._tree.setDragDropMode(QTreeWidget.DragDropMode.DragOnly)
+        self._tree.setExpandsOnDoubleClick(False)
+        # Only ``itemActivated`` — it already fires on a double-click (the platform's
+        # activation trigger) and on Enter, so it covers both ways to choose a block.
+        # Also wiring ``itemDoubleClicked`` here would double-fire on every double-click:
+        # a single choice would insert two blocks, stacked at the same spot, and the
+        # duplicate only showed once the top one was dragged aside.
         self._tree.itemActivated.connect(self._on_activated)
-        self._tree.itemDoubleClicked.connect(self._on_activated)
+        self._tree.itemClicked.connect(self._on_clicked)
+        self._tree.itemExpanded.connect(self._on_toggled)
+        self._tree.itemCollapsed.connect(self._on_toggled)
         outer.addWidget(self._tree)
 
         self._build()
@@ -94,17 +118,25 @@ class BlockPalette(QWidget):
     def _build(self) -> None:
         self._tree.clear()
         for category in self._catalog.list_categories():
-            parent = QTreeWidgetItem([f"{category.icon}  {category.title_ru}"])
+            parent = QTreeWidgetItem()
             parent.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            parent.setData(0, _TITLE_ROLE, category.title_ru)
             self._tree.addTopLevelItem(parent)
             parent.setExpanded(True)
+            self._set_category_label(parent)
             for block in self._catalog.list_blocks(category.type):
                 parent.addChild(self._make_item(block))
 
+    def _set_category_label(self, item: QTreeWidgetItem) -> None:
+        """Prefix the category title with a chevron reflecting its open state."""
+        title = str(item.data(0, _TITLE_ROLE) or "")
+        chevron = _CHEVRON_OPEN if item.isExpanded() else _CHEVRON_SHUT
+        item.setText(0, f"{chevron}  {title}")
+
     def _make_item(self, block: BlockMeta) -> QTreeWidgetItem:
-        label = f"{block.icon}  {block.title_ru}"
+        label = block.title_ru
         if block.is_dangerous:
-            label = f"⚠ {label}"
+            label = f"{label}  ⚠"
         item = QTreeWidgetItem([label])
         item.setData(0, _TYPE_ROLE, block.type)
         haystack = f"{block.title_ru}\n{block.description_ru}\n{block.type}".casefold()
@@ -139,6 +171,15 @@ class BlockPalette(QWidget):
             category.setExpanded(bool(needle) or visible_children > 0)
 
     # -- events -------------------------------------------------------------
+
+    def _on_clicked(self, item: QTreeWidgetItem, _column: int = 0) -> None:
+        """A single click on a category row toggles it open or shut."""
+        if item.data(0, _TITLE_ROLE) is not None:
+            item.setExpanded(not item.isExpanded())
+
+    def _on_toggled(self, item: QTreeWidgetItem) -> None:
+        if item.data(0, _TITLE_ROLE) is not None:
+            self._set_category_label(item)
 
     def _on_activated(self, item: QTreeWidgetItem, _column: int = 0) -> None:
         block_type = item.data(0, _TYPE_ROLE)

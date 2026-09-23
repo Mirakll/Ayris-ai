@@ -1,10 +1,12 @@
-"""Tab «Команды»: the command library — a tree on the left, the editor on the right.
+"""Tab «Команды»: the command library, with a full-width list and a separate editor.
 
-Task 51 builds the left panel: the :class:`~ayris.gui.widgets.command_tree.CommandTree`
-over the command, folder and trigger repositories of the active profile. The right
-side is the editor of task 52; until it lands the tab shows a placeholder that names
-the selected command, and :attr:`CommandTree.command_activated` already carries the
-id the editor will consume.
+Two screens live in one :class:`~PySide6.QtWidgets.QStackedWidget`. The library screen
+is the :class:`~ayris.gui.widgets.command_tree.CommandTree` (task 51) given the whole
+width — search, filters and the command list. Creating a command, or asking to edit an
+existing one, switches to the editor screen: the
+:class:`~ayris.gui.widgets.macro_editor.MacroEditor` (tasks 52–54, opening on the node
+canvas of task 53) under a «← К списку команд» bar that guards unsaved edits on the
+way back.
 
 The store is built lazily over the live database, the same shape the «Обновления» tab
 uses: constructing every settings page must stay cheap, and a page the user may never
@@ -16,12 +18,27 @@ the tree on a :class:`CommandsChanged` or :class:`ProfileSwitched` from elsewher
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QSplitter
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
+from ayris.actions.macros.schema import SoundBinding
+from ayris.actions.macros.sounds import (
+    SoundHandle,
+    SoundLibrary,
+    active_sound_library,
+    import_sound,
+)
 from ayris.core.config import ConfigManager
-from ayris.core.events import CommandsChanged, EventBus
+from ayris.core.events import CommandReloaded, CommandsChanged, EventBus
 from ayris.core.profile import ProfileSwitched
 from ayris.gui.tabs.base import SettingsTab
 from ayris.gui.tabs.registry import register_tab
@@ -36,7 +53,24 @@ __all__ = ["CommandsTab", "build_store"]
 _log = get_logger(__name__)
 
 
-def build_store() -> CommandTreeStore | None:
+class _ProfileSoundImporter:
+    """Copy a picked file into the profile's sounds folder as a portable WAV.
+
+    The editor's «Файл» binding stores only a filename inside that folder, so a sound
+    the user picks anywhere on disk is decoded, resampled and saved here first. MP3 and
+    OGG need the PyAV decoder from the full package; :func:`import_sound` raises a
+    Russian :class:`~ayris.actions.macros.sounds.importer.SoundImportError` when it is
+    missing, which the section shows next to the row.
+    """
+
+    def __init__(self, sounds_dir: Path) -> None:
+        self._sounds_dir = sounds_dir
+
+    def import_file(self, source: Path) -> str:
+        return import_sound(source, self._sounds_dir).path.name
+
+
+def build_store(*, version_limit: int = 20) -> CommandTreeStore | None:
     """A store over the live database and active profile, or ``None`` if unavailable.
 
     Mirrors the lazy backend of the «Обновления» tab: the tab must build even when
@@ -50,14 +84,67 @@ def build_store() -> CommandTreeStore | None:
         active = repositories.profiles.active()
         if active is None or active.id is None:
             return None
-        return CommandTreeStore(repositories, active.id)
+        return CommandTreeStore(repositories, active.id, version_limit=version_limit)
     except Exception:
         _log.exception("не удалось построить хранилище дерева команд")
         return None
 
 
+def _build_sound_importer() -> _ProfileSoundImporter | None:
+    """An importer over the active profile's sounds folder, or ``None`` if unavailable.
+
+    A missing folder must degrade to a disabled «Выбрать файл…» button, not a crash,
+    the same way :func:`build_store` degrades when storage is not ready.
+    """
+    try:
+        from ayris.core.paths import get_paths
+
+        return _ProfileSoundImporter(get_paths().sounds_dir)
+    except Exception:
+        _log.exception("не удалось подготовить импорт звуков")
+        return None
+
+
+class _LibrarySoundPreview:
+    """Play a binding for the editor's «Прослушать», through the shared library.
+
+    The widget never touches an audio library itself (see
+    :class:`~ayris.gui.widgets.sound_binding.SoundPreview`); it calls this facade,
+    which routes to the one :class:`~ayris.actions.macros.sounds.library.SoundLibrary`
+    the dispatcher built and the macro engine plays through. Preview never waits on
+    playback — a long sound must not freeze the editor — so it goes straight through
+    the mixer with ``wait=False`` under its own «preview» owner, which
+    :meth:`stop` then cancels without touching a command's own sounds.
+    """
+
+    def __init__(self, library: SoundLibrary) -> None:
+        self._library = library
+
+    def preview_binding(self, binding: SoundBinding) -> SoundHandle:
+        audio = self._library.resolve(binding)
+        volume = (binding.volume if binding.volume is not None else 100) / 100
+        return self._library.mixer.play(audio, volume=volume, owner="preview", wait=False)
+
+    def stop(self) -> None:
+        self._library.mixer.stop("preview")
+
+    def duration_ms(self, binding: SoundBinding) -> int | None:
+        return int(self._library.resolve(binding).duration_ms)
+
+
+def _build_sound_preview() -> _LibrarySoundPreview | None:
+    """A preview over the running sound library, or ``None`` when none is up.
+
+    The dispatcher registers the library at start-up; without it (storage not ready,
+    no PortAudio) the «Прослушать» button stays disabled rather than the editor
+    building a second device owner of its own.
+    """
+    library = active_sound_library()
+    return _LibrarySoundPreview(library) if library is not None else None
+
+
 class CommandsTab(SettingsTab):
-    """The «Команды» settings page (task 51 — the library tree; editor is task 52)."""
+    """The «Команды» settings page: full-width library, editor on a second screen."""
 
     def __init__(
         self,
@@ -72,6 +159,17 @@ class CommandsTab(SettingsTab):
         # confuse a library page.
         self.reset_button.hide()
         self.dirty_label.hide()
+        # This page is not a form of narrow settings rows but a full-width editor:
+        # give the tree and the node canvas the whole layer. Pull the «Команды»
+        # heading up almost to the search field (tiny top margin) and shrink the
+        # page padding on every side, so the editor breathes out to the edges.
+        self._layout.setContentsMargins(
+            theme.metric("spacing_xs"),
+            theme.metric("spacing_xs"),
+            theme.metric("spacing_xs"),
+            theme.metric("spacing_xs"),
+        )
+        self._layout.setSpacing(theme.metric("spacing_xs"))
         self._bus = bus
         # Defaults set before any early return, so dispose() is always safe even
         # when the library could not be opened.
@@ -79,13 +177,19 @@ class CommandsTab(SettingsTab):
         self._editor: MacroEditor | None = None
         self._store: CommandTreeStore | None = None
         self._unsub_commands: Callable[[], None] = lambda: None
+        self._unsub_reloaded: Callable[[], None] = lambda: None
         self._unsub_profile: Callable[[], None] = lambda: None
         self._suppress_reload = False
 
-        resolved = store if store is not None else build_store()
+        commands_config = manager.settings.commands
+        resolved = (
+            store
+            if store is not None
+            else build_store(version_limit=commands_config.version_history_limit)
+        )
 
-        self._splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.body.addWidget(self._splitter)
+        self._stack = QStackedWidget()
+        self.body.addWidget(self._stack)
 
         if resolved is None:
             notice = QLabel(
@@ -94,36 +198,122 @@ class CommandsTab(SettingsTab):
             )
             notice.setProperty("role", "secondary")
             notice.setWordWrap(True)
-            self._splitter.addWidget(notice)
+            self._stack.addWidget(notice)
             return
 
         self._store = resolved
         self._tree = CommandTree(resolved, theme)
-        self._tree.command_activated.connect(self._on_command_activated)
+        self._tree.command_edit_requested.connect(self._open_editor)
         self._tree.tree_changed.connect(self._on_tree_changed)
-        self._splitter.addWidget(self._tree)
+        # Screen 0 — the library, given the whole width of the tab.
+        self._stack.addWidget(self._tree)
 
-        self._editor = MacroEditor(resolved, theme, services=MacroEditorServices())
+        # A bus turns a save into a live re-registration (task 54): the editor's
+        # HotReloader publishes CommandsChanged + CommandReloaded itself, so the tab
+        # must not also publish on command_saved — that is what _on_command_saved
+        # reconciles below.
+        services = MacroEditorServices(
+            bus=bus,
+            sound_importer=_build_sound_importer(),
+            sound_preview=_build_sound_preview(),
+            draft_autosave_s=commands_config.draft_autosave_s,
+            action_view=commands_config.action_view,
+            on_action_view_changed=self._save_action_view,
+        )
+        self._editor = MacroEditor(resolved, theme, services=services)
         self._editor.command_saved.connect(self._on_command_saved)
-        self._splitter.addWidget(self._editor)
-        self._splitter.setStretchFactor(0, 2)
-        self._splitter.setStretchFactor(1, 3)
+        self._editor.dirty_changed.connect(self._on_editor_dirty)
+
+        # Screen 1 — the editor under a back bar that guards unsaved edits.
+        editor_page = QWidget()
+        editor_page.setProperty("transparent", True)
+        editor_layout = QVBoxLayout(editor_page)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(theme.metric("spacing_xs"))
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(0, 0, 0, 0)
+        # A flat text link, not a boxed button: no border or left padding, so its
+        # arrow sits flush with the editor's left edge below it, and the bar hugs
+        # the top instead of standing off on a control-height row.
+        self._back_button = QPushButton("← К списку команд")
+        self._back_button.setProperty("link", True)
+        self._back_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._back_button.clicked.connect(self._back_to_library)
+        top_bar.addWidget(self._back_button)
+        top_bar.addStretch(1)
+        editor_layout.addLayout(top_bar)
+        editor_layout.addWidget(self._editor, 1)
+        self._stack.addWidget(editor_page)
 
         if bus is not None:
             self._unsub_commands = bus.subscribe(CommandsChanged, self._on_commands_changed)
+            self._unsub_reloaded = bus.subscribe(CommandReloaded, self._on_command_reloaded)
             self._unsub_profile = bus.subscribe(ProfileSwitched, self._on_profile_switched)
 
     # -- event wiring -------------------------------------------------------
 
-    def _on_command_activated(self, command_id: int) -> None:
-        if self._editor is not None:
-            self._editor.load_command(command_id)
+    def _open_editor(self, command_id: int) -> None:
+        """Load a command into the editor and switch to the editor screen."""
+        if self._editor is None:
+            return
+        self._editor.load_command(command_id)
+        self._stack.setCurrentIndex(1)
+
+    def reveal_command(self, command_id: int) -> None:
+        """Show a command in the library, selected — the «Открыть команду» target.
+
+        Task 55's «Горячие клавиши» tab links each command hotkey here. Any unsaved
+        editor edits are guarded first (task 54); if the user chooses to keep
+        editing, the jump is abandoned rather than dropping their changes silently.
+        """
+        if self._tree is None:
+            return
+        if (
+            self._stack.currentIndex() == 1
+            and self._editor is not None
+            and not self._editor.guard_unsaved()
+        ):
+            return
+        self._stack.setCurrentIndex(0)
+        self._tree.refresh()
+        self._tree.select_command(command_id)
+
+    def _back_to_library(self) -> None:
+        """Return to the list, guarding unsaved edits (task 54) before leaving.
+
+        Cancelling the «Сохранить / Не сохранять / Отмена» prompt keeps the editor
+        open on its command; otherwise the list is shown again and refreshed so a
+        rename or a new command is reflected.
+        """
+        if self._editor is not None and not self._editor.guard_unsaved():
+            return
+        self._stack.setCurrentIndex(0)
+        if self._tree is not None:
+            self._tree.refresh()
+
+    def _on_editor_dirty(self, dirty: bool) -> None:
+        if self._tree is not None and self._editor is not None:
+            self._tree.set_dirty_command(self._editor.command_id if dirty else None)
 
     def _on_command_saved(self, _command_id: int) -> None:
-        # A save changed the command's name, tags or triggers; the tree labels and
-        # conflict marks are now stale. Refresh through the same echo guard as a tree
-        # edit, so our own CommandsChanged does not bounce back into a reload.
-        self._on_tree_changed()
+        # With a bus, the editor's HotReloader already published a targeted
+        # CommandsChanged (re-registering the command) and a CommandReloaded (which
+        # refreshes the tree below), so the tab must stay silent or it would fire a
+        # bare, full-reload CommandsChanged on top. Without a bus there is nothing
+        # else to refresh the tree, so fall back to the direct refresh.
+        if self._bus is None and self._tree is not None:
+            self._tree.refresh()
+
+    def _save_action_view(self, view: str) -> None:
+        # Persist the user's «Список ↔ Ноды» choice so the next command and the next
+        # launch open in the same view. A rejected write must not break the editor —
+        # the toggle already switched, it just would not be remembered.
+        if view == self._manager.settings.commands.action_view:
+            return
+        try:
+            self._manager.apply({"commands.action_view": view})
+        except Exception:
+            _log.exception("не удалось сохранить режим редактора действий")
 
     def _on_tree_changed(self) -> None:
         if self._bus is not None:
@@ -139,21 +329,38 @@ class CommandsTab(SettingsTab):
             return
         self._tree.refresh()
 
+    def _on_command_reloaded(self, _event: CommandReloaded) -> None:
+        # The editor re-registered one command; its tree label, priority glyph and
+        # conflict marks may have changed. Refresh from the same event the trigger
+        # subsystems reloaded on, so the tree agrees with what is now live.
+        if self._tree is not None:
+            self._tree.refresh()
+
     def _on_profile_switched(self, _event: ProfileSwitched) -> None:
         if self._tree is None:
             return
-        store = build_store()
+        # The profile is already switching elsewhere; we cannot veto it, but we can
+        # still offer to save the open command's edits before its library is dropped.
+        if self._editor is not None:
+            self._editor.guard_unsaved()
+        store = build_store(version_limit=self._manager.settings.commands.version_history_limit)
         if store is not None:
             self._store = store
             self._tree.set_store(store)
             if self._editor is not None:
                 self._editor.set_store(store)
+        # The open command belonged to the old profile's library; fall back to the
+        # list so the user is not left staring at a now-cleared editor.
+        self._stack.setCurrentIndex(0)
 
     # -- lifecycle ----------------------------------------------------------
 
     def dispose(self) -> None:
         self._unsub_commands()
+        self._unsub_reloaded()
         self._unsub_profile()
+        if self._editor is not None:
+            self._editor.stop_autosave()
         super().dispose()
 
 

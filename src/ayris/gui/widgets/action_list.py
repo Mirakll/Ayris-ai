@@ -322,6 +322,18 @@ class ActionListModel:
             block.comment = comment.strip()
             self._touch()
 
+    def set_params(self, container: BlockPath, index: int, params: dict[str, object]) -> None:
+        """Replace a block's parameters, then re-validate through the model.
+
+        Used by the node editor to write a wire's delay back onto its «Пауза» block in
+        place, so the block keeps its identity (and its saved node position) instead of
+        being replaced. Runs :meth:`_touch` so the schema check fires like any other edit.
+        """
+        block = self._peek(container, index)
+        if block is not None:
+            block.params = dict(params)
+            self._touch()
+
     def block_at(self, path: BlockPath) -> ActionBlock | None:
         """The block at a full path (``container + index``), or ``None``."""
         if not path:
@@ -487,6 +499,8 @@ class ActionListView(QTreeWidget):
         label = f"{prefix}{title}"
         if not row.block.enabled:
             label = f"{label} (выкл.)"
+        if row.block.detached:
+            label = f"{label} (не подключено)"
         if row.block.comment:
             label = f"{label} — {row.block.comment}"
         item = QTreeWidgetItem([label])

@@ -473,9 +473,27 @@ def test_widget_create_command(
 
     monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *_a, **_k: ("Новая", True)))
     tree = _tree(app, store)
+    requested: list[int] = []
+    tree.command_edit_requested.connect(requested.append)
     tree._create_command(_folder_id(store, "Игры"))
     created = store._repos.commands.get_by_name(store.profile_id, "Новая")
     assert created is not None and created.folder_id == _folder_id(store, "Игры")
+    # A fresh command opens straight in the editor: the tree asks for the switch.
+    assert requested and requested[-1] == created.id
+    tree.close()
+
+
+def test_widget_edit_button_requests_editor(app: QApplication, store: CommandTreeStore) -> None:
+    tree = _tree(app, store)
+    requested: list[int] = []
+    tree.command_edit_requested.connect(requested.append)
+    # Nothing selected — the button is off and does nothing.
+    assert not tree._edit_button.isEnabled()
+    index = _root_command_index(tree.model, "Корень")
+    tree._view.setCurrentIndex(index)
+    assert tree._edit_button.isEnabled()
+    tree._edit_current()
+    assert requested and requested[-1] == _command_id(store, "Корень")
     tree.close()
 
 
@@ -681,10 +699,60 @@ def test_tab_builds_and_bridges_events(app: QApplication, store: CommandTreeStor
     published: list[CommandsChanged] = []
     bus.subscribe(CommandsChanged, published.append)
     assert tab._tree is not None
-    tab._on_command_activated(_command_id(store, "Свет"))
+    tab._open_editor(_command_id(store, "Свет"))
     tab._tree.tree_changed.emit()
     assert published
     bus.publish(CommandsChanged())  # external change rebuilds without looping
+    tab.dispose()
+    tab.close()
+
+
+def test_tab_persists_action_view_choice(app: QApplication, store: CommandTreeStore) -> None:
+    # Flipping «Список ↔ Ноды» in the editor must reach config, so the next command
+    # and the next launch open in the same view. The editor defaults to the node
+    # canvas; switching to the list persists «list», switching back persists «nodes».
+    import tempfile
+    from pathlib import Path
+
+    from ayris.core.config import ConfigManager
+    from ayris.gui.tabs.commands import CommandsTab
+
+    config = ConfigManager(Path(tempfile.mkdtemp()) / "c.toml")
+    assert config.settings.commands.action_view == "nodes"
+    tab = CommandsTab(config, ThemeManager(app), None, store=store)
+    assert tab._editor is not None
+    tab._open_editor(_command_id(store, "Свет"))
+
+    tab._editor._list_button.click()
+    assert config.settings.commands.action_view == "list"
+    tab._editor._nodes_button.click()
+    assert config.settings.commands.action_view == "nodes"
+
+    tab.dispose()
+    tab.close()
+
+
+def test_tab_edit_switches_to_editor_and_back(app: QApplication, store: CommandTreeStore) -> None:
+    # The library is screen 0; asking to edit shows the editor (screen 1) with the
+    # command loaded, and «← К списку команд» returns to the list when nothing is dirty.
+    import tempfile
+    from pathlib import Path
+
+    from ayris.core.config import ConfigManager
+    from ayris.gui.tabs.commands import CommandsTab
+
+    config = ConfigManager(Path(tempfile.mkdtemp()) / "c.toml")
+    tab = CommandsTab(config, ThemeManager(app), None, store=store)
+    assert tab._tree is not None and tab._editor is not None
+    assert tab._stack.currentIndex() == 0
+
+    tab._tree.command_edit_requested.emit(_command_id(store, "Свет"))
+    assert tab._stack.currentIndex() == 1
+    assert tab._editor.command_id == _command_id(store, "Свет")
+
+    tab._back_to_library()  # not dirty, so the guard passes silently
+    assert tab._stack.currentIndex() == 0
+
     tab.dispose()
     tab.close()
 
@@ -697,7 +765,7 @@ def test_tab_handles_missing_store(app: QApplication, monkeypatch: pytest.Monkey
     from ayris.gui.tabs import commands as commands_module
     from ayris.gui.tabs.commands import CommandsTab
 
-    monkeypatch.setattr(commands_module, "build_store", lambda: None)
+    monkeypatch.setattr(commands_module, "build_store", lambda **_: None)
     config = ConfigManager(Path(tempfile.mkdtemp()) / "c.toml")
     tab = CommandsTab(config, ThemeManager(app), None)
     assert tab._tree is None

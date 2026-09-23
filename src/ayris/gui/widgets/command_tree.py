@@ -20,7 +20,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QPoint, QRect, Qt, Signal
+from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QPoint, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -78,6 +78,10 @@ class CommandTree(QWidget):
     """The tree view plus its search, filters, menu and file operations."""
 
     command_activated = Signal(int)
+    #: Emitted when the user asks to open a command in the full node editor —
+    #: from the «Редактировать» button, the context-menu entry, or straight after
+    #: creating a new command. The tab turns this into a switch to the editor screen.
+    command_edit_requested = Signal(int)
     selection_changed = Signal()
     tree_changed = Signal()
 
@@ -114,6 +118,13 @@ class CommandTree(QWidget):
         second.addWidget(self._conflicts_toggle)
         second.addWidget(conflicts_label)
         second.addStretch(1)
+        # Editing now happens on a separate node-canvas screen, so the library gives
+        # the whole width to the list and opens the editor on demand: this button (and
+        # the command context menu) requests the switch for the selected command.
+        self._edit_button = QPushButton("Редактировать")
+        self._edit_button.setEnabled(False)
+        self._edit_button.clicked.connect(self._edit_current)
+        second.addWidget(self._edit_button)
         self._new_command_button = QPushButton("＋ Команда")
         self._new_command_button.clicked.connect(
             lambda: self._create_command(self._current_folder())
@@ -127,15 +138,23 @@ class CommandTree(QWidget):
         second.addWidget(self._import_button)
         self._layout.addLayout(second)
 
-        self._view = QTreeView()
+        self._view = _CommandTreeView(theme)
         self._view.setModel(self._model)
         self._view.setHeaderHidden(True)
         self._view.setUniformRowHeights(True)
+        # Tighten the indent: a command has no twist arrow, so the default column left
+        # a wide empty gutter before its card. This still fits the folder chevron.
+        self._view.setIndentation(theme.metric("spacing_md"))
         self._view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._view.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self._view.setDefaultDropAction(Qt.DropAction.MoveAction)
         self._view.setDropIndicatorShown(True)
-        self._view.setEditTriggers(QAbstractItemView.EditTrigger.EditKeyPressed)
+        # Click an already-selected row to rename it inline (plus F2), the file-explorer
+        # gesture the redesign asks for; opening the editor is the explicit button.
+        self._view.setEditTriggers(
+            QAbstractItemView.EditTrigger.SelectedClicked
+            | QAbstractItemView.EditTrigger.EditKeyPressed
+        )
         self._view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._view.customContextMenuRequested.connect(self._show_menu)
         self._delegate = _TreeDelegate(theme, self._view)
@@ -172,6 +191,29 @@ class CommandTree(QWidget):
         self._model.reload()
         self._reload_tags()
 
+    def set_dirty_command(self, command_id: int | None) -> None:
+        """Show or clear the unsaved-changes mark on a command row (task 54)."""
+        self._model.set_dirty_command(command_id)
+
+    def select_command(self, command_id: int) -> None:
+        """Move the selection to a command without re-emitting ``command_activated``.
+
+        Used to snap the tree back after an unsaved-changes prompt is cancelled
+        (task 54): the row must follow the editor, but selecting it must not look
+        like the user opening it again, or the guard would prompt in a loop.
+        """
+        index = self._model.index_for(NodeKind.COMMAND, command_id)
+        if not index.isValid():
+            return
+        selection = self._view.selectionModel()
+        if selection is not None:
+            blocked = selection.blockSignals(True)
+            try:
+                self._view.setCurrentIndex(index)
+            finally:
+                selection.blockSignals(blocked)
+        self._view.scrollTo(index)
+
     # -- filtering ----------------------------------------------------------
 
     def _on_filter_changed(self, *_args: object) -> None:
@@ -200,8 +242,16 @@ class CommandTree(QWidget):
     # -- selection ----------------------------------------------------------
 
     def _on_current_changed(self, current: QModelIndex, _previous: QModelIndex) -> None:
-        if current.isValid() and current.data(KIND_ROLE) == str(NodeKind.COMMAND):
+        is_command = current.isValid() and current.data(KIND_ROLE) == str(NodeKind.COMMAND)
+        self._edit_button.setEnabled(bool(is_command))
+        if is_command:
             self.command_activated.emit(int(current.data(ENTITY_ID_ROLE)))
+
+    def _edit_current(self) -> None:
+        """Ask the tab to open the selected command in the node editor."""
+        index = self._view.currentIndex()
+        if index.isValid() and index.data(KIND_ROLE) == str(NodeKind.COMMAND):
+            self.command_edit_requested.emit(int(index.data(ENTITY_ID_ROLE)))
 
     def _current_folder(self) -> int | None:
         index = self._view.currentIndex()
@@ -253,6 +303,7 @@ class CommandTree(QWidget):
             command_id = int(index.data(ENTITY_ID_ROLE))
             enabled = bool(index.data(ENABLED_ROLE))
             menu.addSeparator()
+            _add(menu, "Редактировать", lambda: self.command_edit_requested.emit(command_id))
             _add(menu, "Переименовать", lambda: self._view.edit(index))
             _add(menu, "Дублировать", lambda: self._duplicate(command_id))
             label = "Выключить" if enabled else "Включить"
@@ -284,6 +335,9 @@ class CommandTree(QWidget):
         self._after_change()
         if created.id is not None:
             self._select(NodeKind.COMMAND, created.id)
+            # Named and created — take the user straight to the node canvas to build
+            # it, which is the whole point of «создать команду» in the new layout.
+            self.command_edit_requested.emit(created.id)
 
     def _create_folder(self, parent_id: int | None) -> None:
         name, ok = QInputDialog.getText(self, "Новая папка", "Имя папки:")
@@ -485,6 +539,43 @@ class CommandTree(QWidget):
         self._layout.setSpacing(gap)
 
 
+class _CommandTreeView(QTreeView):
+    """A tree that keeps the branch (expand) column out of the row's selection.
+
+    ``QTreeView`` paints a row's selection highlight across the whole row, the
+    indentation/expand column included, and clips it to a plain rectangle — so a
+    selected command showed a stray accent square to the left of its rounded pill,
+    and an unselected one the grey placeholder Fusion leaves there. ``drawBranches``
+    runs *after* that row background, so we repaint the branch rect with the tree's
+    own surface colour, erasing the square; a folder then gets its twist arrow drawn
+    back on top, so its collapse control survives while every row stays clean.
+    """
+
+    def __init__(self, theme: ThemeManager, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._theme = theme
+
+    def drawBranches(  # noqa: N802
+        self, painter: QPainter, rect: QRect, index: QModelIndex | QPersistentModelIndex
+    ) -> None:
+        # Repaint the branch column with the tree's surface, erasing whatever the row
+        # background painted there (the selection accent, or Fusion's grey leaf box).
+        painter.fillRect(rect, QColor(self._theme.theme.color("surface")))
+        model = self.model()
+        if model is None or not model.hasChildren(index):
+            return
+        # A folder keeps a collapse control, but we draw our own chevron instead of
+        # calling the base style — the styled branch would repaint the accent (a stray
+        # coloured square) behind it whenever the folder row is selected.
+        indent = self.indentation()
+        slot = QRect(rect.right() - indent, rect.top(), indent, rect.height())
+        painter.save()
+        painter.setPen(QColor(self._theme.theme.color("text_muted")))
+        chevron = "▾" if self.isExpanded(index) else "▸"
+        painter.drawText(slot, int(Qt.AlignmentFlag.AlignCenter), chevron)
+        painter.restore()
+
+
 class _TreeDelegate(QStyledItemDelegate):
     """Mutes disabled commands, bolds a search hit and flags a trigger conflict."""
 
@@ -518,6 +609,8 @@ class _TreeDelegate(QStyledItemDelegate):
         index: QModelIndex | QPersistentModelIndex,
     ) -> None:
         super().paint(painter, option, index)
+        if index.data(KIND_ROLE) == str(NodeKind.COMMAND):
+            self._paint_outline(painter, option, index)
         conflicts = index.data(CONFLICT_ROLE)
         if not conflicts:
             return
@@ -537,6 +630,35 @@ class _TreeDelegate(QStyledItemDelegate):
         mid_x = box.center().x()
         painter.drawLine(mid_x, box.top() + size // 3, mid_x, box.bottom() - size // 3)
         painter.drawPoint(mid_x, box.bottom() - size // 4)
+        painter.restore()
+
+    def _paint_outline(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex | QPersistentModelIndex,
+    ) -> None:
+        """Draw a rounded accent frame around a command row.
+
+        Every command in the library gets a soft фиолетовая обводка so the list reads
+        as a stack of cards rather than bare text. The frame follows the same radius
+        as the selection pill the QSS paints under it, sits just inside the row and is
+        muted for a disabled command; a selected row already fills with the accent, so
+        the outline simply rides its edge.
+        """
+        rect = QRectF(option.rect)  # type: ignore[attr-defined]
+        rect.adjust(1.5, 2.5, -1.5, -2.5)
+        if rect.width() <= 0 or rect.height() <= 0:
+            return
+        token = "accent_disabled" if not bool(index.data(ENABLED_ROLE)) else "accent"
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        pen = QPen(QColor(self._theme.theme.color(token)))
+        pen.setWidthF(max(1.0, float(self._theme.metric("border_width"))))
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        radius = float(self._theme.metric("radius_md"))
+        painter.drawRoundedRect(rect, radius, radius)
         painter.restore()
 
 
