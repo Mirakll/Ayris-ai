@@ -1708,6 +1708,13 @@ class PrivacyConfig(ConfigSection):
         le=100000,
         description="Сколько записей истории держать. 0 — не ограничивать",
     )
+    record_transcript: bool = Field(
+        default=True,
+        description=(
+            "Записывать распознанный текст в историю. "
+            "Выключено — строка есть, но фраза не сохраняется"
+        ),
+    )
     store_audio: bool = Field(
         default=False,
         description="Сохранять записи голоса на диск. По умолчанию выключено",
@@ -1715,6 +1722,39 @@ class PrivacyConfig(ConfigSection):
     audit_commands: bool = Field(
         default=True,
         description="Вести журнал выполненных команд",
+    )
+    audit_params: bool = Field(
+        default=True,
+        description=(
+            "Записывать параметры действий в аудит. Выключено — запись есть, параметры пустые"
+        ),
+    )
+    retention_history_days: int = Field(
+        default=0,
+        ge=0,
+        le=3650,
+        description="Удалять историю старше стольких дней. 0 — не удалять по сроку",
+    )
+    retention_clipboard_days: int = Field(
+        default=0,
+        ge=0,
+        le=3650,
+        description="Удалять историю буфера старше стольких дней. 0 — не удалять по сроку",
+    )
+    retention_audit_days: int = Field(
+        default=0,
+        ge=0,
+        le=3650,
+        description="Удалять журнал аудита старше стольких дней. 0 — не удалять по сроку",
+    )
+    last_cleanup_at: str = Field(
+        default="",
+        description="Когда автоочистка выполнялась в последний раз (ISO 8601). Пусто — ещё ни разу",
+    )
+    last_cleanup_removed: int = Field(
+        default=0,
+        ge=0,
+        description="Сколько записей удалила последняя автоочистка",
     )
     require_confirmation: bool = Field(
         default=True,

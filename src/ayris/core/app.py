@@ -1000,6 +1000,7 @@ class AyrisApp:
         dropped = repositories.variables.clear_transient()
         if dropped:
             _log.debug("удалено временных переменных: %d", dropped)
+        self._guarded("автоочистка данных", self._apply_startup_retention)
 
     def _stop_profile(self) -> None:
         """Keep the persistent variables, drop the rest.
@@ -1021,6 +1022,43 @@ class AyrisApp:
     def _trim_history(self, limit: int) -> None:
         if self._repositories is not None:
             self._repositories.maintenance.apply_retention(history_limit=limit)
+
+    def _apply_startup_retention(self) -> None:
+        """Enforce per-category retention on start, at most once per day.
+
+        Covers the «автоочистка при старте и раз в сутки» rule: a desktop app is
+        typically relaunched daily, and the stored timestamp keeps rapid restarts
+        from re-running it. History, clipboard and audit each get their own period.
+        """
+        if self._repositories is None or self._config is None:
+            return
+        from datetime import datetime, timedelta
+
+        from ayris.core.models import utc_now
+
+        privacy = self._config.settings.privacy
+        now = utc_now()
+        if privacy.last_cleanup_at:
+            try:
+                previous: datetime | None = datetime.fromisoformat(privacy.last_cleanup_at)
+            except ValueError:
+                previous = None
+            if previous is not None and now - previous < timedelta(hours=20):
+                return
+        removed = self._repositories.maintenance.apply_retention(
+            history_days=privacy.retention_history_days,
+            history_limit=privacy.history_limit,
+            clipboard_days=privacy.retention_clipboard_days,
+            audit_days=privacy.retention_audit_days,
+        )
+        self._config.apply(
+            {
+                "privacy.last_cleanup_at": now.isoformat(),
+                "privacy.last_cleanup_removed": removed,
+            }
+        )
+        if removed:
+            _log.info("автоочистка при старте удалила записей: %d", removed)
 
     # -- event bus and state -------------------------------------------
 

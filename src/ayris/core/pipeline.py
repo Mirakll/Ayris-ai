@@ -46,7 +46,7 @@ from __future__ import annotations
 import threading
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, Protocol
@@ -502,6 +502,7 @@ class Pipeline:
         "_mode",
         "_phrase_source",
         "_pipeline_log",
+        "_record_transcript",
         "_runner",
         "_session",
         "_settings",
@@ -554,6 +555,7 @@ class Pipeline:
         self._subscriptions: list[Callable[[], None]] = []
         self._mode = NluMode.HYBRID
         self._store_history = True
+        self._record_transcript = True
         self._pipeline_log = False
         self._echo_guard = False
         if settings is not None:
@@ -578,6 +580,7 @@ class Pipeline:
     def _read_settings(self, settings: Settings) -> None:
         self._mode = mode_from_config(settings)
         self._store_history = settings.privacy.store_history
+        self._record_transcript = settings.privacy.record_transcript
         self._pipeline_log = settings.devtools.pipeline_log
         # Whether the microphone is trusted while Ayris is speaking. On means an
         # activation during the answer is treated as the assistant's own voice
@@ -905,8 +908,13 @@ class Pipeline:
             del self._traces[:-MAX_TRACES]
         if not self._store_history or self._history is None:
             return
+        entry = trace.to_history()
+        if not self._record_transcript:
+            # The row still records what ran and how long; only the recognised
+            # phrase is dropped, so «повтори» and DevTools keep working.
+            entry = replace(entry, stt_raw="")
         try:
-            self._history.add(trace.to_history())
+            self._history.add(entry)
         except Exception as exc:
             # The user already got their answer; losing the history row is the
             # smaller loss, and a failing sink must not take the session with it.

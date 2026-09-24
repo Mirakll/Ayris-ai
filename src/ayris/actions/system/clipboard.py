@@ -504,6 +504,11 @@ def record_clipboard(
     config = settings if settings is not None else clipboard_settings()
     repository = store if store is not None else get_clipboard_store()
 
+    if not config.monitor:
+        # The «записывать содержимое буфера» switch is off. The listener is
+        # normally not even running, but honour the flag here too so a value can
+        # never slip in while it is disabled.
+        return RecordOutcome(reason="disabled")
     if secret:
         return RecordOutcome(reason="secret")
     if snapshot.excluded and config.skip_password_managers:

@@ -917,7 +917,9 @@ class ActionRegistry:
             return
         entry = AuditEntry(
             command_name=action.meta.name,
-            params=mask_params(params) if params is not None else {},
+            params=(
+                mask_params(params) if params is not None and _audit_params_from_settings() else {}
+            ),
             result=outcome,
             require_admin=action.meta.require_admin,
             elevated=self._elevated(),
@@ -1050,6 +1052,20 @@ def _audit_from_settings() -> bool:
 
     try:
         return bool(get_settings().privacy.audit_commands)
+    except AyrisError:
+        return True
+
+
+def _audit_params_from_settings() -> bool:
+    """Read ``privacy.audit_params``, defaulting to on when unreadable.
+
+    Off keeps the audit row — command, result, admin flags — but blanks the
+    parameters, so the journal still proves what ran without storing the values.
+    """
+    from ayris.core.config import get_settings
+
+    try:
+        return bool(get_settings().privacy.audit_params)
     except AyrisError:
         return True
 

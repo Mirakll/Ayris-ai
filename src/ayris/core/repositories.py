@@ -1331,6 +1331,20 @@ class ClipboardRepository(_Repository):
         )
         return cursor.rowcount
 
+    def delete_older_than(self, days: int) -> int:
+        """Delete unpinned entries older than ``days``. Pinned items are kept."""
+        if days <= 0:
+            return 0
+        cutoff = utc_now() - timedelta(days=days)
+        cursor = self._db.execute(
+            "DELETE FROM clipboard_history WHERE pinned = 0 AND ts < ?",
+            (to_db_timestamp(cutoff),),
+        )
+        removed = cursor.rowcount
+        if removed:
+            _log.info("удалено записей буфера старше %d дн.: %d", days, removed)
+        return removed
+
     def clear(self, *, keep_pinned: bool = True) -> int:
         sql = "DELETE FROM clipboard_history"
         if keep_pinned:
@@ -1579,17 +1593,29 @@ class CleanupReport:
 class MaintenanceRepository(_Repository):
     """Retention, cleanup and backup — the Privacy tab's engine room."""
 
-    def apply_retention(self, *, history_days: int = 0, history_limit: int = 0) -> int:
+    def apply_retention(
+        self,
+        *,
+        history_days: int = 0,
+        history_limit: int = 0,
+        clipboard_days: int = 0,
+        audit_days: int = 0,
+    ) -> int:
         """Enforce the retention settings. Returns rows removed.
 
-        Runs at startup and after the settings change. Both limits are optional
-        and ``0`` disables either one.
+        Runs at startup and after the settings change. Every limit is optional and
+        ``0`` disables it, so the three categories the Privacy tab exposes — command
+        history, clipboard history and the audit journal — keep separate periods.
         """
         removed = 0
         with self._db.transaction():
             history = HistoryRepository(self._db)
             removed += history.delete_older_than(history_days)
             removed += history.trim_to_limit(history_limit)
+            if audit_days > 0:
+                removed += AuditRepository(self._db).delete_older_than(audit_days)
+            if clipboard_days > 0:
+                removed += ClipboardRepository(self._db).delete_older_than(clipboard_days)
         return removed
 
     def clear(
