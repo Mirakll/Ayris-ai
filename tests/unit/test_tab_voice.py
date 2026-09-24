@@ -362,6 +362,33 @@ def test_cloud_key_never_reaches_the_config(
     tab.close()
 
 
+def test_stt_cloud_endpoint_and_model_shown_and_saved_for_openai(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    stt = tab._sections[0]
+
+    # Default provider is Yandex: the paste-your-own-service fields stay hidden.
+    assert stt._endpoint_card.isHidden()
+    assert stt._model_card.isHidden()
+
+    # Choosing the OpenAI-compatible provider reveals them...
+    stt._provider_combo.setCurrentIndex(stt._provider_combo.findData("openai"))
+    assert not stt._endpoint_card.isHidden()
+    assert not stt._model_card.isHidden()
+
+    # ...and a custom endpoint and model typed there reach the config.
+    stt._endpoint_edit.setText("https://groq.example/openai/v1/audio/transcriptions")
+    stt._model_edit.setText("whisper-large-v3")
+    tab.flush_pending()
+    settings = manager.settings.voice.stt
+    assert settings.online_provider == "openai"
+    assert settings.online_endpoint == "https://groq.example/openai/v1/audio/transcriptions"
+    assert settings.online_model == "whisper-large-v3"
+    tab.dispose()
+    tab.close()
+
+
 def test_calibration_recommendation_applied(app: QApplication, manager: ConfigManager) -> None:
     from ayris.audio.calibration import Recommendation
     from ayris.audio.denoise import DenoiseMode

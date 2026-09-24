@@ -40,7 +40,7 @@ _PROVIDERS = {
     "yandex": "Яндекс SpeechKit",
     "google": "Google Cloud Speech-to-Text",
     "azure": "Azure Speech",
-    "openai": "OpenAI Whisper",
+    "openai": "OpenAI-совместимый (Whisper)",
 }
 
 
@@ -216,11 +216,42 @@ class SttSection:
         for value, label in combo_options(SttConfig, "online_provider", _PROVIDERS):
             self._provider_combo.addItem(label, value)
         tab.bind_combo(self._provider_combo, "voice.stt.online_provider", "Облачный провайдер")
+        self._provider_combo.currentIndexChanged.connect(
+            lambda _index: self._update_cloud_visibility()
+        )
         tab.add_card(
             "Облачный провайдер",
             "Сервис распознавания для онлайн-режима.",
             self._provider_combo,
         )
+
+        # Endpoint and model are the paste-your-own-service fields: the OpenAI
+        # provider POSTs to whatever URL is set here, so any OpenAI-compatible
+        # transcription API (a self-hosted Whisper, Groq, a regional proxy) works
+        # without a code change. Hidden until that provider is chosen — the other
+        # three have their address and model fixed for them.
+        self._endpoint_edit = QLineEdit()
+        self._endpoint_edit.setPlaceholderText("https://api.openai.com/v1/audio/transcriptions")
+        tab.bind_line_edit(self._endpoint_edit, "voice.stt.online_endpoint", "Адрес сервиса")
+        self._endpoint_card = tab.add_card(
+            "Адрес сервиса",
+            "Полный URL метода транскрипции OpenAI-совместимого API. "
+            "Пусто — адрес OpenAI по умолчанию.",
+            self._endpoint_edit,
+        )
+
+        self._model_edit = QLineEdit()
+        self._model_edit.setPlaceholderText("whisper-1")
+        tab.bind_line_edit(self._model_edit, "voice.stt.online_model", "Модель распознавания")
+        self._model_card = tab.add_card(
+            "Модель",
+            "Идентификатор модели распознавания у сервиса. "
+            "Пусто — модель по умолчанию (whisper-1).",
+            self._model_edit,
+        )
+
+        for card in (self._endpoint_card, self._model_card):
+            card.setVisible(False)
 
         self._ref_edit = QLineEdit()
         self._ref_edit.setPlaceholderText("yandex")
@@ -288,12 +319,29 @@ class SttSection:
     def refresh(self) -> None:
         self._reload_models()
         self._update_notices()
+        self._update_cloud_visibility()
         ready = self._tab.services.transcribe_once is not None
         self._test_button.setEnabled(ready)
         self._test_button.setToolTip(
             "" if ready else "Тест станет доступен после запуска распознавания"
         )
         self._secret.refresh()
+
+    def _update_cloud_visibility(self) -> None:
+        """Show the endpoint and model fields only for the OpenAI-compatible provider.
+
+        They are the paste-your-own-service settings: the OpenAI recogniser sends its
+        request to whatever address is set, so any OpenAI-compatible transcription API
+        works. Yandex, Google and Azure have their address and model fixed for them, so
+        the fields would only confuse there.
+        """
+        provider = str(
+            self._provider_combo.currentData()
+            or self._tab.manager.settings.voice.stt.online_provider
+        )
+        is_openai = provider == "openai"
+        self._endpoint_card.setVisible(is_openai)
+        self._model_card.setVisible(is_openai)
 
     def _reload_models(self) -> None:
         settings = self._tab.manager.settings.voice.stt
