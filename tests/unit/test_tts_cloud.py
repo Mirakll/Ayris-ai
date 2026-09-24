@@ -73,6 +73,7 @@ from ayris.audio.tts.cloud_base import (
 )
 from ayris.audio.tts.elevenlabs_engine import ElevenLabsTtsEngine
 from ayris.audio.tts.google_tts_engine import GoogleTtsEngine
+from ayris.audio.tts.openai_tts_engine import OpenAiTtsEngine
 from ayris.audio.tts.yandex_tts_engine import YandexTtsEngine
 from ayris.core.errors import TtsError
 from ayris.core.secrets import SecretsStore, mask, reset_secrets
@@ -713,6 +714,86 @@ class TestAzure:
         assert [spec.voice_id for spec in voices] == ["ru-RU-SvetlanaNeural"]
 
 
+class TestOpenAi:
+    """The generic OpenAI-compatible engine: any endpoint, model from settings."""
+
+    def test_request_is_the_audio_speech_body(self, keyring_store: SecretsStore) -> None:
+        recorder = Recorder(content=wav(pcm()))
+        engine = load(OpenAiTtsEngine(), recorder, voice_id="nova", model="tts-1")
+        engine.synthesize(PHRASE)
+        assert str(recorder.last.url) == "https://openrouter.ai/api/v1/audio/speech"
+        body = recorder.json_body()
+        assert body["model"] == "tts-1"
+        assert body["input"] == PHRASE
+        assert body["voice"] == "nova"
+        assert body["response_format"] == "wav"
+        assert recorder.last.headers["Authorization"] == f"Bearer {KEY}"
+
+    def test_endpoint_override_is_honoured(self, keyring_store: SecretsStore) -> None:
+        """ "any service, not just OpenRouter" comes down to this base URL."""
+        recorder = Recorder(content=wav(pcm()))
+        engine = load(
+            OpenAiTtsEngine(), recorder, model="tts-1", endpoint="https://api.openai.com/v1"
+        )
+        engine.synthesize(PHRASE)
+        assert str(recorder.last.url) == "https://api.openai.com/v1/audio/speech"
+
+    def test_default_voice_when_none_configured(self, keyring_store: SecretsStore) -> None:
+        recorder = Recorder(content=wav(pcm()))
+        engine = load(OpenAiTtsEngine(), recorder, model="tts-1")
+        engine.synthesize(PHRASE)
+        assert recorder.json_body()["voice"] == "alloy"
+
+    def test_wav_answer_is_decoded_by_its_own_header(self, keyring_store: SecretsStore) -> None:
+        """WAV carries the rate, so a service at any rate decodes correctly."""
+        data = pcm(240)
+        engine = load(OpenAiTtsEngine(), Recorder(content=wav(data, rate=16000)), model="tts-1")
+        chunk = engine.synthesize(PHRASE)
+        assert chunk.pcm == data
+        assert chunk.sample_rate == 16000
+
+    def test_pcm_format_names_the_rate_the_bytes_lack(self, keyring_store: SecretsStore) -> None:
+        data = pcm(240)
+        recorder = Recorder(content=data)
+        engine = load(OpenAiTtsEngine(), recorder, model="tts-1", audio_format="pcm")
+        chunk = engine.synthesize(PHRASE)
+        assert chunk.pcm == data
+        assert chunk.sample_rate == 24000
+        assert recorder.json_body()["response_format"] == "pcm"
+
+    def test_neutral_speed_is_omitted(self, keyring_store: SecretsStore) -> None:
+        """The default request is the minimal shape every service documents."""
+        recorder = Recorder(content=wav(pcm()))
+        engine = load(OpenAiTtsEngine(), recorder, model="tts-1")
+        engine.synthesize(PHRASE, speed=1.0)
+        assert "speed" not in recorder.json_body()
+
+    @pytest.mark.parametrize(("speed", "expected"), [(MAX_SPEED, 4.0), (MIN_SPEED, 0.25)])
+    def test_changed_speed_is_sent_on_the_openai_scale(
+        self, keyring_store: SecretsStore, speed: float, expected: float
+    ) -> None:
+        recorder = Recorder(content=wav(pcm()))
+        engine = load(OpenAiTtsEngine(), recorder, model="tts-1")
+        engine.synthesize(PHRASE, speed=speed)
+        assert recorder.json_body()["speed"] == pytest.approx(expected, abs=0.01)
+
+    def test_pitch_is_accepted_and_dropped(self, keyring_store: SecretsStore) -> None:
+        recorder = Recorder(content=wav(pcm()))
+        engine = load(OpenAiTtsEngine(), recorder, model="tts-1")
+        engine.synthesize(PHRASE, pitch=1.8)
+        assert "pitch" not in json.dumps(recorder.json_body())
+
+    def test_missing_model_fails_at_load_without_a_request(
+        self, keyring_store: SecretsStore
+    ) -> None:
+        """No service has a default model; refuse before promising any sound."""
+        recorder = Recorder(content=wav(pcm()))
+        with pytest.raises(TtsError) as info:
+            load(OpenAiTtsEngine(), recorder)
+        assert recorder.calls == 0
+        assert "модель" in info.value.user_message.lower()
+
+
 # ----------------------------------------------------------------------
 # streaming
 # ----------------------------------------------------------------------
@@ -1081,16 +1162,17 @@ class TestLogging:
 
 
 class TestRegistry:
-    """Four names, four classes, and nothing silently substituted."""
+    """Each name maps to its own class, and nothing is silently substituted."""
 
     expected: ClassVar[dict[str, type[CloudTtsEngine]]] = {
         "elevenlabs": ElevenLabsTtsEngine,
         "yandex": YandexTtsEngine,
         "google": GoogleTtsEngine,
         "azure": AzureTtsEngine,
+        "openai": OpenAiTtsEngine,
     }
 
-    def test_names_are_the_four_providers(self) -> None:
+    def test_names_match_the_registry(self) -> None:
         assert set(cloud_engine_names()) == set(self.expected)
 
     @pytest.mark.parametrize("name", sorted(expected))

@@ -8,16 +8,20 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QSignalBlocker
 from PySide6.QtWidgets import (
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QVBoxLayout,
 )
 
+from ayris.audio.tts.cloud_base import is_cloud_engine
 from ayris.core.config import RestartScope, TtsConfig
 from ayris.core.paths import get_paths
 from ayris.gui.tabs.voice import AsyncRunner, combo_options
+from ayris.gui.tabs.voice_sections.stt import _SecretField
 from ayris.gui.widgets import BusyIndicator, SliderField, ThemedComboBox, ToggleSwitch
 from ayris.utils.logger import get_logger
 
@@ -32,14 +36,30 @@ _ENGINES = {
     "piper": "Piper (локально)",
     "silero": "Silero (локально)",
     "xtts": "Coqui XTTS (локально)",
-    "sapi": "Windows SAPI",
     "yandex": "Яндекс SpeechKit",
+    "google": "Google Cloud TTS",
+    "azure": "Azure Speech",
     "elevenlabs": "ElevenLabs",
+    "openai": "OpenAI-совместимый (OpenRouter…)",
 }
 #: Which engines accept a user-supplied model file, and what extension it wants.
 _CUSTOM_MODEL_EXT = {
     "piper": ".onnx",
     "xtts": ".pth",
+}
+#: Suggested voices for a cloud engine, shown in the editable voice box so a user can
+#: pick without typing. Not exhaustive — the box stays editable, so any voice the
+#: service accepts can be typed — and only the OpenAI-compatible family has a stable
+#: public set worth seeding.
+_CLOUD_VOICES = {
+    "openai": (
+        ("Alloy", "alloy"),
+        ("Echo", "echo"),
+        ("Fable", "fable"),
+        ("Onyx", "onyx"),
+        ("Nova", "nova"),
+        ("Shimmer", "shimmer"),
+    ),
 }
 
 
@@ -73,6 +93,8 @@ class TtsSection:
             "Голос", "Голос выбранного движка. Свои модели можно загрузить ниже.", self._voice_combo
         )
 
+        self._build_cloud_cards()
+
         self._speed = SliderField(
             tab.theme, minimum=50, maximum=200, value=100, unit="%", label="Скорость"
         )
@@ -96,6 +118,7 @@ class TtsSection:
 
         self._fallback = ToggleSwitch(tab.theme, label="Облачный запасной синтез")
         tab.bind_toggle(self._fallback, "voice.tts.cloud_fallback", "Облачный запасной синтез")
+        self._fallback.toggled.connect(lambda _checked: self._update_cloud_visibility())
         tab.add_card(
             "Запасной облачный голос",
             "Если локальный синтез не справился, озвучить ответ через облако.",
@@ -103,6 +126,62 @@ class TtsSection:
         )
 
         tab.add_restart_bar(RestartScope.TTS)
+
+    def _build_cloud_cards(self) -> None:
+        """Endpoint, model and key — the paste-your-own-cloud-TTS fields.
+
+        Hidden until a cloud engine is chosen (or the cloud fallback is on): endpoint
+        and model belong to the generic OpenAI-compatible engine, so they show only
+        for it; the key is needed by every cloud engine and by the fallback, so it
+        shows whenever either wants a cloud voice. The key itself never touches the
+        config — :class:`~ayris.gui.tabs.voice_sections.stt._SecretField` puts it in
+        the Windows credential store under the reference named here.
+        """
+        tab = self._tab
+
+        self._endpoint_edit = QLineEdit()
+        self._endpoint_edit.setPlaceholderText("https://openrouter.ai/api/v1")
+        tab.bind_line_edit(self._endpoint_edit, "voice.tts.endpoint", "Адрес сервиса")
+        self._endpoint_card = tab.add_card(
+            "Адрес сервиса",
+            "Базовый URL OpenAI-совместимого API. Пусто — адрес по умолчанию (OpenRouter).",
+            self._endpoint_edit,
+        )
+
+        self._model_edit = QLineEdit()
+        self._model_edit.setPlaceholderText("например, openai/gpt-4o-mini-tts")
+        tab.bind_line_edit(self._model_edit, "voice.tts.model", "Модель синтеза")
+        self._model_card = tab.add_card(
+            "Модель",
+            "Идентификатор модели синтеза у сервиса — обязателен для облачного голоса.",
+            self._model_edit,
+        )
+
+        self._ref_edit = QLineEdit()
+        self._ref_edit.setPlaceholderText("openai")
+        tab.bind_line_edit(self._ref_edit, "voice.tts.credential_ref", "Имя записи ключа")
+        body = tab.panel()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(tab.theme.metric("spacing_sm"))
+        ref_row = QHBoxLayout()
+        ref_row.setSpacing(tab.theme.metric("spacing_sm"))
+        ref_label = QLabel("Имя записи:")
+        ref_label.setProperty("role", "secondary")
+        ref_row.addWidget(ref_label)
+        ref_row.addWidget(self._ref_edit, 1)
+        layout.addLayout(ref_row)
+        self._secret = _SecretField(tab, tab.services.secrets, self._ref_edit.text)
+        self._ref_edit.textChanged.connect(lambda _text: self._secret.refresh())
+        layout.addWidget(self._secret)
+        self._cloud_card = tab.add_block(
+            "Ключ облачного сервиса",
+            "Ключ хранится в диспетчере учётных данных Windows, а не в config.toml.",
+            body,
+        )
+
+        for card in (self._endpoint_card, self._model_card, self._cloud_card):
+            card.setVisible(False)
 
     def _build_listen_card(self) -> None:
         tab = self._tab
@@ -161,17 +240,25 @@ class TtsSection:
 
     def _reload_voices(self) -> None:
         settings = self._tab.manager.settings.voice.tts
-        engine = self._engine_combo.currentData() or settings.engine
+        engine = str(self._engine_combo.currentData() or settings.engine)
+        if is_cloud_engine(engine):
+            self._reload_cloud_voices(engine, settings.voice)
+        else:
+            self._reload_local_voices(engine, settings.voice)
+        self._update_cloud_visibility()
+
+    def _reload_local_voices(self, engine: str, current: str) -> None:
+        """The installed voices of a local engine, chosen from a fixed list."""
+        self._set_voice_editable(False)
         catalog = self._tab.model_catalog()
-        entries = catalog.for_engine("tts", str(engine))
-        current = settings.voice
+        entries = catalog.for_engine("tts", engine)
         with QSignalBlocker(self._voice_combo):
             self._voice_combo.clear()
             seen: set[str] = set()
             for entry in entries:
                 self._voice_combo.addItem(entry.label, entry.install_name)
                 seen.add(entry.install_name)
-            for name in self._local_voice_files(str(engine)):
+            for name in self._local_voice_files(engine):
                 if name not in seen:
                     self._voice_combo.addItem(name, name)
                     seen.add(name)
@@ -180,6 +267,90 @@ class TtsSection:
             index = self._voice_combo.findData(current)
             if index >= 0:
                 self._voice_combo.setCurrentIndex(index)
+
+    def _reload_cloud_voices(self, engine: str, current: str) -> None:
+        """Seed a cloud engine's suggested voices, keep the box editable.
+
+        The service accepts far more voices than any list can hold, so the box stays
+        editable: the suggestions are a convenience, and a voice not among them is
+        typed straight in (see :meth:`_commit_typed_voice`).
+        """
+        self._set_voice_editable(True)
+        with QSignalBlocker(self._voice_combo):
+            self._voice_combo.clear()
+            seen: set[str] = set()
+            for label, voice_id in _CLOUD_VOICES.get(engine, ()):
+                self._voice_combo.addItem(label, voice_id)
+                seen.add(voice_id)
+            if current and current not in seen:
+                self._voice_combo.addItem(current, current)
+                seen.add(current)
+            index = self._voice_combo.findData(current)
+            if index >= 0:
+                self._voice_combo.setCurrentIndex(index)
+            else:
+                line = self._voice_combo.lineEdit()
+                if line is not None:
+                    line.setText(current)
+
+    def _set_voice_editable(self, editable: bool) -> None:
+        """Flip the voice box between a fixed picker and a free-text field.
+
+        Toggling recreates the internal line edit, so the ``editingFinished`` hook is
+        (re)connected each time the box becomes editable; the guard keeps a no-op call
+        from dropping text the user is mid-way through typing.
+        """
+        combo = self._voice_combo
+        if combo.isEditable() == editable:
+            return
+        combo.setEditable(editable)
+        if editable:
+            combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+            line = combo.lineEdit()
+            if line is not None:
+                line.setPlaceholderText("Например alloy — или впишите голос сервиса")
+                line.editingFinished.connect(self._commit_typed_voice)
+
+    def _commit_typed_voice(self) -> None:
+        """Turn a typed voice name into the combo's selected value.
+
+        With ``NoInsert`` Qt never adds the text itself, so a name the user typed is
+        added here as its own data and selected, which fires ``currentIndexChanged``
+        and lets the ordinary combo binding save it. A name matching a suggestion's
+        id or label selects that entry instead of duplicating it.
+        """
+        combo = self._voice_combo
+        line = combo.lineEdit()
+        if line is None:
+            return
+        text = line.text().strip()
+        if not text:
+            return
+        index = combo.findData(text)
+        if index < 0:
+            index = combo.findText(text)
+        if index < 0:
+            combo.addItem(text, text)
+            index = combo.findData(text)
+        if index >= 0 and index != combo.currentIndex():
+            combo.setCurrentIndex(index)
+
+    def _update_cloud_visibility(self) -> None:
+        """Show the cloud fields the current engine and fallback actually need.
+
+        Endpoint and model are the generic OpenAI-compatible engine's own settings, so
+        they appear only for it; the key is wanted by any cloud engine and by the cloud
+        fallback, so it appears whenever either does.
+        """
+        settings = self._tab.manager.settings.voice.tts
+        engine = str(self._engine_combo.currentData() or settings.engine)
+        is_openai = engine == "openai"
+        want_key = is_cloud_engine(engine) or self._fallback.isChecked()
+        self._endpoint_card.setVisible(is_openai)
+        self._model_card.setVisible(is_openai)
+        self._cloud_card.setVisible(want_key)
+        if want_key:
+            self._secret.refresh()
 
     def _local_voice_files(self, engine: str) -> list[str]:
         """Voice files already sitting in the profile's TTS folder."""

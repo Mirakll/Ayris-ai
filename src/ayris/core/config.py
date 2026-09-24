@@ -452,7 +452,9 @@ class SttConfig(ConfigSection):
 class TtsConfig(ConfigSection):
     """Tab «Голос» → speech synthesis."""
 
-    engine: Literal["piper", "silero", "xtts", "sapi", "yandex", "elevenlabs"] = Field(
+    engine: Literal[
+        "piper", "silero", "xtts", "elevenlabs", "yandex", "google", "azure", "openai"
+    ] = Field(
         default="piper",
         description="Движок синтеза речи",
         json_schema_extra=_restart(RestartScope.TTS),
@@ -493,6 +495,19 @@ class TtsConfig(ConfigSection):
         default="yandex",
         description="Имя записи с ключом облачного синтеза в хранилище Windows",
     )
+    endpoint: str = Field(
+        default="",
+        description=(
+            "Адрес OpenAI-совместимого сервиса (OpenRouter и др.), "
+            "напр. https://openrouter.ai/api/v1. Пусто — адрес по умолчанию движка"
+        ),
+        json_schema_extra=_restart(RestartScope.TTS),
+    )
+    model: str = Field(
+        default="",
+        description="Модель синтеза для OpenAI-совместимого облачного сервиса",
+        json_schema_extra=_restart(RestartScope.TTS),
+    )
     duck_other_audio: bool = Field(
         default=True,
         description="Приглушать музыку и игры во время ответа",
@@ -507,6 +522,19 @@ class TtsConfig(ConfigSection):
         le=4096,
         description="Лимит кэша озвученных фраз на диске в МБ. 0 — не кэшировать",
     )
+
+    @field_validator("engine", mode="before")
+    @classmethod
+    def _migrate_engine(cls, value: object) -> object:
+        """Fold the retired ``sapi`` choice onto the bundled local engine.
+
+        Windows SAPI was listed once but never wired to an engine; an old
+        ``config.toml`` may still name it. Coerce it before validation so the file
+        loads instead of failing on a value no engine can serve.
+        """
+        if isinstance(value, str) and value.strip().lower() == "sapi":
+            return "piper"
+        return value
 
 
 class WakePhrase(ConfigSection):

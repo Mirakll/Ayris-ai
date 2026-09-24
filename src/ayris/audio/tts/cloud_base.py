@@ -118,6 +118,10 @@ CLOUD_ENGINE_ENTRYPOINTS: Final[Mapping[str, str]] = MappingProxyType(
         "yandex": "ayris.audio.tts.yandex_tts_engine:YandexTtsEngine",
         "google": "ayris.audio.tts.google_tts_engine:GoogleTtsEngine",
         "azure": "ayris.audio.tts.azure_tts_engine:AzureTtsEngine",
+        # The generic OpenAI-compatible engine: no fixed vendor, endpoint and model
+        # come from settings, so one entry covers OpenRouter, OpenAI and any service
+        # that mirrors /audio/speech.
+        "openai": "ayris.audio.tts.openai_tts_engine:OpenAiTtsEngine",
     }
 )
 

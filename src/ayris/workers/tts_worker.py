@@ -65,6 +65,7 @@ from ayris.audio.tts.base import (
     estimate_voice_bytes,
 )
 from ayris.audio.tts.cache import PhraseCache
+from ayris.audio.tts.cloud_base import create_cloud_engine, is_cloud_engine
 from ayris.audio.tts.sentence_split import split_sentences
 from ayris.core.errors import AyrisError, TtsError
 from ayris.core.models import JsonObject
@@ -593,7 +594,11 @@ class TtsWorker(Worker):
         """
         engine = self._engine
         if engine is None or self._engine_name != engine_name:
-            engine = create_engine(engine_name)
+            engine = (
+                create_cloud_engine(engine_name)
+                if is_cloud_engine(engine_name)
+                else create_engine(engine_name)
+            )
         voice = self._voice_spec(engine_name, voice_id, type(engine))
         self._check_memory(engine, voice)
 
