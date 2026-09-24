@@ -248,10 +248,12 @@ def _run_application(options: CliOptions) -> int:
     from ayris.core.pipeline_app import install_pipeline
     from ayris.gui.main_window import MainWindow, ShowWindowNativeEventFilter
     from ayris.gui.overlay import ActiveTimer as OverlayTimer
+    from ayris.gui.splash import SplashScreen
     from ayris.gui.tabs.devtools import DevToolsServices, set_active_devtools_services
     from ayris.gui.theme import ThemeManager
     from ayris.gui.tray import TrayController
     from ayris.gui.widgets import set_active_worker_control
+    from ayris.onboarding import build_services, run_onboarding, should_run_onboarding
     from ayris.workers import install_workers
 
     # PassThrough keeps fractional scaling (125%, 150%) instead of rounding it,
@@ -294,6 +296,15 @@ def _run_application(options: CliOptions) -> int:
     with ayris:
         from ayris.triggers import install_triggers
 
+        # A frameless splash covers the heavy GUI/worker bring-up below. No event
+        # loop runs yet (that starts at app.exec), so we pump paint events by hand;
+        # it is closed just before the window is shown. Honours the «Общие» toggle.
+        splash: SplashScreen | None = None
+        if ayris.settings.general.show_splash:
+            splash = SplashScreen(theme)
+            splash.show()
+            app.processEvents()
+
         dispatcher = install_triggers(ayris)
         bridge = _QtBridge(ayris)
 
@@ -301,6 +312,9 @@ def _run_application(options: CliOptions) -> int:
         # design); the supervisor is registered for the resource monitor and the
         # restart buttons in «Общие», and cleared before the GUI tears down so
         # nothing queries a supervisor that is on its way out.
+        if splash is not None:
+            splash.set_stage("Поднимаем воркеры…")
+            app.processEvents()
         worker_manager = install_workers(ayris)
         set_active_worker_control(worker_manager)
         ayris.add_component(
@@ -430,6 +444,22 @@ def _run_application(options: CliOptions) -> int:
             set_active_scheduler(None)
 
         ayris.add_component(Component(name="timers", stage=LifecycleStage.GUI, stop=stop_scheduler))
+
+        # The window is built but not yet shown: close the splash, then run the
+        # first-run wizard modally over it. The wizard's own nested event loop
+        # animates its sphere and level meter; downloads it starts are owned by a
+        # coordinator that outlives it, so it never blocks the launch.
+        if splash is not None:
+            splash.finish()
+            splash = None
+        if should_run_onboarding(ayris.config):
+            try:
+                run_onboarding(
+                    build_services(theme, ayris.config, ayris.bus, submit_text=submit_text),
+                    parent=window,
+                )
+            except Exception:  # сбой мастера не должен блокировать запуск
+                _log.exception("мастер первого запуска завершился с ошибкой")
 
         if options.minimized or ayris.settings.general.start_minimized:
             _log.info("запущено свёрнутым в трей")

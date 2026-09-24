@@ -275,6 +275,19 @@ class GeneralConfig(ConfigSection):
         default=True,
         description="Показать мастер первого запуска. Снимается автоматически после него",
     )
+    onboarding_completed: bool = Field(
+        default=False,
+        description="Мастер первого запуска пройден до конца. Ставится по завершении мастера",
+    )
+    onboarding_last_step: int = Field(
+        default=0,
+        ge=0,
+        description="Номер шага, на котором прервали мастер, чтобы продолжить с того же места",
+    )
+    show_splash: bool = Field(
+        default=True,
+        description="Показывать заставку с лого и сферой при каждом запуске",
+    )
     single_instance: bool = Field(
         default=True,
         description="Не давать запустить вторую копию Ayris",
@@ -563,6 +576,14 @@ class WakeConfig(ConfigSection):
     credential_ref: str = Field(
         default="porcupine",
         description="Имя записи с AccessKey Porcupine в хранилище Windows",
+    )
+    options: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Доп. параметры движка активации, например model_path для Vosk KWS — "
+            "путь к папке с русской моделью, когда она не в models/wake"
+        ),
+        json_schema_extra=_restart(RestartScope.WAKE),
     )
 
     @field_validator("phrases")

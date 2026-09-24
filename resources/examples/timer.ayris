@@ -1,0 +1,31 @@
+{
+  "schema_version": 2,
+  "kind": "command",
+  "folders": [
+    {"path": ["Примеры", "Продуктивность"], "sort_order": 0}
+  ],
+  "commands": [
+    {
+      "name": "Таймер на 5 минут",
+      "description": "Ставит таймер на пять минут и озвучивает старт. Пример действия со временем.",
+      "tags": ["продуктивность", "таймер", "пример"],
+      "folder": ["Примеры", "Продуктивность"],
+      "enabled": true,
+      "priority": 0,
+      "cooldown_ms": 0,
+      "require_admin": false,
+      "triggers": [
+        {"type": "voice", "phrase": "айрис поставь таймер 5 минут", "fuzzy": true, "regex": false, "priority": 100, "enabled": true, "conditions": {}}
+      ],
+      "actions": [
+        {"type": "SetTimer", "params": {"seconds": 300, "label": "Перерыв"}, "enabled": true, "comment": "", "on_error": "stop"}
+      ],
+      "variables": [],
+      "sounds": [
+        {"stage": "on_success", "source": "builtin", "value": "timer"}
+      ],
+      "created_at": "2026-01-01T00:00:00Z",
+      "updated_at": "2026-01-01T00:00:00Z"
+    }
+  ]
+}

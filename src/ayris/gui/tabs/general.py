@@ -180,6 +180,7 @@ class GeneralTab(SettingsTab):
     ) -> None:
         super().__init__("general", "Общие", ("general", "performance"), manager, theme, bus)
         self._sampler = sampler
+        self._bus = bus
         self._restart_bars: dict[RestartScope, _RestartBar] = {}
         self._audio_prev: str = manager.settings.performance.audio_priority
 
@@ -194,6 +195,7 @@ class GeneralTab(SettingsTab):
 
         self._build_interface()
         self._build_startup()
+        self._build_onboarding()
         self._build_performance()
         self._build_eco()
         self._build_resources()
@@ -290,6 +292,32 @@ class GeneralTab(SettingsTab):
                 "Кнопка «закрыть» — в трей",
                 "Закрытие окна прячет Ayris в трей вместо выхода из программы.",
                 close_tray,
+                self._theme,
+            )
+        )
+
+    def _build_onboarding(self) -> None:
+        self._add_header("Первый запуск")
+
+        self._splash_toggle = ToggleSwitch(self._theme, label="Показывать заставку")
+        self.bind_toggle(self._splash_toggle, "general.show_splash", "Заставка при запуске")
+        self._content.addWidget(
+            SettingCard(
+                "Заставка при запуске",
+                "Показывать лого и сферу, пока Айрис поднимается. Запуск не задерживает.",
+                self._splash_toggle,
+                self._theme,
+            )
+        )
+
+        rerun = QPushButton("Пройти мастер заново")
+        rerun.clicked.connect(self._rerun_onboarding)
+        self._content.addWidget(
+            SettingCard(
+                "Мастер первого запуска",
+                "Заново пройти настройку темы, режима, микрофона, моделей и профиля. "
+                "Уже скачанные модели и созданные команды сохранятся.",
+                rerun,
                 self._theme,
             )
         )
@@ -498,6 +526,43 @@ class GeneralTab(SettingsTab):
         value = self._ram_combo.currentData()
         if isinstance(value, int):
             self._resources.set_ram_limit(value)
+
+    def _rerun_onboarding(self) -> None:
+        """Сбросить состояние мастера и пройти его заново прямо сейчас.
+
+        Модели и команды не трогаем — обнуляем только флаги мастера, чтобы он
+        открылся с первого шага. Мастер модальный: он поднимается поверх окна
+        настроек и по завершении сам вернёт ``onboarding_completed``.
+        """
+        dialog = ConfirmDialog(
+            "Пройти мастер заново?",
+            "Мастер снова спросит про тему, режим, микрофон, модели и профиль. "
+            "Уже скачанные модели и ваши команды останутся на месте — изменятся "
+            "только те настройки, что вы выберете в мастере.",
+            self._theme,
+            confirm_text="Пройти заново",
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            self._manager.apply(
+                {
+                    "general.show_onboarding": True,
+                    "general.onboarding_completed": False,
+                    "general.onboarding_last_step": 0,
+                }
+            )
+        except Exception:
+            _log.exception("не удалось сбросить состояние мастера первого запуска")
+            return
+        from ayris.onboarding import build_services, run_onboarding
+
+        services = build_services(self._theme, self._manager, self._bus)
+        try:
+            run_onboarding(services, parent=self.window())
+        except Exception:
+            _log.exception("мастер первого запуска завершился с ошибкой")
 
     def _restart_scope(self, scope: RestartScope) -> None:
         control = active_worker_control()
