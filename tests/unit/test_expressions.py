@@ -1,9 +1,9 @@
 """Задача 32: вычислитель выражений и подстановка ``{var}`` — что считает и что отказывается.
 
 The expression engine is the only place in Ayris where text a stranger wrote decides what
-happens next: section 7.1 lets a command carry a condition, task 36 imports conditions
-wholesale out of VoiceAttack profiles, and a plugin may build one from a string it took off
-the network. So this file is written in two halves of very different weight.
+happens next: section 7.1 lets a command carry a condition, and task 36 imports conditions
+wholesale out of VoiceAttack profiles. So this file is written in two halves of very
+different weight.
 
 *It has to compute the right thing.* :class:`TestArithmetic`, :class:`TestComparisons`,
 :class:`TestLogic`, :class:`TestIndexing` and :class:`TestFunctions` cover what a condition
@@ -493,7 +493,7 @@ class TestFunctions:
 class TestHostileExpressions:
     """Every way out of the expression, closed. The class this module exists for.
 
-    Each case is something a VoiceAttack profile or a plugin could contain, and every one
+    Each case is something a VoiceAttack profile could contain, and every one
     of them has to come back as :class:`MacroExpressionError` — not a ``SyntaxError``, not
     an ``AttributeError``, and above all not a value.
     """

@@ -253,8 +253,7 @@ class WorkerBootstrap:
             supervisor over the channel, which is how a worker's warnings reach
             the main log without two processes writing one file.
         python_path: Extra ``sys.path`` entries added before the entrypoint is
-            imported. Used for plugin workers, and by the test suite for its
-            fixture worker.
+            imported. Used by the test suite for its fixture worker.
         protocol_version: Checked against the worker's own; a mismatch means a
             stale process survived an update.
     """

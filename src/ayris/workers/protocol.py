@@ -16,7 +16,7 @@ without a live process.
 **Pickle is safe here and only here.** The channel is an anonymous OS pipe
 created by the parent and handed to a child it spawned itself; nothing else can
 open it, so the usual objection to unpickling untrusted bytes does not apply.
-Nothing from the network, a plugin manifest or a config file may ever be fed to
+Nothing from the network or a config file may ever be fed to
 :func:`decode`.
 
 **Audio does not travel through the pipe.** Ten seconds of 16 kHz mono PCM is

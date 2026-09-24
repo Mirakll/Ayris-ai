@@ -16,7 +16,7 @@ collected — which also means the fuzzy sweep does not spend time on triggers t
 cannot fire.
 
 **A malformed condition never fires, and says so once.** The conditions come from
-a JSON payload the user edited by hand or a plugin generated, so «``when_time``:
+a JSON payload the user edited by hand or a tool generated, so «``when_time``:
 "полшестого"» is a thing that will happen. Parsing is total —
 :meth:`TriggerConditions.parse` returns a condition set and a list of Russian
 complaints, never raises — and an unparseable condition is dropped rather than
@@ -242,8 +242,8 @@ class VariableCondition:
 
         Two shapes, because two kinds of author. A string — ``"режим=работа"``,
         ``"тихий_час"`` — is what someone types by hand. A mapping —
-        ``{"name": "режим", "test": "eq", "value": "работа"}`` — is what a plugin
-        or the editor generates, and the only shape that can carry a non-string
+        ``{"name": "режим", "test": "eq", "value": "работа"}`` — is what the editor
+        generates, and the only shape that can carry a non-string
         expected value.
         """
         if isinstance(raw, str):

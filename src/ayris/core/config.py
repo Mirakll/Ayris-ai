@@ -4,7 +4,7 @@ The schema mirrors the settings window one-to-one, so a tab is a section and a
 control is a field: :class:`GeneralConfig`, :class:`VoiceConfig` (with ``stt``,
 ``tts``, ``wake`` and ``audio_input`` inside it), :class:`AiConfig`,
 :class:`ActionsConfig`, :class:`HotkeysConfig`, :class:`OverlayConfig`,
-:class:`PluginsConfig`, :class:`PrivacyConfig`, :class:`PerformanceConfig`,
+:class:`PrivacyConfig`, :class:`PerformanceConfig`,
 :class:`UpdatesConfig` and :class:`DevtoolsConfig`. Adding a control means adding
 a field, and the TOML file, the environment overrides and the change diff follow
 for free.
@@ -91,7 +91,6 @@ __all__ = [
     "OcrActionsConfig",
     "OverlayConfig",
     "PerformanceConfig",
-    "PluginsConfig",
     "PrivacyConfig",
     "RestartScope",
     "ScreenshotActionsConfig",
@@ -250,8 +249,8 @@ class GeneralConfig(ConfigSection):
     always_run_as_admin: bool = Field(
         default=False,
         description=(
-            "Всегда запускать Ayris с правами администратора. Опасно: плагины получают "
-            "те же права, перехват ввода расширяется, drag-and-drop из Проводника ломается"
+            "Всегда запускать Ayris с правами администратора. Опасно: перехват ввода "
+            "расширяется, drag-and-drop из Проводника ломается"
         ),
         json_schema_extra=_restart(RestartScope.APP),
     )
@@ -1712,34 +1711,6 @@ class OverlayConfig(ConfigSection):
         return text
 
 
-class PluginsConfig(ConfigSection):
-    """Tab «Плагины»."""
-
-    enabled: bool = Field(
-        default=True,
-        description="Загружать плагины при старте",
-        json_schema_extra=_restart(RestartScope.APP),
-    )
-    sandbox: bool = Field(
-        default=True,
-        description="Запускать плагины в отдельном процессе с урезанными правами",
-        json_schema_extra=_restart(RestartScope.APP),
-    )
-    disabled: tuple[str, ...] = Field(
-        default=(),
-        description="Имена плагинов, которые не загружать",
-    )
-    extra_dirs: tuple[str, ...] = Field(
-        default=(),
-        description="Дополнительные папки с плагинами помимо профиля",
-        json_schema_extra=_restart(RestartScope.APP),
-    )
-    allow_network: bool = Field(
-        default=False,
-        description="Разрешать плагинам сетевые запросы без отдельного подтверждения",
-    )
-
-
 class PrivacyConfig(ConfigSection):
     """Tab «Приватность». Telemetry is off and stays off unless asked."""
 
@@ -1960,7 +1931,6 @@ class Settings(BaseSettings):
     hotkeys: HotkeysConfig = Field(default_factory=HotkeysConfig, description="Горячие клавиши")
     timers: TimersConfig = Field(default_factory=TimersConfig, description="Таймеры")
     overlay: OverlayConfig = Field(default_factory=OverlayConfig, description="Оверлей")
-    plugins: PluginsConfig = Field(default_factory=PluginsConfig, description="Плагины")
     privacy: PrivacyConfig = Field(default_factory=PrivacyConfig, description="Приватность")
     performance: PerformanceConfig = Field(
         default_factory=PerformanceConfig,
@@ -1998,7 +1968,6 @@ _SECTION_TITLES: Final[tuple[tuple[str, str], ...]] = (
     ("hotkeys", "Горячие клавиши помощника"),
     ("timers", "Таймеры: пропущенные срабатывания, отложить, синхронизация"),
     ("overlay", "Панель и сфера: вид, анимации, состав диалога"),
-    ("plugins", "Плагины"),
     ("privacy", "Приватность: телеметрия выключена по умолчанию"),
     ("performance", "Производительность: приоритеты, память, потоки"),
     ("updates", "Обновления программы и моделей"),

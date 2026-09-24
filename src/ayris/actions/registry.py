@@ -1,6 +1,6 @@
 """The one way to run an action, and the only place that knows they all exist.
 
-Invariant 5 of the architecture: NLU, macros and plugins call actions *through*
+Invariant 5 of the architecture: NLU and macros call actions *through*
 this module, never by importing an action class. That buys three things at once.
 A macro exported on one machine runs on another, because it names actions by
 string. The editor can list and describe every block without importing WinAPI.
@@ -12,7 +12,7 @@ once here instead of seventy times in the actions.
 a module-level table; a registry picks classes up from that table when it is
 built. So a test gets a fresh :class:`ActionRegistry` over the *real* actions
 without a global to reset, and two registries in one process — the app's and a
-plugin sandbox's — do not fight over one dictionary.
+test's — do not fight over one dictionary.
 
 **Autodiscovery imports, it does not scan.** :meth:`ActionRegistry.discover`
 walks ``ayris.actions.system`` with ``pkgutil`` and imports each module; the
@@ -183,12 +183,11 @@ class RegisteredAction:
     """One action class as the module-level table holds it."""
 
     action_class: type[Action]
-    plugin: str = ""
 
     @property
     def name(self) -> str:
-        """Registered name, plugin prefix included."""
-        return self.action_class.meta.with_prefix(self.plugin).name
+        """Registered name."""
+        return self.action_class.meta.name
 
 
 # --------------------------------------------------------------------------- #
@@ -426,13 +425,12 @@ class ActionRegistry:
 
     # -- population -------------------------------------------------------- #
 
-    def add(self, action_class: type[Action], *, plugin: str = "", replace: bool = False) -> str:
+    def add(self, action_class: type[Action], *, replace: bool = False) -> str:
         """Put one action class into this registry and return its name.
 
         Args:
             action_class: The class to instantiate. Validated the same way
                 :func:`register` validates it.
-            plugin: Slug to prefix the name with, for plugin-supplied actions.
             replace: Allow shadowing an existing name. Off by default: two blocks
                 answering to one name would make a macro's meaning depend on
                 import order.
@@ -441,17 +439,13 @@ class ActionRegistry:
             ValueError: The name is taken and ``replace`` is not set.
         """
         _validate_class(action_class)
-        meta = action_class.meta.with_prefix(plugin)
         action = action_class()
-        # The instance keeps the prefixed metadata, otherwise a plugin action
-        # would report one name to the registry and another to the editor.
-        if meta.name != action_class.meta.name:
-            action.meta = meta  # type: ignore[misc]
+        name = action_class.meta.name
         with self._lock:
-            if meta.name in self._actions and not replace:
-                raise ValueError(f"action {meta.name!r} is already registered")
-            self._actions[meta.name] = action
-        return meta.name
+            if name in self._actions and not replace:
+                raise ValueError(f"action {name!r} is already registered")
+            self._actions[name] = action
+        return name
 
     def add_all(self, entries: Iterable[RegisteredAction], *, replace: bool = False) -> int:
         """Add every entry that is not in this registry yet. Returns how many."""
@@ -459,7 +453,7 @@ class ActionRegistry:
         for entry in entries:
             if not replace and entry.name in self._actions:
                 continue
-            self.add(entry.action_class, plugin=entry.plugin, replace=replace)
+            self.add(entry.action_class, replace=replace)
             added += 1
         return added
 
@@ -467,7 +461,7 @@ class ActionRegistry:
         """Import every module under ``package`` and adopt what it declared.
 
         ``None`` means all of :data:`ACTION_PACKAGES`, which is what the
-        application wants; a single package is for tests and for plugins.
+        application wants; a single package is for tests.
 
         A module that cannot be imported here — WinAPI on Linux, a missing
         optional dependency — is logged and skipped. Returns the number of actions
@@ -544,7 +538,6 @@ class ActionRegistry:
         *,
         category: ActionCategory | None = None,
         query: str = "",
-        plugin: str | None = None,
     ) -> list[Action]:
         """Actions matching a category, a substring, or both.
 
@@ -557,7 +550,6 @@ class ActionRegistry:
             action
             for action in self._actions.values()
             if (category is None or action.meta.category is category)
-            and (plugin is None or action.meta.plugin == plugin)
             and (not needle or _matches(action, needle))
         ]
         return sorted(found, key=lambda item: (item.meta.category.value, item.meta.name))

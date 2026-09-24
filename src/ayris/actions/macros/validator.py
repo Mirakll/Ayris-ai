@@ -17,7 +17,7 @@ Only errors stop a save.
 checked for the reference and not for the type, because its type arrives with the
 phrase the user speaks. An unregistered block is an error only when a registry was
 given, and an undeclared variable is one only when the caller says which variables
-already exist: a plugin of task 26 registers its actions when it loads, and a global
+already exist: actions are registered as their modules import, and a global
 another command wrote is not a broken reference. This is deliberate — a validator
 that cries wolf gets switched off, and then it protects nothing.
 """
@@ -119,7 +119,7 @@ class MacroValidationError(MacroError):
     """A command that cannot be saved, carrying the whole report.
 
     Raised only by :func:`ensure_valid`, for the callers that want an exception —
-    an import, a plugin loading its own commands. The editor asks for the report.
+    an import or a bulk command load. The editor asks for the report.
     """
 
     default_user_message = "Команда не проходит проверку."
@@ -147,7 +147,7 @@ def validate_command(
             :class:`pydantic.ValidationError` and never get this far.
         registry: the action registry. Without it block types and action parameters
             are not checked at all, because nothing here can tell an action that does
-            not exist from one whose plugin has not loaded yet.
+            not exist from one whose module has not been imported yet.
         library: the other commands, by name, for following ``CallCommand``. Without
             it only a call to a name the command does not have is checked, and a cycle
             through two commands cannot be seen.

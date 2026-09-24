@@ -104,7 +104,7 @@ def manager(tmp_path: Path) -> ConfigManager:
 
 
 def test_registry_and_window_pages_are_lazy(app: QApplication, manager: ConfigManager) -> None:
-    assert len(SECTIONS) == 11
+    assert len(SECTIONS) == 10
     window = MainWindow(theme=ThemeManager(app), manager=manager)
     assert window.created_sections == ("general",)
     first = window.open_section("voice")

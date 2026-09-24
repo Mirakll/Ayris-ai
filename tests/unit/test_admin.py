@@ -198,7 +198,7 @@ def test_always_admin_creates_and_removes_one_task(monkeypatch: pytest.MonkeyPat
     assert calls[0][0] == "schtasks.exe"
     assert "/Create" in calls[0][1] and "/RL" in calls[0][1] and "HIGHEST" in calls[0][1]
     assert calls[1][1] == ["/Delete", "/TN", admin.ALWAYS_ADMIN_TASK, "/F"]
-    assert "плагин" in admin.ALWAYS_ADMIN_WARNING_RU
+    assert "администратора" in admin.ALWAYS_ADMIN_WARNING_RU
 
 
 def test_manifest_has_safe_defaults() -> None:

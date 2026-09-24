@@ -6,7 +6,7 @@ different things, which is why it is not just a string:
 * the **user** hears :attr:`ActionResult.message_ru` — one short Russian phrase,
   or nothing at all, because a volume change is its own confirmation and
   narrating it would be noise;
-* the **caller** — a macro, the pipeline, a plugin — reads :attr:`ActionResult.ok`
+* the **caller** — a macro or the pipeline — reads :attr:`ActionResult.ok`
   and :attr:`ActionResult.value`, the typed payload of that particular action.
   ``ListWindows`` returns window models, not lines of text, so the next block in
   the macro can filter them;

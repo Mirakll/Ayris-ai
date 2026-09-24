@@ -102,7 +102,7 @@ MAX_SPEED: Final = 2.0
 MIN_PITCH: Final = 0.5
 MAX_PITCH: Final = 2.0
 
-#: Engine name to ``module:Class`` entrypoint. A mapping proxy so a plugin that
+#: Engine name to ``module:Class`` entrypoint. A mapping proxy so code that
 #: wants another engine has to say so through the registry rather than by
 #: mutating this at import time from wherever it happens to be loaded.
 ENGINE_ENTRYPOINTS: Final[MappingProxyType[str, str]] = MappingProxyType(

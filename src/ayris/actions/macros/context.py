@@ -78,10 +78,9 @@ class TriggerSource(StrEnum):
     """What set this run going.
 
     Not the same list as :class:`~ayris.core.models.TriggerType`, which describes what
-    a command *has*: a run can also come from the editor's "run once" button, from a
-    ``CallCommand`` inside another command, or from a plugin that has no trigger at
-    all. The report and the history keep this, so "why did my microphone mute" has an
-    answer.
+    a command *has*: a run can also come from the editor's "run once" button or from a
+    ``CallCommand`` inside another command. The report and the history keep this, so
+    "why did my microphone mute" has an answer.
     """
 
     VOICE = "voice"
@@ -90,7 +89,6 @@ class TriggerSource(StrEnum):
     TIMER = "timer"
     MANUAL = "manual"
     CALL = "call"
-    PLUGIN = "plugin"
 
 
 def _slot_values(slots: SlotSet | None) -> dict[str, Any]:

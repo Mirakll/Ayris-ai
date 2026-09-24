@@ -1,7 +1,7 @@
 """One ``say()`` for the whole assistant, and the fallback behind it.
 
 Everything that speaks - the NLU reply, an action's confirmation, a macro, a
-plugin, a system notification - calls :meth:`TtsRouter.say` and never learns
+system notification - calls :meth:`TtsRouter.say` and never learns
 which engine produced the sound. That is the point of the module: the choice
 between a local voice and a paid one, the reaction to the network going away,
 the character counter and the volume slider all live here, once, instead of in
@@ -164,8 +164,8 @@ class VoiceParams:
 
     The same object is passed to a Piper voice and to ElevenLabs; each engine
     converts it to its own scale. Clamping happens in ``__post_init__`` rather
-    than in the settings window, so a hand-edited ``config.toml`` or a plugin
-    calling :meth:`TtsRouter.say` cannot ask for a speed no engine accepts.
+    than in the settings window, so a hand-edited ``config.toml`` or a caller
+    of :meth:`TtsRouter.say` cannot ask for a speed no engine accepts.
 
     Attributes:
         voice: Which voice to speak in. ``None`` means whatever the engine was

@@ -59,7 +59,7 @@ _log = get_logger(__name__)
 
 #: ``{name}`` or ``{name:type}``. Both halves are matched with Unicode ``\w`` and
 #: checked with :meth:`str.isidentifier` afterwards, so «включи {что}» works and
-#: so does a plugin that registered its type as «устройство»:
+#: so does a command that registered its type as «устройство»:
 #: :meth:`~ayris.nlu.slot_types.SlotTypeRegistry.register` accepts any identifier,
 #: and an ASCII-only pattern here would turn one of those into a stray brace with
 #: an error message about the wrong thing.
@@ -162,7 +162,7 @@ class SlotSet:
         return default if slot is None else slot.raw
 
     def as_dict(self) -> dict[str, object | None]:
-        """Parsed values by name — what a plugin's handler is handed."""
+        """Parsed values by name — what a command's handler is handed."""
         return {slot.name: slot.value for slot in self.slots}
 
     def __getitem__(self, name: str) -> Slot:

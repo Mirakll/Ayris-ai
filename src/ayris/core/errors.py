@@ -40,7 +40,6 @@ __all__ = [
     "ModelError",
     "ParamProblem",
     "PermissionDeniedError",
-    "PluginError",
     "ProfileError",
     "SecretsError",
     "SttError",
@@ -156,7 +155,7 @@ class ActionError(AyrisError):
     The action layer is the one place where a typed error is not a convenience
     but a requirement: :meth:`ayris.actions.registry.ActionRegistry.execute`
     wraps *everything* an action can raise into a subclass of this, so a caller
-    - the pipeline, a macro, a plugin - never has to catch bare ``Exception`` to
+    — the pipeline or a macro — never has to catch bare ``Exception`` to
     stay alive.
 
     The subclasses below exist because the caller reacts differently to each:
@@ -171,9 +170,9 @@ class ActionError(AyrisError):
     def user_message_ru(self) -> str:
         """Alias of :attr:`AyrisError.user_message`.
 
-        The action layer and the plugin SDK spell the Russian channel out in the
-        field name, because a plugin author has no reason to know that
-        ``user_message`` is Russian by convention. Same string, one storage.
+        The action layer spells the Russian channel out in the field name, since
+        ``user_message`` being Russian is a convention, not something the type
+        makes obvious. Same string, one storage.
         """
         return self.user_message
 
@@ -262,12 +261,6 @@ class HotkeyError(AyrisError):
     """Global hotkey could not be registered, usually a conflict."""
 
     default_user_message = "Не удалось зарегистрировать горячую клавишу."
-
-
-class PluginError(AyrisError):
-    """Plugin manifest is invalid or the plugin crashed while loading."""
-
-    default_user_message = "Ошибка плагина."
 
 
 class PermissionDeniedError(AyrisError):

@@ -501,7 +501,7 @@ class Matcher:
     ) -> Matcher:
         """Build a matcher over a fixed set of triggers.
 
-        Convenience for tests and for the plugin SDK. The import is local
+        Convenience for tests. The import is local
         because the index imports this module for its data model, and a module
         level import here would close that circle.
         """

@@ -1206,7 +1206,7 @@ class DialogContext:
 
         The shipped stores promise not to raise, but the context is the single
         writer the whole dialogue goes through: a store that breaks its promise
-        — a database locked by a backup, a plugin's own store — must cost the
+        — a database locked by a backup — must cost the
         user a context that does not survive the restart, not «отмена» that
         stops working mid-sentence.
         """

@@ -14,7 +14,6 @@ Layout of a profile root::
       cache/
       logs/
       models/{stt,tts,wake,llm}/
-      plugins/
       sounds/
       screenshots/
       themes/
@@ -202,10 +201,6 @@ class AppPaths:
         return self.models_dir / "llm"
 
     @property
-    def plugins_dir(self) -> Path:
-        return self.root / "plugins"
-
-    @property
     def sounds_dir(self) -> Path:
         return self.root / "sounds"
 
@@ -236,7 +231,6 @@ class AppPaths:
             self.tts_models_dir,
             self.wake_models_dir,
             self.llm_models_dir,
-            self.plugins_dir,
             self.sounds_dir,
             self.screenshots_dir,
             self.themes_dir,

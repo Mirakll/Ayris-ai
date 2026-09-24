@@ -4,8 +4,7 @@ Two jobs in one module, because they are the same job seen twice. ``{volume}`` i
 ``"громкость {volume}"`` is a value written into text; ``{volume} > 50`` is a value
 compared with another one. Both start from a name and a way to look it up, and both
 have to survive text a stranger wrote: section 7.1 lets a command carry conditions,
-task 36 imports them wholesale out of VoiceAttack profiles, and a plugin may build one
-from a string it took off the network.
+and task 36 imports them wholesale out of VoiceAttack profiles.
 
 **Why not ``eval``.** Because ``eval`` cannot be made safe by a list of forbidden
 words. Every attribute is a door — ``().__class__.__base__.__subclasses__()`` reaches

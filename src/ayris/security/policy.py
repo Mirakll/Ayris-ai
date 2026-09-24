@@ -48,6 +48,6 @@ class ConfirmationPolicy:
             return "files"
         if ".network" in module:
             return "network"
-        if meta.plugin or ".macros" in module:
+        if ".macros" in module:
             return "scripts"
         return meta.category.value

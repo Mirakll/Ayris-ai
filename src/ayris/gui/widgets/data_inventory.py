@@ -145,7 +145,6 @@ class DataInventory(QWidget):
             _Target("model_wake", "Модели · активация", paths.wake_models_dir, "dir"),
             _Target("model_llm", "Модели · языковые", paths.llm_models_dir, "dir"),
             _Target("logs", "Логи", paths.logs_dir, "dir"),
-            _Target("plugins", "Плагины", paths.plugins_dir, "dir"),
             _Target("backups", "Резервные копии БД", paths.database_file, "backups"),
             _Target("drafts", "Черновики редактора", paths.command_drafts_dir, "dir"),
         )

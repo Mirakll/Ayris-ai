@@ -360,15 +360,6 @@ class TestRegistration:
         bare.add(Echo, replace=True)
         assert len(bare) == 1
 
-    def test_plugin_prefix_keeps_both_actions(self, bare: ActionRegistry) -> None:
-        bare.add(Echo)
-        assert bare.add(Echo, plugin="demo") == "demo.Echo"
-        assert bare.names == ("Echo", "demo.Echo")
-        assert bare.get("demo.Echo").meta.plugin == "demo"
-        assert bare.get("demo.Echo").meta.short_name == "Echo"
-        # The unprefixed instance must not have been renamed along with it.
-        assert bare.get("Echo").meta.name == "Echo"
-
     def test_unknown_name_raises_with_a_russian_message(self, bare: ActionRegistry) -> None:
         with pytest.raises(ActionNotFound) as info:
             bare.get("Nope")
@@ -509,11 +500,6 @@ class TestLookup:
         assert [item.meta.name for item in registry.find(query="echo")] == ["Echo"]
         assert [item.meta.name for item in registry.find(query="ЭХО")] == ["Echo"]
         assert [item.meta.name for item in registry.find(query="повторяет")] == ["Echo"]
-
-    def test_find_by_plugin(self, registry: ActionRegistry) -> None:
-        registry.add(Echo, plugin="demo")
-        assert [item.meta.name for item in registry.find(plugin="demo")] == ["demo.Echo"]
-        assert all(item.meta.plugin == "" for item in registry.find(plugin=""))
 
     def test_list_categories_only_shows_the_populated_ones(self, registry: ActionRegistry) -> None:
         categories = registry.list_categories()
@@ -1261,14 +1247,6 @@ class TestMeta:
     def test_timeout_seconds(self) -> None:
         meta = ActionMeta(name="RunApp", category=ActionCategory.APPS, title_ru="Запуск")
         assert meta.timeout_s == DEFAULT_TIMEOUT_MS / 1000
-        assert meta.with_prefix("").timeout_s == meta.timeout_s
-
-    def test_prefixing_twice_does_not_stack(self) -> None:
-        meta = ActionMeta(name="RunApp", category=ActionCategory.APPS, title_ru="Запуск")
-        once = meta.with_prefix("demo")
-        assert once.name == "demo.RunApp"
-        assert once.with_prefix("demo").name == "demo.RunApp"
-        assert once.plugin == "demo"
 
     def test_every_category_has_a_russian_title(self) -> None:
         for category in ActionCategory:

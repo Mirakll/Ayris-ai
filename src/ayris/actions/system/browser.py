@@ -476,8 +476,8 @@ class RecordingOpener:
 
     Lives here rather than in the tests because the arguments Ayris builds — the
     final URL, the browser path, the private-window flag — are the whole of what
-    can be checked away from Windows, and both the unit tests and a plugin
-    author debugging a template need the same recorder to look at them.
+    can be checked away from Windows, and the unit tests need a recorder to
+    look at them.
     """
 
     requests: list[OpenRequest]

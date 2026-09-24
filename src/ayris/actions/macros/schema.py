@@ -221,7 +221,7 @@ class SoundBinding(MacroModel):
 
     @property
     def wait_for_completion(self) -> bool:
-        """Compatibility spelling used by the editor and plugin API."""
+        """Compatibility spelling used by the editor."""
         return self.wait
 
     @model_serializer(mode="wrap")
@@ -444,7 +444,7 @@ class HotkeyTrigger(MacroModel):
 
 
 class EventTrigger(MacroModel):
-    """An event from the bus or from a plugin, optionally filtered."""
+    """An event from the bus, optionally filtered."""
 
     type: Literal[TriggerType.EVENT] = TriggerType.EVENT
     event_name: str = Field(min_length=1, max_length=120)

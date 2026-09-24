@@ -341,7 +341,7 @@ class TriggerIndex:
 
     Writes take a lock, reads do not need one — :meth:`snapshot` hands back an
     object no writer will touch again. Callers are the command library (on every
-    change), the plugin loader (when a plugin registers commands) and the tests.
+    change) and the tests.
     """
 
     __slots__ = (
@@ -358,8 +358,8 @@ class TriggerIndex:
         """Build an empty index.
 
         Args:
-            slot_types: Registry the templates are compiled against. A plugin that
-                registered its own slot type passes the registry holding it;
+            slot_types: Registry the templates are compiled against. A command
+                that defines its own slot type passes the registry holding it;
                 ``None`` means the shipped types. Fixed at construction rather
                 than read per compile, because a template that compiled against
                 one registry and matches against another is a bug with no good

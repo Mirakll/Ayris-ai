@@ -127,8 +127,8 @@ class WorkerSpec:
         restart_delay: Delay before the first restart; doubles per attempt.
         max_restart_delay: Ceiling for that backoff.
         autostart: Start with the application, rather than on first call.
-        python_path: Extra ``sys.path`` entries for the child. Plugin workers and
-            the test fixture worker live outside the installed package.
+        python_path: Extra ``sys.path`` entries for the child, for an entrypoint
+            like the test fixture worker that lives outside the installed package.
         restart_scope: Which settings changes require restarting this worker.
         log_dir: Where the child writes its own log file, if at all.
         log_level: Threshold for the child's logger.

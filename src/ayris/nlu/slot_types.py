@@ -21,8 +21,8 @@ value rather than replacing it. :class:`RelativeValue` keeps the three parts, an
 :class:`VolumeType` returns it from the same :meth:`~SlotType.parse` an absolute
 value comes out of, because the caller has to handle both anyway.
 
-**The registry is how a plugin joins in.** Types are looked up by name at
-template-compile time, so a plugin registering ``device`` before its commands are
+**The registry is the seam types join through.** Types are looked up by name at
+template-compile time, so registering ``device`` before its commands are
 compiled gets ``{name:device}`` in a template for free. Registration is by
 instance rather than by class: a type usually needs data — the app resolver, a
 config step size — and an instance is where that data lives.
@@ -210,7 +210,7 @@ class SlotContext:
 
 
 class SlotParser(Protocol):
-    """The one method a plugin has to supply to register a type."""
+    """The one method a caller has to supply to register a type."""
 
     def __call__(self, raw: str, context: SlotContext) -> object | None: ...
 
@@ -241,7 +241,7 @@ class SlotType:
     Subclasses override :meth:`parse`. They do not override :meth:`safe_parse`,
     which is what the extractor calls — the wrapper is where a parser that
     raises in spite of everything is turned back into an unparsed slot, so one
-    bad plugin cannot take down a command that happened to sit next to it.
+    bad parser cannot take down a command that happened to sit next to it.
     """
 
     #: Name used in a template as ``{name:type}``.
@@ -265,7 +265,7 @@ class SlotType:
 
         A slot value the user mumbled is an everyday event, and the pipeline's
         answer to it is a slot marked unparsed — never a traceback that loses
-        the command. Broad by design: a plugin's parser is arbitrary code.
+        the command. Broad by design: a registered parser is arbitrary code.
         """
         text = raw.strip()
         if not text:
@@ -675,7 +675,7 @@ _AMOUNT_NOISE: Final = frozenset({"на", "по", "ещё", "еще", "чуть"
 class _FunctionType(SlotType):
     """Adapter that dresses a plain function as a :class:`SlotType`.
 
-    So that a plugin can register a lambda and still get everything a type
+    So that a caller can register a lambda and still get everything a type
     gets — the safe wrapper, the greedy check, a name in an error message —
     without subclassing anything.
     """
@@ -700,11 +700,12 @@ class _FunctionType(SlotType):
 class SlotTypeRegistry:
     """The set of type names a template may use.
 
-    Mutable, unlike almost everything else here, because plugins register into
-    it as they load and the templates they bring are compiled afterwards. What
-    is *not* allowed is replacing a name already taken: two plugins both calling
-    their type ``device`` is a conflict the second one has to hear about, not a
-    silent overwrite that changes what the first one's commands do.
+    Mutable, unlike almost everything else here, because slot types defined by
+    commands register into it as commands load and their templates are compiled
+    afterwards. What is *not* allowed is replacing a name already taken: two
+    commands both claiming the type ``device`` is a conflict the second one has
+    to hear about, not a silent overwrite that changes what the first one's
+    commands do.
     """
 
     def __init__(self, types: Mapping[str, SlotType] | None = None) -> None:
@@ -744,7 +745,7 @@ class SlotTypeRegistry:
         return slot_type
 
     def unregister(self, name: str) -> bool:
-        """Drop a type. ``True`` if it was there — a plugin unloading calls this."""
+        """Drop a type. ``True`` if it was there."""
         return self._types.pop(name.strip().lower(), None) is not None
 
     def get(self, name: str) -> SlotType | None:
@@ -758,7 +759,7 @@ class SlotTypeRegistry:
     def copy(self) -> SlotTypeRegistry:
         """An independent registry with the same types.
 
-        A plugin experimenting with registrations should not be able to break
+        A caller experimenting with registrations should not be able to break
         the shipped set, and one line here is cheaper than making it immutable.
         """
         return SlotTypeRegistry(self._types)
@@ -781,7 +782,7 @@ def default_registry(
     """A registry holding the ten built-in types.
 
     A function rather than a module-level constant so that every caller gets its
-    own: a plugin registering ``device`` into a shared singleton would leak the
+    own: registering ``device`` into a shared singleton would leak the
     name into every other command library in the process, including the ones a
     test built two lines earlier.
 

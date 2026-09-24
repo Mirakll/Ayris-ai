@@ -133,7 +133,6 @@ class TestDefaults:
             "ai",
             "hotkeys",
             "overlay",
-            "plugins",
             "privacy",
             "performance",
             "updates",
@@ -331,7 +330,6 @@ class TestPersistence:
             {
                 "general": {"theme": "light", "autostart": True},
                 "voice": {"tts": {"speed": 1.35, "volume": 55}},
-                "plugins": {"disabled": ["demo"]},
             }
         )
 
@@ -363,11 +361,11 @@ class TestPersistence:
         assert list(config_path.parent.iterdir()) == [config_path]
 
     def test_tuples_are_written_as_arrays(self, config_path: Path) -> None:
-        settings = Settings.model_validate({"plugins": {"disabled": ["alpha", "beta"]}})
+        settings = Settings.model_validate({"privacy": {"confirmation_actions": ["alpha", "beta"]}})
         save_settings(settings, config_path)
 
-        assert read_toml(config_path)["plugins"]["disabled"] == ["alpha", "beta"]
-        assert load_settings(config_path)[0].plugins.disabled == ("alpha", "beta")
+        assert read_toml(config_path)["privacy"]["confirmation_actions"] == ["alpha", "beta"]
+        assert load_settings(config_path)[0].privacy.confirmation_actions == ("alpha", "beta")
 
 
 class TestRestartScopes:
@@ -382,7 +380,7 @@ class TestRestartScopes:
             ("voice.tts.engine", RestartScope.TTS),
             ("voice.wake.engine", RestartScope.WAKE),
             ("ai.model", RestartScope.LLM),
-            ("plugins.sandbox", RestartScope.APP),
+            ("general.always_run_as_admin", RestartScope.APP),
             ("voice.tts.speed", RestartScope.NONE),
             ("overlay.rotation_speed", RestartScope.NONE),
             ("privacy.telemetry", RestartScope.NONE),

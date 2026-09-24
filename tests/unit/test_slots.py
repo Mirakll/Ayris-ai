@@ -18,8 +18,8 @@ command that silently never fires — the worst possible bug report — so
 :func:`~ayris.nlu.slots.validate_template` turns the refusal into the Russian
 sentence the settings window shows.
 
-*The registry is the plugin seam.* A type is looked up by name at compile time,
-so a plugin that registers ``устройство`` before its commands compile gets
+*The registry is the extension seam.* A type is looked up by name at compile time,
+so a command that registers ``устройство`` before it compiles gets
 ``{что:устройство}`` for free. The tests here pin the seam from both ends: the
 registry itself, and a template going through :class:`~ayris.nlu.index.TriggerIndex`
 with a custom registry attached.
@@ -43,7 +43,7 @@ Groups:
 * :class:`TestSlotSetApi` — the surface a command handler actually reads.
 * :class:`TestCompile` — every way a template can be refused.
 * :class:`TestValidateTemplate` — the messages the settings window shows.
-* :class:`TestRegistry` — registration, replacement, copies, plugin conflicts.
+* :class:`TestRegistry` — registration, replacement, copies, name conflicts.
 * :class:`TestSafeParse` — a parser that raises costs its slot and nothing more.
 * :class:`TestIndexSeam` — a template trigger through the matcher and the index.
 """
@@ -649,7 +649,7 @@ class TestCompile:
         assert compile_slots("  открой {app}  ").template == "открой {app}"
 
     def test_cyrillic_slot_and_type_names(self) -> None:
-        """A plugin may register «устройство», so the pattern has to be Unicode."""
+        """A command may register «устройство», so the pattern has to be Unicode."""
         registry = default_registry()
         registry.register("устройство", lambda raw, _context: raw.upper())
         slots = extract_slots("включи {что:устройство}", "включи свет", registry=registry)
@@ -692,7 +692,7 @@ class TestValidateTemplate:
 
 
 class TestRegistry:
-    """Registration, conflicts, and the copy a plugin cannot break."""
+    """Registration, conflicts, and the copy a caller cannot break."""
 
     def test_the_builtins_are_all_there(self) -> None:
         registry = default_registry()
@@ -705,7 +705,7 @@ class TestRegistry:
         assert list(names) == sorted(names)
 
     def test_default_registry_is_fresh_every_time(self) -> None:
-        """A shared singleton would leak a plugin's type into every other library."""
+        """A shared singleton would leak one library's type into every other library."""
         first = default_registry()
         first.register("устройство", lambda raw, _context: raw)
         assert "устройство" not in default_registry()
@@ -724,7 +724,7 @@ class TestRegistry:
         assert registry.get("процент") is slot_type
 
     def test_a_conflict_is_an_error(self) -> None:
-        """Two plugins calling their type ``устройство`` is not a silent overwrite."""
+        """Two commands claiming the type ``устройство`` is not a silent overwrite."""
         registry = SlotTypeRegistry()
         registry.register("устройство", lambda raw, _context: raw)
         with pytest.raises(ValueError, match="уже зарегистрирован"):
@@ -744,7 +744,7 @@ class TestRegistry:
             SlotTypeRegistry().register(name, lambda raw, _context: raw)
 
     def test_unregister(self) -> None:
-        """A plugin unloading has to take its types with it."""
+        """Removing a registered type has to take it back out."""
         registry = default_registry()
         registry.register("устройство", lambda raw, _context: raw)
         assert registry.unregister("устройство") is True
@@ -777,7 +777,7 @@ class TestRegistry:
 class TestSafeParse:
     """A parser that raises costs its own slot and nothing else.
 
-    A plugin's parser is arbitrary code, and a traceback out of one type would
+    A registered parser is arbitrary code, and a traceback out of one type would
     take down a command that happened to sit next to it in the same template.
     """
 
@@ -791,7 +791,7 @@ class TestSafeParse:
         assert slots.unparsed == ("x",)
 
     def test_the_failure_is_logged(self, ayris_log: pytest.LogCaptureFixture) -> None:
-        """Silently swallowing it would make a broken plugin undiagnosable."""
+        """Silently swallowing it would make a broken parser undiagnosable."""
         registry = default_registry()
         registry.register("бомба", _Boom())
         extract_slots("тест {x:бомба}", "тест значение", registry=registry)

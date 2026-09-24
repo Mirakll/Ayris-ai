@@ -598,16 +598,16 @@ class TestLifecycle:
         app = AyrisApp(_options(tmp_path)).startup()
         app.add_component(
             Component(
-                name="plugin",
-                stage=LifecycleStage.PLUGINS,
-                start=lambda: started.append("plugin"),
+                name="late",
+                stage=LifecycleStage.GUI,
+                start=lambda: started.append("late"),
                 stop=lambda: started.append("stopped"),
             )
         )
 
-        assert started == ["plugin"]
+        assert started == ["late"]
         app.shutdown()
-        assert started == ["plugin", "stopped"]
+        assert started == ["late", "stopped"]
 
 
 @pytest.mark.xdist_group("single-instance")

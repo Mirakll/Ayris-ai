@@ -10,7 +10,7 @@ backwards, which is the only ordering guarantee the later tasks need: a worker
 registered under :attr:`LifecycleStage.WORKERS` is always started after the
 database and stopped before it. Subsystems attach themselves with
 :meth:`AyrisApp.add_component` rather than being wired in here, so tasks 05
-(workers), 19 (actions), 43 (GUI) and 69 (plugins) extend the lifecycle without
+(workers), 19 (actions) and 43 (GUI) extend the lifecycle without
 touching this file.
 
 Paths come before logging even though the specification lists the logger first:
@@ -146,7 +146,6 @@ class LifecycleStage(StrEnum):
     WORKERS = "workers"
     NLU = "nlu"
     GUI = "gui"
-    PLUGINS = "plugins"
 
 
 #: Called when a settings change needs a worker recycled. Receives the new
@@ -585,7 +584,8 @@ class AyrisApp:
 
         Registration order decides the order within a stage; shutdown reverses
         it. A component added while the application is already past its stage is
-        started immediately, which is what a plugin loaded at runtime needs.
+        started immediately, which is what a subsystem attached after startup
+        needs.
         """
         self._components.append(component)
         if self._running and component.stage in self._stages_started:

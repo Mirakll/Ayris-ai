@@ -2,7 +2,7 @@
 
 An action is the smallest thing Ayris can be asked to do — ``RunApp``,
 ``SetVolume``, ``Screenshot``. Sections 6 and 7.2 list about seventy of them, and
-they are written by nine different task chats plus plugin authors, so the shape
+they are written by nine different task chats, so the shape
 has to be worth repeating seventy times.
 
 **Parameters are a pydantic model, not ``**kwargs``.** The same nested
@@ -47,7 +47,7 @@ from __future__ import annotations
 import asyncio
 import re
 from abc import ABC
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
@@ -83,12 +83,9 @@ _log = get_logger(__name__)
 #: wait: ``Wait``, ``CallCommand``, a download.
 DEFAULT_TIMEOUT_MS: Final = 10_000
 
-#: ``RunApp`` or ``myplugin.RunApp``. PascalCase because these names are the block
-#: names the user sees in the editor and the strings inside exported ``.ayris``
-#: files; the plugin prefix is a lowercase slug so the two halves never blur.
-_NAME_PATTERN: Final = re.compile(
-    r"^(?:(?P<plugin>[a-z][a-z0-9_-]*)\.)?(?P<action>[A-Z][A-Za-z0-9]*)$"
-)
+#: ``RunApp``. PascalCase because these names are the block names the user sees
+#: in the editor and the strings inside exported ``.ayris`` files.
+_NAME_PATTERN: Final = re.compile(r"^[A-Z][A-Za-z0-9]*$")
 
 #: Placeholder written wherever a secret parameter would have been.
 SECRET_MASK: Final = "***"
@@ -115,7 +112,6 @@ class ActionCategory(StrEnum):
     NOTIFY = "notify"
     LOGIC = "logic"
     FLOW = "flow"
-    PLUGIN = "plugin"
 
     @property
     def title_ru(self) -> str:
@@ -138,7 +134,6 @@ _CATEGORY_TITLES: Final[Mapping[ActionCategory, str]] = {
     ActionCategory.NOTIFY: "Уведомления",
     ActionCategory.LOGIC: "Логика и переменные",
     ActionCategory.FLOW: "Поток выполнения",
-    ActionCategory.PLUGIN: "Плагины",
 }
 
 
@@ -173,38 +168,16 @@ class ActionMeta:
 
     def __post_init__(self) -> None:
         if not _NAME_PATTERN.match(self.name):
-            raise ValueError(
-                f"action name {self.name!r} must be PascalCase, optionally prefixed "
-                "with a lowercase plugin slug (e.g. 'RunApp' or 'myplugin.RunApp')"
-            )
+            raise ValueError(f"action name {self.name!r} must be PascalCase (e.g. 'RunApp')")
         if not self.title_ru.strip():
             raise ValueError(f"action {self.name} needs a Russian title")
         if self.timeout_ms < 0:
             raise ValueError(f"action {self.name} has a negative timeout: {self.timeout_ms}")
 
     @property
-    def plugin(self) -> str:
-        """Plugin slug this action came from, or ``""`` for a built-in one."""
-        match = _NAME_PATTERN.match(self.name)
-        return match.group("plugin") or "" if match else ""
-
-    @property
-    def short_name(self) -> str:
-        """Block name without the plugin prefix."""
-        match = _NAME_PATTERN.match(self.name)
-        return match.group("action") if match else self.name
-
-    @property
     def timeout_s(self) -> float | None:
         """Timeout as seconds for ``wait_for``, or ``None`` when unlimited."""
         return self.timeout_ms / 1000.0 if self.timeout_ms > 0 else None
-
-    def with_prefix(self, plugin: str) -> ActionMeta:
-        """Copy renamed for a plugin: ``RunApp`` becomes ``myplugin.RunApp``."""
-        slug = plugin.strip().lower()
-        if not slug:
-            return self
-        return replace(self, name=f"{slug}.{self.short_name}")
 
 
 class ActionParams(BaseModel):
