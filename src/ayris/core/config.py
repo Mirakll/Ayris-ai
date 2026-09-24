@@ -724,6 +724,8 @@ class AiConfig(ConfigSection):
         "openrouter",
         "deepseek",
         "gigachat",
+        "yandex",
+        "custom",
     ] = Field(
         default="ollama",
         description="Поставщик языковой модели",
@@ -736,7 +738,11 @@ class AiConfig(ConfigSection):
     )
     host: str = Field(
         default="http://127.0.0.1:11434",
-        description="Адрес локального сервера моделей (Ollama, LM Studio)",
+        description=(
+            "Адрес сервера моделей: локального (Ollama, LM Studio) или, для "
+            "провайдера «custom», базовый URL любого OpenAI-совместимого API "
+            "(например https://openrouter.ai/api/v1)"
+        ),
         json_schema_extra=_restart(RestartScope.LLM),
     )
     credential_ref: str = Field(
