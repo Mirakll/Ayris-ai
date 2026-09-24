@@ -1003,6 +1003,8 @@ def _wake_settings_from_params(params: JsonObject) -> WakeWordSettings:
     )
     raw = params.get("wake_phrases")
     phrases = phrases_from(raw) if isinstance(raw, list) else ()
+    raw_opts = params.get("wake_options")
+    options = {str(k): str(v) for k, v in raw_opts.items()} if isinstance(raw_opts, dict) else {}
     return WakeWordSettings(
         enabled=listening and bool(phrases),
         engine=engine,
@@ -1011,6 +1013,7 @@ def _wake_settings_from_params(params: JsonObject) -> WakeWordSettings:
         source_rate=int(_as_float(params.get("sample_rate"), float(TARGET_SAMPLE_RATE))),
         models_dir=get_paths().wake_models_dir,
         access_key=_wake_access_key(engine, str(params.get("wake_credential_ref", ""))),
+        options=options,
     )
 
 

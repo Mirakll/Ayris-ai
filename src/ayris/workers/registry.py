@@ -323,6 +323,9 @@ def _audio_spec(settings: Settings) -> WorkerSpec:
             # reads the key out of the Windows store itself, so a vendor key
             # cannot end up in a worker spec, a log line or a crash report.
             "wake_credential_ref": wake.credential_ref,
+            # Engine extras (e.g. model_path for the Vosk KWS fallback) ride along
+            # verbatim; the audio worker feeds them into ModelSpec.options.
+            "wake_options": dict(wake.options),
         },
         # A dropped input buffer is audible and unrecoverable, so this is the one
         # worker allowed above normal priority by default.
@@ -428,7 +431,7 @@ _ENTRYPOINTS: Final[Mapping[WorkerKind, str]] = MappingProxyType(
         WorkerKind.AUDIO: "ayris.workers.audio_worker:AudioWorker",
         WorkerKind.STT: "ayris.workers.stt_worker:SttWorker",
         WorkerKind.TTS: "ayris.workers.tts_worker:TtsWorker",
-        WorkerKind.LLM: "ayris.nlu.llm.worker:LlmWorker",
+        WorkerKind.LLM: "ayris.workers.llm_worker:LlmWorker",
     }
 )
 
