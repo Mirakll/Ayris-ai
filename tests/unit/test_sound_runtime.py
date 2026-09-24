@@ -4,9 +4,10 @@
 фейковый :class:`~ayris.actions.macros.sounds.mixer.SoundOutput` со счётчиками
 (как в ``test_macro_sounds``). Фабрика строит настоящий плеер, но устройство не
 открывает (плеер открывает его лениво на первой фразе), поэтому PortAudio не нужен.
-Проверки: общий хендл (set/get, очистка), фабрика собирает библиотеку и даёт
-безопасный ``stop``, адаптер «Прослушать» режет громкость, не ждёт окончания и
-играет под владельцем «preview», а ``Стоп`` отменяет только его.
+Проверки: общий хендл (set/get, очистка), фабрика собирает библиотеку и отдаёт
+плеер (общий с TTS-роутером), у которого ``stop`` безопасен, адаптер «Прослушать»
+режет громкость, не ждёт окончания и играет под владельцем «preview», а ``Стоп``
+отменяет только его.
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ from ayris.actions.macros.sounds import (
     set_active_sound_library,
 )
 from ayris.audio.tts.base import AudioChunk
-from ayris.audio.tts.player import SpeechRequest
+from ayris.audio.tts.player import SpeechRequest, TtsPlayer
 from ayris.gui.tabs.commands import _build_sound_preview, _LibrarySoundPreview
 
 pytestmark = pytest.mark.unit
@@ -101,16 +102,18 @@ def test_active_handle_round_trips(tmp_path: Path) -> None:
     assert active_sound_library() is None
 
 
-def test_build_returns_library_and_stop(tmp_path: Path) -> None:
+def test_build_returns_library_and_player(tmp_path: Path) -> None:
     # The builtin manifest lives at the real resources dir, which the library finds
     # itself. The player opens no device until the first sound, so this touches no
-    # PortAudio; the stop callback must be callable, quiet and idempotent.
+    # PortAudio; the caller shares this player with the TTS router and owns stopping
+    # it, so player.stop must be quiet and idempotent.
     built = build_sound_library(sounds_dir=tmp_path / "sounds", cache_dir=tmp_path / "cache")
     assert built is not None
-    library, stop = built
+    library, player = built
     assert isinstance(library, SoundLibrary)
-    stop()
-    stop()
+    assert isinstance(player, TtsPlayer)
+    player.stop()
+    player.stop()
 
 
 def test_preview_plays_builtin_without_waiting(tmp_path: Path) -> None:

@@ -17,10 +17,13 @@ cannot fail for want of a speaker. A build that still fails — no PortAudio at
 all, a broken builtin manifest — degrades to ``None`` rather than aborting the
 launch, exactly as the command store and the sound importer do.
 
-The synthesiser is left ``None``: the TTS→speaker path is not wired at runtime
-yet (see :mod:`ayris.core.pipeline_app`), so a ``tts:`` binding raises the
-library's «Синтез звука не настроен» and the engine logs it per binding. File
-and builtin sounds need no synthesiser and play immediately.
+The synthesiser is left ``None`` here: :func:`build_sound_library` builds only
+the device path. The dispatcher that calls it wires the shared player into the
+runtime :class:`~ayris.audio.tts.router.TtsRouter` (see
+:mod:`ayris.audio.tts.app_router`) and sets the library's ``synthesizer`` to a
+:class:`~ayris.actions.macros.sounds.library.RouterSoundSynthesizer`, so a
+``tts:`` binding speaks through the very same voice as a spoken answer. File and
+builtin sounds need no synthesiser and play immediately regardless.
 
 :func:`set_active_sound_library` / :func:`active_sound_library` are the shared
 handle, the same shape as
@@ -39,10 +42,11 @@ from ayris.actions.macros.sounds.mixer import PlayerOutput, SoundMixer
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Iterable
     from pathlib import Path
 
     from ayris.actions.macros.schema import CommandModel
+    from ayris.audio.tts.player import TtsPlayer
 
 __all__ = [
     "active_sound_library",
@@ -58,7 +62,7 @@ def build_sound_library(
     sounds_dir: Path,
     cache_dir: Path,
     commands: Iterable[CommandModel] | None = None,
-) -> tuple[SoundLibrary, Callable[[], None]] | None:
+) -> tuple[SoundLibrary, TtsPlayer] | None:
     """Build the sound library over a fresh device owner, or ``None`` on failure.
 
     Args:
@@ -69,10 +73,13 @@ def build_sound_library(
             engine and the preview button do not need them.
 
     Returns:
-        The library and a callback that stops its player and releases the device,
-        or ``None`` when the path could not be built (no PortAudio, or a broken
-        builtin manifest). A ``None`` return disables sounds rather than crashing,
-        the same degradation as :func:`~ayris.gui.tabs.commands.build_store`.
+        The library and the :class:`~ayris.audio.tts.player.TtsPlayer` it plays
+        through, or ``None`` when the path could not be built (no PortAudio, or a
+        broken builtin manifest). The caller shares that player with the TTS
+        router — one device owner for sounds and speech alike — and owns stopping
+        it (``player.stop``). A ``None`` return disables sound rather than
+        crashing, the same degradation as
+        :func:`~ayris.gui.tabs.commands.build_store`.
 
     The player opens no device here — it does that lazily at the first sound (see
     :meth:`~ayris.audio.tts.player.TtsPlayer.start`) — so building this at start-up
@@ -91,7 +98,7 @@ def build_sound_library(
     except Exception:
         _log.exception("не удалось собрать вывод звука команд")
         return None
-    return library, player.stop
+    return library, player
 
 
 _ACTIVE_LIBRARY: SoundLibrary | None = None

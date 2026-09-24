@@ -16,6 +16,7 @@ from ayris.core.profile import ProfileSwitched
 from ayris.triggers.debounce import Debouncer, RateLimiter
 from ayris.triggers.schedule import ScheduleEntry, TriggerSchedule
 from ayris.triggers.system_events import SystemEvent, SystemEventMonitor
+from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from ayris.actions.macros.engine import MacroEngine
@@ -23,6 +24,9 @@ if TYPE_CHECKING:
     from ayris.core.app import AyrisApp
     from ayris.core.pipeline_states import Scheduler
     from ayris.core.repositories import Repositories
+
+
+_log = get_logger(__name__)
 
 
 _DEFAULT_DEBOUNCE = {
@@ -278,17 +282,42 @@ def install_triggers(app: AyrisApp) -> TriggerDispatcher:
         return command_from_rows(row, app.repositories.triggers.list_for_command(row.id))
 
     # The one audio-output owner: the macro engine plays a stage's binding through
-    # it, and the command editor previews through the very same instance (registered
-    # below). A build that fails degrades to no sound rather than aborting startup.
-    from ayris.actions.macros.sounds import build_sound_library, set_active_sound_library
+    # it, the command editor previews through the very same instance (registered
+    # below), and the TTS router speaks answers through it too. A build that fails
+    # degrades to no sound rather than aborting startup.
+    from ayris.actions.macros.sounds import (
+        RouterSoundSynthesizer,
+        build_sound_library,
+        set_active_sound_library,
+    )
+    from ayris.audio.tts.app_router import build_tts_router, set_active_tts_router
     from ayris.core.paths import get_paths
+
+    def _noop() -> None:
+        return None
 
     paths = get_paths()
     built = build_sound_library(sounds_dir=paths.sounds_dir, cache_dir=paths.cache_dir)
-    sound_library = built[0] if built is not None else None
-    stop_sound: Callable[[], None] = built[1] if built is not None else lambda: None
-    if sound_library is not None:
+    stop_sound: Callable[[], None]
+    close_router: Callable[[], None] = _noop
+    if built is None:
+        sound_library = None
+        stop_sound = _noop
+    else:
+        sound_library, player = built
+        stop_sound = player.stop
         set_active_sound_library(sound_library)
+        # One router over the shared player: the pipeline speaks answers through it
+        # and the sound library synthesises tts: bindings through the same voice.
+        # A build that fails leaves the synthesiser unset (tts: bindings report it)
+        # rather than aborting startup.
+        try:
+            router, close_router = build_tts_router(app, player)
+        except Exception:
+            _log.exception("не удалось собрать маршрутизатор TTS")
+        else:
+            set_active_tts_router(router)
+            sound_library.synthesizer = RouterSoundSynthesizer(router)
 
     engine = MacroEngine(
         registry,
@@ -312,6 +341,8 @@ def install_triggers(app: AyrisApp) -> TriggerDispatcher:
         engine.shutdown()
         registry.shutdown()
         set_active_sound_library(None)
+        set_active_tts_router(None)
+        close_router()
         stop_sound()
 
     app.add_component(

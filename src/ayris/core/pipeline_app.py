@@ -13,12 +13,18 @@ and *no* action runner: a matched command is published as
 too would run the command twice, so the pipeline stays the understanding
 front-end and the dispatcher stays the executor.
 
-The voice path (wake word, STT, TTS) is **not** attached here: the recognition and
-synthesis engines still run in workers that nothing adapts into the pipeline's
-``SttSource``/``SpeechOutput`` yet, and attaching a half-wired voice path would
-turn every real audio event into an error. Only :meth:`Pipeline.run_text` is used,
-so the microphone button and the audio worker keep their own behaviour untouched
-until those adapters exist.
+The **input** side of the voice path (wake word, STT) is still **not** attached
+here: recognition runs in a worker that nothing adapts into the pipeline's
+``SttSource`` yet, and attaching a half-wired one would turn every real audio
+event into an error, so the microphone button and the audio worker keep their own
+behaviour until that adapter exists.
+
+The **output** side is wired: :func:`install_pipeline` hands the pipeline the
+runtime :class:`~ayris.audio.tts.router.TtsRouter` (built by the dispatcher over
+the player shared with the macro sounds — see :mod:`ayris.audio.tts.app_router`)
+as its :class:`~ayris.core.pipeline.SpeechOutput`, so a matched command's answer
+is spoken. When no router could be built the pipeline gets ``None`` and runs
+silently instead.
 """
 
 from __future__ import annotations
@@ -50,6 +56,7 @@ def install_pipeline(app: AyrisApp) -> Pipeline:
     :meth:`~ayris.core.pipeline.Pipeline.run_text` is what the dashboard's text
     field is wired to.
     """
+    from ayris.audio.tts.app_router import active_tts_router
     from ayris.core.app import Component, LifecycleStage
     from ayris.core.models import TriggerType
     from ayris.nlu.index import TriggerIndex
@@ -98,6 +105,7 @@ def install_pipeline(app: AyrisApp) -> Pipeline:
         matcher=matcher,
         settings=app.settings,
         history=repos.history,
+        tts=active_tts_router(),
     )
 
     def on_profile(event: ProfileSwitched) -> None:
