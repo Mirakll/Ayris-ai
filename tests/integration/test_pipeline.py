@@ -1371,6 +1371,20 @@ class TestTrace:
         # Трейс всё равно есть: DevTools живёт не в базе.
         assert len(rig.pipeline.traces()) == 1
 
+    def test_the_recognised_phrase_can_be_kept_out_of_history(self) -> None:
+        rig = build(settings=settings_with(privacy={"record_transcript": False}))
+
+        assert rig.pipeline.run_text(PHRASE).ok
+
+        # Строка есть, но самой фразы в ней нет — а что выполнено, записано.
+        entry = rig.history.last
+        assert entry.stt_raw == ""
+        assert entry.matched_command_id == 7
+        assert entry.intent == "command:7"
+        assert entry.result is ExecutionResult.OK
+        # DevTools-трейс по-прежнему видит фразу: гейт режет только строку истории.
+        assert rig.trace().payload["stt_raw"] == PHRASE
+
     def test_a_broken_history_sink_does_not_lose_the_answer(
         self, ayris_log: list[logging.LogRecord]
     ) -> None:
