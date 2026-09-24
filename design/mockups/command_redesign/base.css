@@ -1,0 +1,200 @@
+/* ==========================================================================
+   База редизайна: структура холста, нод, портов, проводов, инспектора,
+   палитры и контекст-меню — общая для всех вариантов. Внешний вид («шкура»)
+   задаётся через переменные ниже; каждый вариант их переопределяет.
+   Палитра/типографика/метрики берутся из tokens.css (тема Ayris).
+   ========================================================================== */
+:root {
+  --grid-dot: rgba(148,138,172,0.16);
+  --grid-dot-major: rgba(148,138,172,0.28);
+  --bloom: rgba(155,109,255,0.05);
+  --node-shadow: rgba(0,0,0,0.45);
+
+  --panel-bg: var(--surface);
+  --panel-border: var(--border);
+
+  --node-bg: var(--surface);
+  --node-border: var(--border);
+  --node-radius: var(--radius-md);
+  --head-bg: color-mix(in srgb, var(--role) 22%, var(--surface-hi));
+  --field-bg: var(--bg);
+}
+
+/* ===== Холст ===== */
+.canvas-wrap { position: relative; overflow: hidden; }
+.canvas {
+  position: absolute; inset: 0;
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(1200px 800px at 50% 42%, var(--bloom), transparent 70%),
+    radial-gradient(var(--grid-dot) 1.4px, transparent 1.4px);
+  background-position: 0 0, var(--vx, 0px) var(--vy, 0px);
+  background-size: 100% 100%, calc(26px * var(--vk, 1)) calc(26px * var(--vk, 1));
+  cursor: grab;
+}
+.canvas.panning { cursor: grabbing; }
+.world { position: absolute; inset: 0; transform-origin: 0 0; }
+svg.wires { position:absolute; inset:0; width:100%; height:100%; overflow: visible; pointer-events: none; }
+
+/* ===== Нода ===== */
+.node {
+  position: absolute; width: 210px;
+  background: var(--node-bg);
+  border: 1px solid var(--node-border);
+  border-radius: var(--node-radius);
+  box-shadow: 0 6px 18px var(--node-shadow);
+  user-select: none; cursor: grab; overflow: visible;
+}
+/* overflow: visible — иначе круглые порты по бокам обрезаются в «половинки».
+   Скругление углов держим на самих head/body, а не на .node. */
+.node .accent-bar { position:absolute; left:0; top:0; bottom:0; width:4px; background: var(--role); border-radius: var(--node-radius) 0 0 var(--node-radius); z-index:1; }
+.node .head {
+  display:flex; align-items:center; gap:8px;
+  padding: 9px 10px 9px 14px;
+  background: var(--head-bg);
+  border-bottom: 1px solid var(--node-border);
+  border-radius: var(--node-radius) var(--node-radius) 0 0;
+}
+.node .body { border-radius: 0 0 var(--node-radius) var(--node-radius); }
+.node .head .ico { width:22px; height:22px; border-radius:6px; display:grid; place-items:center; background: color-mix(in srgb, var(--role) 30%, transparent); color: var(--role); flex:none; }
+.node .head .ico svg { width:14px; height:14px; }
+.node .head .title { font-size: 13px; font-weight: 600; color: var(--text); flex:1; min-width:0; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
+.node .head .kebab { flex:none; color: var(--muted); font-size: 15px; line-height:1; cursor: pointer; padding: 0 2px; }
+.node .head .role-label { font-size: 10px; letter-spacing:0.05em; text-transform: uppercase; color: var(--role); font-weight:600; }
+.node .body { padding: 9px 12px 11px 14px; }
+.node .summary { font-size: 12.5px; color: var(--text-2); line-height: 1.4; overflow:hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.node .summary b { color: var(--text); font-weight: 600; }
+
+.node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 0 26px color-mix(in srgb, var(--accent) 55%, transparent); }
+.node.disabled { opacity: 0.55; }
+.node.disabled .head { filter: saturate(0.35); }
+.node.danger { border-color: var(--error); }
+.node.danger .head::after { content:"⚠"; margin-left:auto; color: var(--error); }
+.node.running { box-shadow: 0 0 0 1px var(--focus), 0 0 30px color-mix(in srgb, var(--focus) 65%, transparent); animation: breathe 1.4s ease-in-out infinite; }
+@keyframes breathe { 0%,100%{ box-shadow: 0 0 0 1px var(--focus), 0 0 18px color-mix(in srgb, var(--focus) 45%, transparent);} 50%{ box-shadow: 0 0 0 1px var(--focus), 0 0 34px color-mix(in srgb, var(--focus) 75%, transparent);} }
+
+/* Порты */
+.port { position:absolute; width:13px; height:13px; border-radius:50%; border:2px solid var(--role); background: var(--node-bg); top: 50%; transform: translateY(-50%); z-index: 3;
+  box-shadow: 0 0 7px color-mix(in srgb, var(--pc, var(--role)) 70%, transparent); transition: box-shadow .12s; }
+.port.filled { background: var(--pc, var(--role)); box-shadow: 0 0 11px color-mix(in srgb, var(--pc, var(--role)) 90%, transparent); }
+.port.in { left: -7px; }
+.port.out { right: -7px; }
+.port.out:hover { box-shadow: 0 0 14px var(--pc, var(--role)); cursor: crosshair; }
+.port.out.multi { top: auto; transform: none; }
+.port-label { position:absolute; right: 16px; font-size: 10px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; z-index:3; pointer-events:none; }
+
+/* Чип задержки на проводе / кнопка добавления задержки */
+.delay-chip {
+  position:absolute; z-index: 5; transform: translate(-50%,-50%);
+  display:inline-flex; align-items:center; gap:5px;
+  height: 24px; padding: 0 9px; border-radius: 999px;
+  background: color-mix(in srgb, var(--warning) 20%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 55%, transparent);
+  color: var(--warning); font-size: 11.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.delay-chip svg { width: 12px; height: 12px; }
+.delay-chip:hover { background: color-mix(in srgb, var(--warning) 30%, var(--surface)); }
+.wire-add {
+  position:absolute; z-index:4; transform: translate(-50%,-50%);
+  width: 20px; height:20px; border-radius:50%; background: var(--surface-hi); border:1px solid var(--border);
+  color: var(--muted); display:grid; place-items:center; font-size: 14px; cursor:pointer; opacity: 0; transition: opacity .12s;
+}
+
+/* ===== Инспектор (внутренние поля — общие) ===== */
+.insp-head { padding: 16px; border-bottom: 1px solid var(--panel-border); display:flex; align-items:center; gap:10px; }
+.insp-head .ico { width:30px; height:30px; border-radius:8px; display:grid; place-items:center; background: color-mix(in srgb, var(--role) 28%, transparent); color: var(--role); }
+.insp-head .ico svg { width:17px;height:17px; }
+.insp-head .t { font-size: 14px; font-weight:600; }
+.insp-head .s { font-size: 11px; color: var(--role); text-transform: uppercase; letter-spacing:0.05em; font-weight:600; }
+.insp-body { padding: 16px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap: 16px; }
+.field label { display:block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.field input, .field textarea, .field select {
+  width:100%; padding: 9px 12px; border-radius: 8px; background: var(--field-bg);
+  border: 1px solid var(--panel-border); color: var(--text); font-size: 13px; font-family: inherit;
+}
+.field input:focus, .field textarea:focus, .field select:focus { outline:none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus) 40%, transparent); }
+.field textarea { resize: vertical; min-height: 64px; }
+.row { display:flex; gap:10px; }
+.row .field { flex:1; }
+.toggle-row { display:flex; align-items:center; justify-content:space-between; padding: 4px 0; }
+.toggle-row span { font-size: 13px; color: var(--text-2); }
+.sw { width:44px; height:24px; border-radius: 999px; background: var(--surface-hi); border:1px solid var(--border); position:relative; cursor:pointer; transition: background .15s; }
+.sw.on { background: var(--accent); border-color: var(--accent); }
+.sw::after { content:""; position:absolute; top:2px; left:2px; width:18px; height:18px; border-radius:50%; background: var(--text); transition: left .15s; }
+.sw.on::after { left: 22px; background: var(--on-accent); }
+.insp-empty { padding: 40px 20px; text-align:center; color: var(--muted); font-size: 13px; }
+
+/* ===== Палитра «＋ Нода» ===== */
+.palette { position:fixed; z-index:40; background:var(--panel-bg); border:1px solid var(--panel-border); border-radius:12px; box-shadow:0 12px 30px rgba(0,0,0,0.45); display:none; width:264px; overflow:hidden; backdrop-filter: var(--panel-blur, none); }
+.palette.open { display:flex; flex-direction:column; max-height:420px; }
+.palette .p-search { margin:8px; padding:8px 12px; border-radius:8px; background:var(--field-bg); border:1px solid var(--panel-border); color:var(--text); font-size:13px; font-family:inherit; }
+.palette .p-list { overflow-y:auto; padding:0 6px 8px; }
+.palette .p-cat { font-size:10px; text-transform:uppercase; letter-spacing:0.07em; color:var(--muted); padding:8px 8px 4px; }
+.palette .p-item { display:flex; align-items:center; gap:10px; padding:8px 8px; border-radius:8px; cursor:pointer; font-size:13px; color:var(--text-2); }
+.palette .p-item:hover { background:var(--surface-hi); color:var(--text); }
+.palette .p-item .ico { width:26px;height:26px;border-radius:7px;display:grid;place-items:center;background:color-mix(in srgb,var(--role) 28%,transparent);color:var(--role);flex:none;}
+.palette .p-item .ico svg{width:15px;height:15px;}
+.palette .p-item .meta { overflow:hidden; }
+.palette .p-item .meta .nm { font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.palette .p-item .meta .ds { font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.palette .p-empty { padding:20px; text-align:center; color:var(--muted); font-size:12px; }
+
+/* ===== Контекст-меню ===== */
+.ctx { position:fixed; z-index:60; min-width:180px; background:var(--panel-bg); border:1px solid var(--panel-border); border-radius:10px; box-shadow:0 12px 30px rgba(0,0,0,0.45); padding:5px; display:none; backdrop-filter: var(--panel-blur, none); }
+.ctx.open { display:block; }
+.ctx .ci { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:7px; font-size:13px; color:var(--text-2); cursor:pointer; }
+.ctx .ci:hover { background:var(--surface-hi); color:var(--text); }
+.ctx .ci.danger { color:var(--error); }
+.ctx .ci.danger:hover { background:color-mix(in srgb,var(--error) 16%,transparent); }
+.ctx .sep { height:1px; background:var(--border); margin:4px 6px; }
+.ctx .ci .k { margin-left:auto; font-size:11px; color:var(--muted); }
+
+/* ===== Миникарта ===== */
+.minimap { position:absolute; right: 14px; bottom: 14px; z-index: 25; width: 190px; height: 130px; background: color-mix(in srgb, var(--surface) 90%, transparent); border:1px solid var(--panel-border); border-radius: 12px; overflow:hidden; backdrop-filter: blur(6px); }
+.minimap.hidden { display:none; }
+.minimap canvas { width:100%; height:100%; display:block; }
+.minimap .mm-head { position:absolute; top:0; left:0; right:0; height:24px; display:flex; align-items:center; justify-content:space-between; padding:0 8px; font-size:10px; text-transform:uppercase; letter-spacing:0.06em; color:var(--muted); }
+.minimap .mm-close { cursor:pointer; color:var(--muted); font-size:13px; }
+.minimap .mm-close:hover { color:var(--text); }
+.mm-toggle { position:absolute; right:14px; bottom:14px; z-index:24; width:34px; height:34px; border-radius:10px; background: color-mix(in srgb, var(--surface) 88%, transparent); border:1px solid var(--panel-border); color:var(--text-2); display:none; place-items:center; cursor:pointer; }
+.mm-toggle.show { display:grid; }
+.mm-toggle:hover { color:var(--text); border-color:var(--accent); }
+
+/* ===== Левый каталог блоков (общие элементы) ===== */
+.cat-group { margin-bottom: 6px; }
+.cat-title { font-size:10px; text-transform:uppercase; letter-spacing:0.07em; color:var(--muted); padding:10px 10px 5px; font-weight:600; }
+.cat-item { display:flex; align-items:center; gap:10px; padding:8px 10px; border-radius:10px; cursor:pointer; --role: var(--accent); }
+.cat-item .ci-ico { width:28px; height:28px; border-radius:8px; display:grid; place-items:center; background: color-mix(in srgb, var(--role) 26%, transparent); color: var(--role); flex:none; }
+.cat-item .ci-ico svg { width:15px; height:15px; }
+.cat-item .ci-meta { display:flex; flex-direction:column; overflow:hidden; }
+.cat-item .ci-nm { font-size:13px; color:var(--text); font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cat-item .ci-ds { font-size:11px; color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cat-item:hover { background: var(--surface-hi); }
+.cat-empty { padding:16px; text-align:center; color:var(--muted); font-size:12px; }
+
+/* ===== Общий подвал (Тест / Сохранить) ===== */
+.footer { display:flex; align-items:center; gap:12px; }
+.footer .status { font-size:12px; color:var(--muted); display:flex; align-items:center; gap:8px; }
+.footer .status .dot { width:8px; height:8px; border-radius:50%; background:var(--success); }
+
+/* ===== Полоса прокрутки (тема Ayris) ===== */
+.insp-body, .p-list, #catalog, .palette .p-list { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--role, var(--accent)) 45%, var(--border)) transparent; }
+.insp-body::-webkit-scrollbar,
+.p-list::-webkit-scrollbar,
+#catalog::-webkit-scrollbar { width: 10px; height: 10px; }
+.insp-body::-webkit-scrollbar-track,
+.p-list::-webkit-scrollbar-track,
+#catalog::-webkit-scrollbar-track { background: transparent; }
+.insp-body::-webkit-scrollbar-thumb,
+.p-list::-webkit-scrollbar-thumb,
+#catalog::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 40%, transparent);
+  border: 2px solid transparent; background-clip: padding-box; border-radius: 999px;
+}
+.insp-body::-webkit-scrollbar-thumb:hover,
+.p-list::-webkit-scrollbar-thumb:hover,
+#catalog::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--accent) 55%, transparent); background-clip: padding-box; }
+.insp-body::-webkit-scrollbar-corner,
+.p-list::-webkit-scrollbar-corner,
+#catalog::-webkit-scrollbar-corner { background: transparent; }
+

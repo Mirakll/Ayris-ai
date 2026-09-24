@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ayris — вариант «Стекло»</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ===== Вариант B «Стекло» — парящие матовые панели над «сиянием».
+     Ориентир: Apple Liquid Glass / aurora glass. Полупрозрачные поверхности
+     с размытием фона, мягкие цветные пятна за стеклом, глубина слоёв. ===== */
+  :root {
+    --panel-bg: color-mix(in srgb, var(--surface) 52%, transparent);
+    --panel-border: color-mix(in srgb, #fff 12%, transparent);
+    --panel-blur: blur(24px) saturate(1.25);
+    --node-bg: color-mix(in srgb, var(--surface-hi) 60%, transparent);
+    --node-border: color-mix(in srgb, #fff 14%, transparent);
+    --node-radius: 16px;
+    --field-bg: color-mix(in srgb, var(--bg) 50%, transparent);
+    --head-bg: color-mix(in srgb, var(--role) 30%, color-mix(in srgb, var(--surface) 50%, transparent));
+    --grid-dot: rgba(148,138,172,0.14);
+    --node-shadow: rgba(8,5,18,0.5);
+  }
+  .app { position:relative; height:100vh; overflow:hidden; }
+
+  /* Сияние за стеклом */
+  .app::before { content:""; position:absolute; inset:-15%; z-index:0; pointer-events:none;
+    background:
+      radial-gradient(38% 40% at 18% 22%, color-mix(in srgb,var(--accent) 46%,transparent), transparent 70%),
+      radial-gradient(34% 36% at 82% 18%, color-mix(in srgb,var(--info) 38%,transparent), transparent 72%),
+      radial-gradient(46% 46% at 72% 88%, color-mix(in srgb,var(--r-sound) 32%,transparent), transparent 72%),
+      radial-gradient(40% 40% at 30% 82%, color-mix(in srgb,var(--r-action) 26%,transparent), transparent 74%);
+    filter: blur(64px) saturate(1.15); opacity:0.55; animation: drift 20s ease-in-out infinite alternate; }
+  @keyframes drift { 0%{transform:translate3d(0,0,0) scale(1);} 100%{transform:translate3d(2%,-2%,0) scale(1.08);} }
+
+  /* Холст: прозрачный, чтобы сияние просвечивало сквозь точки */
+  .canvas-wrap { position:absolute; inset:0; z-index:1; }
+  .canvas { background-color:transparent;
+    background-image: radial-gradient(var(--grid-dot) 1.4px, transparent 1.4px);
+    background-position: var(--vx,0px) var(--vy,0px);
+    background-size: calc(26px * var(--vk,1)) calc(26px * var(--vk,1)); }
+
+  /* Стеклянная панель */
+  .glass { background:var(--panel-bg); backdrop-filter:var(--panel-blur); -webkit-backdrop-filter:var(--panel-blur);
+    border:1px solid var(--panel-border); border-radius:20px;
+    box-shadow: 0 20px 50px rgba(6,4,16,0.5), inset 0 1px 0 color-mix(in srgb,#fff 16%,transparent); }
+
+  /* Парящие панели */
+  .topbar { position:absolute; z-index:20; top:14px; left:16px; right:16px; height:50px;
+    display:flex; align-items:center; gap:14px; padding:0 16px; }
+  .crumb { display:flex; align-items:center; gap:6px; color:var(--text-2); font-size:13px; cursor:pointer; }
+  .crumb:hover { color:var(--text); }
+  .cmd-name { font-size:14px; font-weight:600; color:var(--text); }
+  .cmd-name .badge { margin-left:8px; font-size:11px; color:var(--success); border:1px solid color-mix(in srgb,var(--success) 50%,transparent); border-radius:6px; padding:1px 7px; }
+  .tabs { display:flex; gap:2px; margin-left:auto; }
+  .tab { padding:6px 12px; border-radius:9px; font-size:13px; color:var(--text-2); cursor:pointer; }
+  .tab:hover { color:var(--text); background:color-mix(in srgb,#fff 8%,transparent); }
+  .tab.active { background:color-mix(in srgb,var(--accent) 30%,transparent); color:var(--text); font-weight:500; }
+
+  .catalog-panel { position:absolute; z-index:15; top:78px; left:16px; bottom:16px; width:248px; display:flex; flex-direction:column; overflow:hidden; }
+  .inspector-panel { position:absolute; z-index:15; top:78px; right:16px; bottom:16px; width:300px; display:flex; flex-direction:column; overflow:hidden; }
+  .panel-head { padding:14px 16px 10px; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:var(--text-2); font-weight:600; }
+  .catalog-search { margin:0 12px 8px; padding:8px 12px; border-radius:10px; background:var(--field-bg); border:1px solid var(--panel-border); color:var(--text); font-size:13px; font-family:inherit; }
+  .catalog-search:focus { outline:none; border-color:var(--accent); }
+  #catalog { padding:2px 8px 10px; overflow-y:auto; flex:1; }
+  #inspector { display:flex; flex-direction:column; height:100%; }
+
+  /* Тулбар — стеклянная капсула сверху по центру */
+  .toolbar { position:absolute; z-index:20; top:80px; left:50%; transform:translateX(-50%); display:flex; gap:6px; align-items:center; padding:6px; border-radius:14px; }
+  .tbtn { display:inline-flex; align-items:center; gap:7px; height:32px; padding:0 12px; border-radius:10px; border:1px solid transparent; background:transparent; color:var(--text-2); font-size:13px; white-space:nowrap; }
+  .tbtn:hover { background:color-mix(in srgb,#fff 10%,transparent); color:var(--text); }
+  .tbtn.active { background:color-mix(in srgb,var(--accent) 32%,transparent); color:var(--text); }
+  .sep-v { width:1px; height:20px; background:var(--panel-border); margin:0 2px; }
+
+  /* Ноды — матовое стекло */
+  .node { backdrop-filter: blur(12px) saturate(1.2); -webkit-backdrop-filter: blur(12px) saturate(1.2); }
+  .node .head { border-bottom:1px solid color-mix(in srgb,#fff 10%,transparent); }
+
+  /* Плавающий подвал по центру снизу */
+  .footer-bar { position:absolute; z-index:20; bottom:16px; left:50%; transform:translateX(-50%);
+    display:flex; align-items:center; gap:16px; height:52px; padding:0 10px 0 18px; border-radius:16px; }
+  .footer .status { color:var(--text-2); }
+  .btn { height:38px; padding:0 18px; border-radius:11px; border:1px solid var(--panel-border); background:color-mix(in srgb,#fff 8%,transparent); color:var(--text); font-size:13px; font-weight:500; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 50%,transparent); }
+  .btn.primary:hover { background:var(--accent-hover); }
+
+  /* Миникарту сдвигаем левее инспектора */
+  .minimap { right:332px; }
+  .mm-toggle { right:332px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar glass">
+    <div class="crumb">← <span>К списку команд</span></div>
+    <div class="cmd-name">Приветствие <span class="badge">включена</span></div>
+    <nav class="tabs">
+      <div class="tab">Обзор</div><div class="tab active">Действия</div><div class="tab">Переменные</div><div class="tab">Звуки</div><div class="tab">История</div>
+    </nav>
+  </header>
+
+  <aside class="catalog-panel glass">
+    <div class="panel-head">Каталог блоков</div>
+    <input class="catalog-search" id="catalogSearch" placeholder="Поиск блока…">
+    <div id="catalog"></div>
+  </aside>
+
+  <div class="canvas-wrap">
+    <div class="canvas" id="canvas"><div class="world" id="world"><svg class="wires" id="wires"></svg></div></div>
+    <div class="toolbar glass">
+      <button class="tbtn" id="addBtn">＋ Нода</button>
+      <button class="tbtn" id="arrangeBtn">⇄ Упорядочить</button>
+      <button class="tbtn" id="snapBtn">▦ Сетка</button>
+      <span class="sep-v"></span>
+      <button class="tbtn" id="fitBtn">⤢ Всё</button>
+      <button class="tbtn" id="resetBtn">1:1</button>
+      <button class="tbtn active" id="runBtn">▶ Тест</button>
+    </div>
+    <div class="minimap" id="minimap"><canvas id="mmCanvas" width="380" height="260"></canvas><div class="mm-head"><span>Карта</span><span class="mm-close" id="mmClose">✕</span></div></div>
+    <div class="mm-toggle" id="mmToggle" title="Показать карту">🗺</div>
+    <div class="palette" id="palette"><input class="p-search" id="pSearch" placeholder="Поиск блока…"><div class="p-list" id="pList"></div></div>
+    <div class="ctx" id="ctx"></div>
+  </div>
+
+  <aside class="inspector-panel glass"><div id="inspector"></div></aside>
+
+  <footer class="footer-bar glass">
+    <div class="footer status"><span class="dot"></span> Готово · 6 нод · 5 связей</div>
+    <button class="btn primary" id="saveBtn">Сохранить</button>
+  </footer>
+</div>
+<script>window.AYRIS_WIRE = { glow:[[7,0.16],[3.5,0.42],[1.8,0.95]] };</script>
+<script src="engine.js"></script>
+</body>
+</html>

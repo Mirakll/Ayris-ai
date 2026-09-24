@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QStackedWidget,
     QTabWidget,
@@ -88,6 +89,12 @@ _log = get_logger(__name__)
 #: The inspector's empty state when no block is selected — a prompt, not a blank
 #: panel, so the parameter panel reads as present and its purpose is clear.
 _SELECT_HINT = "Выберите ноду, чтобы изменить её параметры."
+
+#: The status badge is capped this wide while it rides the floating capsule on the node
+#: canvas, so a long validation note cannot stretch the no-wrap capsule across the graph;
+#: in the footer row it is uncapped (Qt's default max) and free to take the spare width.
+_STATUS_MAX_NODE = 240
+_STATUS_MAX_FREE = 16_777_215
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +200,13 @@ class MacroEditor(QWidget):
     command_saved = Signal(int)
     #: Emitted with the dirty flag whenever the working model changes or is saved.
     dirty_changed = Signal(bool)
+    #: The open command's name and enabled flag, whenever either changes (load, header
+    #: edit, save, undo/redo). The browser top bar shows them beside «← К списку команд».
+    title_changed = Signal(str, bool)
+    #: The «← К списку команд» crumb in the browser top bar was clicked. The host
+    #: («Команды» tab) returns to the library, guarding unsaved edits first — the crumb
+    #: itself only asks to leave, so the editor owns the row but not the navigation.
+    back_requested = Signal()
 
     def __init__(
         self,
@@ -266,15 +280,44 @@ class MacroEditor(QWidget):
         outer.addWidget(self._content, 1)
 
         self._tabs = QTabWidget()
+        # Flat, document-style tab bar: no boxed frame around the pages, so the node
+        # canvas below reads as one continuous surface rather than a panel inside a panel.
+        self._tabs.setDocumentMode(True)
+        self._content_layout = content_layout
         content_layout.addWidget(self._tabs, 1)
         self._build_overview_tab()
         self._build_actions_tab()
         self._build_variables_tab()
         self._build_sounds_tab()
         self._build_versions_tab()
+        # The stock tab strip is replaced by the browser top row built below: its
+        # buttons drive the same QTabWidget, so the pages stay reachable while the row
+        # also carries the «← К списку команд» crumb and the command's name.
+        tab_bar = self._tabs.tabBar()
+        if tab_bar is not None:
+            tab_bar.hide()
 
-        content_layout.addWidget(self._build_footer())
+        self._footer = self._build_footer()
+        content_layout.addWidget(self._footer)
         self._content.hide()
+
+        # One browser-style row above the pages (mockup's `.topbar`): crumb + name on the
+        # left, the section tabs on the right. It lives in the outer layout, not inside
+        # `_content`, so the «← К списку команд» crumb stays reachable even when a command
+        # fails to open and the placeholder shows in place of the tabs.
+        self._build_topbar()
+        outer.insertWidget(0, self._topbar)
+        # A hairline under the row seals it off as the mockup's `.topbar` (its
+        # border-bottom), separating the chrome from the canvas that rises to meet it.
+        topbar_rule = QFrame()
+        topbar_rule.setProperty("rule", True)
+        topbar_rule.setFrameShape(QFrame.Shape.HLine)
+        outer.insertWidget(1, topbar_rule)
+
+        # The canvas owns the footer while «Ноды» is the shown mode (task 53 default),
+        # so it reaches the window's bottom edge; every other tab keeps it under the tabs.
+        self._tabs.currentChanged.connect(self._sync_footer_placement)
+        self._sync_footer_placement()
 
         # Ctrl+Z / Ctrl+Shift+Z on the editor — active in both action modes, since
         # the stack is over the model, not either view.
@@ -338,19 +381,29 @@ class MacroEditor(QWidget):
         self._list_button.setChecked(not nodes_first)
         self._list_button.clicked.connect(lambda: self._on_mode_clicked(0))
         self._nodes_button.clicked.connect(lambda: self._on_mode_clicked(1))
-        toggle_row = QHBoxLayout()
-        toggle_row.setContentsMargins(0, 0, 0, 0)
-        toggle_row.setSpacing(self._theme.metric("spacing_xs"))
-        toggle_row.addWidget(self._list_button)
-        toggle_row.addWidget(self._nodes_button)
-        toggle_row.addStretch(1)
+        # «Список ↔ Ноды» as one segmented pill (a themed «островок», the same toolgroup
+        # frame the history segment uses). It is placed in the browser-style top row
+        # (:meth:`_build_topbar`), just left of the section tabs, so the mode switch shares
+        # that one row instead of standing on its own strip above the canvas — one row less
+        # of chrome, so the canvas rises. Shown only while the «Действия» tab is current
+        # (toggled in :meth:`_sync_footer_placement`).
+        self._list_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._nodes_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        segmented = QFrame()
+        segmented.setProperty("toolgroup", True)
+        segmented_layout = QHBoxLayout(segmented)
+        segmented_layout.setContentsMargins(2, 2, 2, 2)
+        segmented_layout.setSpacing(2)
+        segmented_layout.addWidget(self._list_button)
+        segmented_layout.addWidget(self._nodes_button)
+        self._segmented = segmented
 
         # Undo/redo, shared across list and node modes. The middle button drops a
         # menu of the recent operations — task 54's «выпадающий список последних».
-        # The three used to hang loose at the right edge as bare system QToolButtons
-        # (no themed style), so they read as disconnected and misaligned above the
-        # canvas. They now live inside one themed «островок» (QFrame[toolgroup]),
-        # pinned to the top-right of the canvas as a single segmented control.
+        # The three live inside one themed «островок» (QFrame[toolgroup]); on the node
+        # canvas the island is mounted into the LEFT slot of the bottom command capsule
+        # («вперёд/назад … как на фото»), and in every other view it sits at the left of
+        # the footer row under the tabs.
         square = self._theme.metric("control_height")
         self._undo_button = QToolButton()
         self._undo_button.setText("↶")
@@ -378,18 +431,8 @@ class MacroEditor(QWidget):
             button.setAutoRaise(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             group_layout.addWidget(button)
-        # Left-aligned: the segment sits right after the «Список/Ноды» toggle, before
-        # the stretch that fills the rest of the row.
-        toggle_row.insertWidget(2, history_group)
+        self._history_group = history_group
         self._update_undo_buttons()
-
-        centre = QWidget()
-        centre.setProperty("transparent", True)
-        centre_layout = QVBoxLayout(centre)
-        centre_layout.setContentsMargins(0, 0, 0, 0)
-        centre_layout.setSpacing(self._theme.metric("spacing_xs"))
-        centre_layout.addLayout(toggle_row)
-        centre_layout.addWidget(self._mode_stack, 1)
 
         self._palette = BlockPalette(self._theme, catalog=self._catalog)
         self._palette.block_chosen.connect(self._on_palette_choice)
@@ -420,7 +463,7 @@ class MacroEditor(QWidget):
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._palette)
-        splitter.addWidget(centre)
+        splitter.addWidget(self._mode_stack)
         splitter.addWidget(param_panel)
         # The canvas is the point of this tab, so it takes every spare pixel while the
         # palette and parameter panels stay narrow (stretch 0) and are capped so they
@@ -439,6 +482,9 @@ class MacroEditor(QWidget):
         splitter.setSizes([150, 1200, 170])
         self._actions_page = splitter
         self._tabs.addTab(splitter, "Действия")
+        # `_segmented` is placed in the browser top row (:meth:`_build_topbar`), just left
+        # of the section tabs; its visibility follows the current tab
+        # (:meth:`_sync_footer_placement`), so it appears only over «Действия».
 
     def _on_mode_clicked(self, target: int) -> None:
         """Handle a click on the «Список»/«Ноды» segment.
@@ -467,9 +513,41 @@ class MacroEditor(QWidget):
         view.rebuild()
         if selected:
             view.select_path(selected)
+        self._sync_footer_placement()
         callback = self._services.on_action_view_changed
         if callback is not None:
             callback("nodes" if index == 1 else "list")
+
+    def _sync_footer_placement(self, *_args: object) -> None:
+        """Fold the bottom bar into the canvas capsule in «Ноды», else keep it below.
+
+        On the node canvas the history island and the статус · Тест · Сохранить group are
+        mounted into the floating «Кинематограф» capsule, so the whole bottom bar reads as
+        one pult and the canvas reaches the window edge; on every other tab and in the list
+        view they sit under the tabs as an ordinary footer row. The same widgets move either
+        way, so status text and button states carry across untouched. It also keeps the top
+        row's tab buttons in step with the current page and shows the «Список / Ноды» mode
+        pill on «Действия» alone.
+        """
+        if not hasattr(self, "_footer"):
+            return
+        current = self._tabs.currentIndex()
+        if hasattr(self, "_tab_buttons"):
+            for index, button in enumerate(self._tab_buttons):
+                button.setChecked(index == current)
+        on_actions = self._tabs.currentWidget() is self._actions_page
+        if hasattr(self, "_segmented"):
+            self._segmented.setVisible(on_actions)
+        on_nodes = on_actions and self._mode_stack.currentIndex() == 1
+        if on_nodes:
+            self._status.setMaximumWidth(_STATUS_MAX_NODE)
+            self._node_editor.mount_controls(self._history_group, self._footer_actions)
+            self._footer.hide()
+        else:
+            self._node_editor.mount_controls(None, None)
+            self._status.setMaximumWidth(_STATUS_MAX_FREE)
+            self._layout_footer_row()
+            self._footer.show()
 
     def _current_action_view(self) -> ActionListView | NodeEditor:
         if self._mode_stack.currentIndex() == 1:
@@ -504,24 +582,119 @@ class MacroEditor(QWidget):
         self._versions.status.connect(self._on_version_status)
         self._tabs.addTab(self._versions, "История")
 
+    def _build_topbar(self) -> None:
+        """The browser-style top row (mockup's `.topbar`): one line of chrome over the pages.
+
+        Left to right: the «← К списку команд» crumb (a flat link that only emits
+        :attr:`back_requested`), a muted «/», the open command's name and an «включена /
+        выключена» pill, then a stretch, then the «Список / Ноды» mode pill (shown only on
+        «Действия») and the five section tabs pushed hard to the right. The tab buttons
+        drive the same hidden :class:`QTabWidget`, so they replace its stock strip while
+        folding the old separate crumb row into this single line — the canvas rises to it.
+        """
+        bar = QWidget()
+        bar.setProperty("browserTopbar", True)
+        bar.setProperty("transparent", True)
+        layout = QHBoxLayout(bar)
+        pad = self._theme.metric("spacing_xs")
+        layout.setContentsMargins(self._theme.metric("spacing_sm"), pad, pad, pad)
+        layout.setSpacing(self._theme.metric("spacing_sm"))
+
+        self._back_button = QPushButton("← К списку команд")
+        self._back_button.setProperty("link", True)
+        self._back_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._back_button.clicked.connect(lambda: self.back_requested.emit())
+        layout.addWidget(self._back_button)
+
+        self._title_sep = QLabel("/")
+        self._title_sep.setProperty("role", "secondary")
+        self._title_name = QLabel("")
+        self._title_name.setProperty("role", "h3")
+        self._title_badge = QLabel("")
+        for label in (self._title_sep, self._title_name, self._title_badge):
+            layout.addWidget(label)
+            label.hide()
+
+        layout.addStretch(1)
+
+        # The mode pill sits just left of the tabs so, when it hides off «Действия», the
+        # stretch keeps the tabs flush right with no sideways jump.
+        layout.addWidget(self._segmented)
+
+        self._tab_buttons: list[QPushButton] = []
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        for index in range(self._tabs.count()):
+            button = QPushButton(self._tabs.tabText(index))
+            button.setProperty("navTab", True)
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _checked=False, i=index: self._tabs.setCurrentIndex(i))
+            group.addButton(button)
+            layout.addWidget(button)
+            self._tab_buttons.append(button)
+
+        self.title_changed.connect(self._update_title)
+        self._topbar = bar
+
+    def _update_title(self, name: str, enabled: bool) -> None:
+        """Reflect the open command's name and enabled state in the browser top row.
+
+        With no command open the «/», name and pill stay hidden, leaving just the crumb —
+        a lone «/» with an empty name would read as chrome noise.
+        """
+        has_name = bool(name)
+        for label in (self._title_sep, self._title_name, self._title_badge):
+            label.setVisible(has_name)
+        self._title_name.setText(name)
+        self._title_badge.setText("включена" if enabled else "выключена")
+        state = "on" if enabled else "off"
+        if self._title_badge.property("statePill") != state:
+            self._title_badge.setProperty("statePill", state)
+            style = self._title_badge.style()
+            if style is not None:
+                style.unpolish(self._title_badge)
+                style.polish(self._title_badge)
+
     def _build_footer(self) -> QWidget:
-        footer = QWidget()
-        footer.setProperty("transparent", True)
-        layout = QHBoxLayout(footer)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self._status = QLabel("")
-        self._status.setProperty("role", "muted")
-        self._status.setWordWrap(True)
-        layout.addWidget(self._status, 1)
+        # The validation note is a compact badge now, not a full-width strip that ate a
+        # band of the canvas (the user's «убрал бы эту полосу … сделай меньше»). It is
+        # transparent when empty, so no empty pill floats, and coloured by severity in
+        # :meth:`_on_validation`. The text it shows is unchanged — only its chrome shrank.
+        self._status = _StatusLabel()
+        self._status.setProperty("badge", "muted")
+        self._status.setWordWrap(False)
 
         self._test_button = QPushButton("Тест")
+        self._test_button.setProperty("textButton", True)
         self._test_button.setEnabled(self._services.test_runner is not None)
         self._test_button.clicked.connect(self._on_test)
         self._save_button = QPushButton("Сохранить")
         self._save_button.setProperty("kind", "primary")
+        self._save_button.setProperty("textButton", True)
         self._save_button.clicked.connect(self.save)
-        layout.addWidget(self._test_button)
-        layout.addWidget(self._save_button)
+
+        # статус · Тест · Сохранить as one movable group. On the node canvas it is mounted
+        # into the RIGHT slot of the floating capsule (with the history island on the left,
+        # «как на фото»); in every other view it sits at the right of the footer row. Kept
+        # as its own widget so the whole group reparents in a single move.
+        actions = QWidget()
+        actions.setProperty("transparent", True)
+        actions_layout = QHBoxLayout(actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        actions_layout.setSpacing(self._theme.metric("spacing_sm"))
+        actions_layout.addWidget(self._status, 1)
+        actions_layout.addWidget(self._test_button)
+        actions_layout.addWidget(self._save_button)
+        self._footer_actions = actions
+
+        footer = QWidget()
+        footer.setProperty("transparent", True)
+        layout = QHBoxLayout(footer)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(self._theme.metric("spacing_sm"))
+        self._footer_layout = layout
+        self._layout_footer_row()
 
         # The test log is kept as an off-screen sink so test output still has somewhere
         # to land, but it no longer eats the editor's vertical space — the headline
@@ -530,6 +703,24 @@ class MacroEditor(QWidget):
         self._log.setReadOnly(True)
         self._log.hide()
         return footer
+
+    def _layout_footer_row(self) -> None:
+        """Assemble the under-tabs footer row: history island · left, actions · right.
+
+        Also used to pull both groups back out of the floating capsule when leaving the
+        node canvas — each is first detached from its current parent layout (the capsule
+        host) before being re-added here, mirroring the reparent order that avoids the
+        editor's known teardown crashes.
+        """
+        for widget in (self._history_group, self._footer_actions):
+            parent = widget.parentWidget()
+            parent_layout = parent.layout() if parent is not None else None
+            if parent_layout is not None:
+                parent_layout.removeWidget(widget)
+        self._footer_layout.addWidget(self._history_group)
+        self._footer_layout.addWidget(self._footer_actions, 1)
+        self._history_group.show()
+        self._footer_actions.show()
 
     # -- loading / saving ---------------------------------------------------
 
@@ -565,7 +756,10 @@ class MacroEditor(QWidget):
         self._update_undo_buttons()
         self._versions.load(command_id, model)
         self._set_dirty(restored)
-        self._status.setText("Восстановлен несохранённый черновик." if restored else "")
+        if restored:
+            self._set_status("Восстановлен несохранённый черновик.", "info")
+        else:
+            self._set_status("", "muted")
         self._log.clear()
         self._restart_draft_timer()
         self._schedule_validation()
@@ -590,7 +784,7 @@ class MacroEditor(QWidget):
         if self._model is None:
             return False
         if not self._header.is_name_valid():
-            self._status.setText("Исправьте имя команды: оно пустое или уже занято.")
+            self._set_status("Исправьте имя команды: оно пустое или уже занято.", "error")
             self._tabs.setCurrentIndex(0)
             return False
         try:
@@ -608,7 +802,7 @@ class MacroEditor(QWidget):
         self._undo.reset(saved)
         self._update_undo_buttons()
         self._set_dirty(False)
-        self._status.setText("Команда сохранена.")
+        self._set_status("Команда сохранена.", "success")
         if saved.id is not None:
             self._drafts.discard(saved.id)
             self._versions.load(saved.id, saved)
@@ -628,7 +822,7 @@ class MacroEditor(QWidget):
         the validator rejected, turning an invisible refusal into a pointed «вот что
         не так». The command stays dirty (its old version is still what runs live).
         """
-        self._status.setText(exc.user_message)
+        self._set_status(exc.user_message, "error")
         report = getattr(exc, "report", None)
         errors = report.errors if report is not None else ()
         if not errors:
@@ -664,6 +858,10 @@ class MacroEditor(QWidget):
         self._set_dirty(True)
         self._record_undo()
         self._schedule_validation()
+        if self._model is not None:
+            # A header edit may have renamed the command or flipped «включена»; keep the
+            # screen title beside «← К списку команд» in step with it.
+            self.title_changed.emit(self._model.name, self._model.enabled)
 
     def _on_triggers_changed(self) -> None:
         self._set_dirty(True)
@@ -753,7 +951,7 @@ class MacroEditor(QWidget):
         new_path = self._action_model.insert_type(block_type, path[0], path[1])
         if new_path is None:
             # Refused — the insertion point is already at the depth ceiling.
-            self._status.setText("Слишком глубокая вложенность блоков.")
+            self._set_status("Слишком глубокая вложенность блоков.", "error")
             return
         view = self._current_action_view()
         if view is self._node_editor:
@@ -831,11 +1029,11 @@ class MacroEditor(QWidget):
         errors = sum(1 for problem in report.problems if problem.severity is Severity.ERROR)
         warnings = sum(1 for problem in report.problems if problem.severity is Severity.WARNING)
         if errors:
-            self._status.setText(f"Ошибок: {errors}, предупреждений: {warnings}.")
+            self._set_status(f"Ошибок: {errors}, предупреждений: {warnings}.", "error")
         elif warnings:
-            self._status.setText(f"Предупреждений: {warnings}.")
+            self._set_status(f"Предупреждений: {warnings}.", "warning")
         else:
-            self._status.setText("Проверка пройдена.")
+            self._set_status("Проверка пройдена.", "success")
 
     # -- test run -----------------------------------------------------------
 
@@ -844,18 +1042,18 @@ class MacroEditor(QWidget):
         if runner is None or self._model is None:
             return
         if not self._header.is_name_valid():
-            self._status.setText("Исправьте имя команды перед тестом.")
+            self._set_status("Исправьте имя команды перед тестом.", "error")
             return
         try:
             self._store.save_command(self._model)
         except AyrisError as exc:
-            self._status.setText(exc.user_message)
+            self._set_status(exc.user_message, "error")
             return
         self._set_dirty(False)
         snapshot = self._model.model_copy(deep=True)
         slots = {name: f"<{name}>" for name in snapshot.slot_names}
         dry_run = any(self._is_dangerous(block.block.type) for block in snapshot.blocks())
-        self._status.setText("Тест запущен…")
+        self._set_status("Тест запущен…", "info")
         self._log.clear()
         self._test_button.setEnabled(False)
         self._tester.run(lambda: runner.run_test(snapshot, slots=slots, dry_run=dry_run))
@@ -875,13 +1073,35 @@ class MacroEditor(QWidget):
         ]
         self._log.setPlainText("\n".join(lines))
         prefix = "Сухой прогон. " if result.dry_run else ""
-        self._status.setText(f"{prefix}{result.message}")
+        kind = {
+            "ok": "success",
+            "failed": "error",
+            "timeout": "error",
+            "error": "error",
+            "cancelled": "muted",
+        }.get(result.outcome, "info")
+        self._set_status(f"{prefix}{result.message}", kind)
 
     def _on_test_failed(self, message: str) -> None:
         self._test_button.setEnabled(self._services.test_runner is not None)
-        self._status.setText(f"Тест не выполнен: {message}")
+        self._set_status(f"Тест не выполнен: {message}", "error")
 
     # -- helpers ------------------------------------------------------------
+
+    def _set_status(self, message: str, kind: str = "muted") -> None:
+        """Set the status badge's text and severity colour, re-polishing so it takes.
+
+        Routing every status line through one setter keeps the badge's colour in step
+        with its text — a fresh «Команда сохранена.» is never left tinted red from a
+        prior error, and an empty note reads as muted. The message is shown verbatim.
+        """
+        self._status.setText(message)
+        if self._status.property("badge") != kind:
+            self._status.setProperty("badge", kind)
+            style = self._status.style()
+            if style is not None:
+                style.unpolish(self._status)
+                style.polish(self._status)
 
     def _set_dirty(self, dirty: bool) -> None:
         if dirty != self._dirty:
@@ -908,6 +1128,7 @@ class MacroEditor(QWidget):
         self._variables.set_command(model)
         self._sounds.set_command(model)
         self._refresh_completions()
+        self.title_changed.emit(model.name, model.enabled)
 
     def _siblings_of(self, model: CommandModel) -> set[str]:
         """Sibling names for the header's duplicate check; empty for an id-less model."""
@@ -1042,7 +1263,7 @@ class MacroEditor(QWidget):
         self.save()
 
     def _on_version_status(self, message: str) -> None:
-        self._status.setText(message)
+        self._set_status(message, "info")
 
     # -- unsaved-changes guard (task 54) ------------------------------------
 
@@ -1094,6 +1315,42 @@ class MacroEditor(QWidget):
         """Stop the autosave timer so it cannot outlive the widget and hang a run."""
         self._draft_timer.stop()
         super().closeEvent(event)
+
+
+class _StatusLabel(QLabel):
+    """One-line status note that elides with «…» instead of being chopped mid-word.
+
+    The validation / save status shares the cramped floating capsule with the toolbar and
+    the «Тест / Сохранить» buttons; a long message used to be hard-clipped to a stump like
+    «Предупр» («текст статуса сжеван»). This keeps it to a single line, elided on the right
+    with the full text in the tooltip, and — being width-agnostic (:attr:`Ignored`) — it
+    never widens the capsule enough to shove the buttons off the canvas edge. :meth:`text`
+    still returns the whole message, so callers (and the tests that pin it) read the real
+    status, not the elided form.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full = ""
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+
+    def setText(self, text: str) -> None:  # noqa: N802 — Qt override.
+        self._full = text
+        self.setToolTip(text)
+        self._relayout()
+
+    def text(self) -> str:
+        return self._full
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802 — Qt override.
+        super().resizeEvent(event)
+        self._relayout()
+
+    def _relayout(self) -> None:
+        elided = self.fontMetrics().elidedText(
+            self._full, Qt.TextElideMode.ElideRight, max(self.width(), 0)
+        )
+        super().setText(elided)
 
 
 class _ScrollPage(QScrollArea):

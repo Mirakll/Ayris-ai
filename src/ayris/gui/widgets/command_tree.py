@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QModelIndex, QPersistentModelIndex, QPoint, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QFont, QPainter, QPen
+from PySide6.QtGui import QAction, QColor, QFont, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -142,8 +142,11 @@ class CommandTree(QWidget):
         self._view.setModel(self._model)
         self._view.setHeaderHidden(True)
         self._view.setUniformRowHeights(True)
-        # Tighten the indent: a command has no twist arrow, so the default column left
-        # a wide empty gutter before its card. This still fits the folder chevron.
+        # No root decoration: a command carries no twist arrow, so Qt's root gutter only
+        # left an ugly empty strip before its card. Off, a top-level command sits flush
+        # against the panel edge; a folder still shows a chevron (drawn by the delegate at
+        # the row's left, toggled by a click there) and its commands still indent a step.
+        self._view.setRootIsDecorated(False)
         self._view.setIndentation(theme.metric("spacing_md"))
         self._view.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._view.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
@@ -540,15 +543,18 @@ class CommandTree(QWidget):
 
 
 class _CommandTreeView(QTreeView):
-    """A tree that keeps the branch (expand) column out of the row's selection.
+    """A tree whose rows read as flush-left cards, with folder chevrons drawn in-row.
 
-    ``QTreeView`` paints a row's selection highlight across the whole row, the
-    indentation/expand column included, and clips it to a plain rectangle — so a
-    selected command showed a stray accent square to the left of its rounded pill,
-    and an unselected one the grey placeholder Fusion leaves there. ``drawBranches``
-    runs *after* that row background, so we repaint the branch rect with the tree's
-    own surface colour, erasing the square; a folder then gets its twist arrow drawn
-    back on top, so its collapse control survives while every row stays clean.
+    Root decoration is off (the panel turns it off), so ``QTreeView`` reserves no gutter
+    before a top-level row and a command's pill sits flush against the panel edge instead
+    of behind an empty strip. A folder still needs a disclosure control: the delegate
+    draws its chevron in the first indent-wide slot of the row, and :meth:`mousePressEvent`
+    toggles the folder when that slot is clicked — so a single click on the chevron still
+    expands or collapses it, the way the old gutter arrow did.
+
+    ``drawBranches`` still repaints the indentation column of a nested row with the tree's
+    own surface, erasing the selection accent square that ``show-decoration-selected``
+    would otherwise leave in that column of a selected nested row.
     """
 
     def __init__(self, theme: ThemeManager, parent: QWidget | None = None) -> None:
@@ -556,32 +562,37 @@ class _CommandTreeView(QTreeView):
         self._theme = theme
 
     def drawBranches(  # noqa: N802
-        self, painter: QPainter, rect: QRect, index: QModelIndex | QPersistentModelIndex
+        self, painter: QPainter, rect: QRect, _index: QModelIndex | QPersistentModelIndex
     ) -> None:
-        # Repaint the branch column with the tree's surface, erasing whatever the row
-        # background painted there (the selection accent, or Fusion's grey leaf box).
+        # Repaint the indentation column with the tree's surface, erasing whatever the row
+        # background painted there (a nested selected row's accent square, or Fusion's grey
+        # leaf box). The folder chevron is drawn by the delegate now, not here.
         painter.fillRect(rect, QColor(self._theme.theme.color("surface")))
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        # A click on the folder's chevron — the delegate draws it in the first indent-wide
+        # slot of the row — toggles the folder, matching the old gutter arrow. Anywhere
+        # else falls through to the normal selection / inline-rename handling.
+        point = event.position().toPoint()
+        index = self.indexAt(point)
         model = self.model()
-        if model is None or not model.hasChildren(index):
-            return
-        # A folder keeps a collapse control, but we draw our own chevron instead of
-        # calling the base style — the styled branch would repaint the accent (a stray
-        # coloured square) behind it whenever the folder row is selected.
-        indent = self.indentation()
-        slot = QRect(rect.right() - indent, rect.top(), indent, rect.height())
-        painter.save()
-        painter.setPen(QColor(self._theme.theme.color("text_muted")))
-        chevron = "▾" if self.isExpanded(index) else "▸"
-        painter.drawText(slot, int(Qt.AlignmentFlag.AlignCenter), chevron)
-        painter.restore()
+        if index.isValid() and model is not None and model.hasChildren(index):
+            row = self.visualRect(index)
+            if row.left() <= point.x() < row.left() + self.indentation():
+                self.setExpanded(index, not self.isExpanded(index))
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
 
 class _TreeDelegate(QStyledItemDelegate):
-    """Mutes disabled commands, bolds a search hit and flags a trigger conflict."""
+    """Mutes disabled commands, bolds a search hit, draws folder chevrons and flags a
+    trigger conflict."""
 
-    def __init__(self, theme: ThemeManager, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+    def __init__(self, theme: ThemeManager, view: QTreeView) -> None:
+        super().__init__(view)
         self._theme = theme
+        self._view = view
         self._query = ""
 
     def set_query(self, query: str) -> None:
@@ -608,7 +619,22 @@ class _TreeDelegate(QStyledItemDelegate):
         option: QStyleOptionViewItem,
         index: QModelIndex | QPersistentModelIndex,
     ) -> None:
+        # A folder has no card, but it needs a disclosure chevron. Reserve the first
+        # indent-wide slot of the row for it and shift the label right, then draw the
+        # chevron in that slot after the base paint. Commands keep the full width.
+        chevron: QRect | None = None
+        if index.data(KIND_ROLE) == str(NodeKind.FOLDER):
+            full = QRect(option.rect)  # type: ignore[attr-defined]
+            slot = self._view.indentation()
+            chevron = QRect(full.left(), full.top(), slot, full.height())
+            option.rect = full.adjusted(slot, 0, 0, 0)  # type: ignore[attr-defined]
         super().paint(painter, option, index)
+        if chevron is not None:
+            painter.save()
+            painter.setPen(QColor(self._theme.theme.color("text_muted")))
+            glyph = "▾" if self._view.isExpanded(index) else "▸"
+            painter.drawText(chevron, int(Qt.AlignmentFlag.AlignCenter), glyph)
+            painter.restore()
         if index.data(KIND_ROLE) == str(NodeKind.COMMAND):
             self._paint_outline(painter, option, index)
         conflicts = index.data(CONFLICT_ROLE)

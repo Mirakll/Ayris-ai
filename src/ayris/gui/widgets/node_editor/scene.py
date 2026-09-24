@@ -2,9 +2,9 @@
 
 Сцена — тонкое представление того же :class:`~ayris.gui.widgets.action_list.ActionListModel`,
 что и список-режим: она не хранит своего дерева, а перестраивается из модели. Держит
-координаты нод (метаданные UI), рисует фон (виньетка + фиолетовый bloom + точечная сетка),
-подсвечивает текущий блок при отладке и ставит точки останова. Структурные правки (связать,
-удалить) идут через модель, поэтому переключение «Список ↔ Ноды» ничего не теряет.
+координаты нод (метаданные UI), рисует фон (стеклянное цветное сияние варианта Б + точечная
+сетка), подсвечивает текущий блок при отладке и ставит точки останова. Структурные правки
+(связать, удалить) идут через модель, поэтому переключение «Список ↔ Ноды» ничего не теряет.
 """
 
 from __future__ import annotations
@@ -593,25 +593,50 @@ class NodeScene(QGraphicsScene):
         self, painter: QPainter, rect: QRectF | QRect
     ) -> None:
         rect = QRectF(rect)
-        painter.fillRect(rect, QColor(self._theme.theme.color("background")))
-        # Purple bloom behind the dotted grid — anchored to the visible viewport, not to
-        # ``rect``. Qt passes ``drawBackground`` only the *dirty* rectangle; when a node is
-        # dragged, that's a small patch around it. Centring the bloom on ``rect`` made each
-        # patch paint its own re-centred glow, leaving a smear trailing the moved node. The
-        # viewport rect is stable across a drag, so every partial repaint samples one bloom.
+        # «Глубже и темнее», как в браузерном макете: база холста — фон темы, затемнённый
+        # к чёрному (мокап: color-mix(bg 90%, #000)). Здесь чуть сильнее (×0.86), а сияние
+        # ниже и компактнее — иначе большие пятна поднимали весь холст и он читался светлее
+        # браузерной версии. Множитель — чистое затенение, не палитра, поэтому не токен.
+        base = QColor(self._theme.theme.color("background"))
+        base = QColor(
+            round(base.red() * 0.86), round(base.green() * 0.86), round(base.blue() * 0.86)
+        )
+        painter.fillRect(rect, base)
+        # «Стеклянное» сияние варианта Б: несколько мягких цветных пятен по углам холста
+        # поверх тёмной базы, под точечной сеткой. Пятна привязаны к видимой области, а не
+        # к dirty-``rect``: Qt отдаёт ``drawBackground`` только грязный прямоугольник, и при
+        # перетаскивании ноды это маленький кусок вокруг неё. Центрируй пятно на ``rect`` —
+        # каждый частичный перерисованный кусок нарисует своё смещённое сияние и за нодой
+        # потянется «шлейф». Видимый прямоугольник стабилен на протяжении перетаскивания,
+        # поэтому все частичные перерисовки берут одно и то же сияние.
         bloom_rect = self._visible_scene_rect() or rect
-        bloom = QColor(self._theme.theme.color("accent"))
-        bloom.setAlphaF(0.05)
-        centre = bloom_rect.center()
-        gradient = QRadialGradient(centre, max(bloom_rect.width(), bloom_rect.height()) * 0.6)
-        gradient.setColorAt(0.0, bloom)
-        transparent = QColor(bloom)
-        transparent.setAlphaF(0.0)
-        gradient.setColorAt(1.0, transparent)
-        painter.fillRect(rect, QBrush(gradient))
-        # Dotted grid.
+        span = max(bloom_rect.width(), bloom_rect.height())
+        # (токен, x-доля, y-доля, радиус-доля, альфа) — расположение пятен как в макете:
+        # акцент сверху-слева, info сверху-справа, «звук» снизу, «действие» снизу-слева.
+        # Радиусы уменьшены (пятно локально в углу, а не на пол-холста) и альфы снижены,
+        # чтобы центр холста оставался тёмным — «глубже», как в браузерной версии.
+        aurora = (
+            ("accent", 0.20, 0.24, 0.40, 0.15),
+            ("info", 0.82, 0.16, 0.36, 0.11),
+            ("role_sound", 0.66, 0.92, 0.44, 0.11),
+            ("role_action", 0.26, 0.86, 0.40, 0.09),
+        )
+        for token, fx, fy, fr, alpha in aurora:
+            centre = QPointF(
+                bloom_rect.left() + bloom_rect.width() * fx,
+                bloom_rect.top() + bloom_rect.height() * fy,
+            )
+            glow = QColor(self._theme.theme.color(token))
+            glow.setAlphaF(alpha)
+            gradient = QRadialGradient(centre, span * fr)
+            gradient.setColorAt(0.0, glow)
+            faded = QColor(glow)
+            faded.setAlphaF(0.0)
+            gradient.setColorAt(1.0, faded)
+            painter.fillRect(rect, QBrush(gradient))
+        # Dotted grid — dimmed so the darker canvas stays deep and the dots don't lift it.
         dot = QColor(self._theme.theme.color("text_muted"))
-        dot.setAlphaF(0.16)
+        dot.setAlphaF(0.11)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(dot))
         left = rect.left() - (rect.left() % GRID)
@@ -620,7 +645,7 @@ class NodeScene(QGraphicsScene):
         while x < rect.right():
             y = top
             while y < rect.bottom():
-                painter.drawEllipse(QPointF(x, y), 1.2, 1.2)
+                painter.drawEllipse(QPointF(x, y), 1.1, 1.1)
                 y += GRID
             x += GRID
 

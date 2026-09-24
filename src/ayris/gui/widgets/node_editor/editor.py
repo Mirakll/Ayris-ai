@@ -1,12 +1,12 @@
-"""Виджет нодового редактора: холст, тулбар, миникарта, палитра — на одной модели.
+"""Виджет нодового редактора: холст, плавающая капсула-пульт, палитра — на одной модели.
 
 :class:`NodeEditor` — второе представление того же
 :class:`~ayris.gui.widgets.action_list.ActionListModel`, что и список-режим. Он повторяет
 контракт :class:`~ayris.gui.widgets.action_list.ActionListView` (сигналы ``block_selected``
 и ``changed``, методы ``rebuild``/``selected_path``/``select_path``), поэтому редактор
-команды подключает его как альтернативную вкладку без второй копии дерева. Тулбар несёт
-палитру блоков (с категориями и поиском), «Упорядочить», привязку к сетке, «Показать всё» и
-сброс масштаба; миникарта скрывается крестиком и возвращается кнопкой.
+команды подключает его как альтернативную вкладку без второй копии дерева. Инструменты
+холста собраны в плавающую капсулу у нижнего края (вариант «Кинематограф»): добавить ноду
+из палитры, удалить, «Упорядочить», привязка к сетке, «Показать всё» и сброс масштаба.
 """
 
 from __future__ import annotations
@@ -14,9 +14,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QInputDialog,
+    QMenu,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -28,7 +31,6 @@ from ayris.gui.widgets.block_palette import BlockPalette
 from ayris.gui.widgets.node_editor.bridge import layout_from_json, layout_to_json
 from ayris.gui.widgets.node_editor.edge_item import EdgeItem
 from ayris.gui.widgets.node_editor.layout import free_slot
-from ayris.gui.widgets.node_editor.minimap import Minimap
 from ayris.gui.widgets.node_editor.scene import NodeScene
 from ayris.gui.widgets.node_editor.view import NodeView
 
@@ -65,14 +67,6 @@ class NodeEditor(QWidget):
 
         self._scene = NodeScene(model, theme, catalog=self._catalog)
         self._view = NodeView(self._scene)
-        self._minimap = Minimap(self._scene, self._view, theme, parent=self._view)
-        self._mm_toggle = QPushButton("🗺", self._view)
-        self._mm_toggle.setFixedSize(34, 34)
-        self._mm_toggle.hide()
-        self._mm_close = QPushButton("✕", self._minimap)
-        self._mm_close.setFixedSize(20, 20)
-        self._mm_close.move(self._minimap.width() - 24, 4)
-        self._mm_close.clicked.connect(self.hide_minimap)
         self._palette_popup: BlockPalette | None = None
 
         # Set once a fresh command is loaded (reset_layout): the graph must be framed to
@@ -90,63 +84,191 @@ class NodeEditor(QWidget):
         self._scene.breakpoint_changed.connect(self.breakpoints_changed)
         self._view.delete_requested.connect(self.delete_selected)
         self._view.delay_chip_clicked.connect(self._edit_delay)
-        self._mm_toggle.clicked.connect(self._show_minimap)
+        self._view.context_menu_requested.connect(self._show_context_menu)
         theme.theme_changed.connect(self._on_theme_changed)
+
+        # Canvas keyboard shortcuts matching the «Кинематограф» context menu: F2 renames the
+        # selected node, Ctrl+D duplicates it (Delete is handled by the view). Scoped to the
+        # view so they fire only while the canvas has focus and never clash with the window's
+        # own bindings; the menu shows the same hints so they aren't a lie.
+        rename_sc = QShortcut(QKeySequence(Qt.Key.Key_F2), self._view)
+        rename_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        rename_sc.activated.connect(self._rename_selected)
+        duplicate_sc = QShortcut(QKeySequence("Ctrl+D"), self._view)
+        duplicate_sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        duplicate_sc.activated.connect(self._duplicate_selected)
+
+        # Floating command capsule over the canvas — a child of the view (not its viewport),
+        # positioned on resize/show, built before the layout so its first placement has real
+        # button sizes.
+        self._build_capsule()
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(theme.metric("spacing_xs"))
-        outer.addLayout(self._build_toolbar())
+        outer.setSpacing(0)
         outer.addWidget(self._view, 1)
 
         self._status = ""
+        self._position_overlays()
 
-    # -- toolbar ------------------------------------------------------------
+    # -- capsule toolbar ----------------------------------------------------
 
-    def _build_toolbar(self) -> QHBoxLayout:
-        bar = QHBoxLayout()
-        bar.setContentsMargins(0, 0, 0, 0)
-        bar.setSpacing(self._theme.metric("spacing_xs"))
-        self._add_button = QPushButton("＋ Нода")
+    def _build_capsule(self) -> None:
+        """Build the floating «пульт» capsule at the bottom-centre of the canvas.
+
+        Per the «Кинематограф» variant this single capsule now carries the whole bottom
+        bar: an optional host slot on the LEFT (the editor's undo/redo island), then the
+        canvas tools (add · delete · arrange · snap · fit · 1:1), then an optional host
+        slot on the RIGHT (the editor's статус · Тест · Сохранить). The host slots are
+        filled by :meth:`mount_controls` when the node view becomes the active mode and
+        hidden otherwise, so the tools stand alone until the editor hands its controls
+        over. It is a child of :attr:`_view`, positioned by :meth:`_position_overlays`.
+        """
+        capsule = QFrame(self._view)
+        capsule.setProperty("capsule", True)
+        self._capsule = capsule
+        layout = QHBoxLayout(capsule)
+        gap = self._theme.metric("spacing_xs")
+        layout.setContentsMargins(gap, gap, gap, gap)
+        layout.setSpacing(gap)
+
+        # Left host slot (undo/redo island) + its separator, ahead of the tools.
+        self._host_left = self._make_host()
+        self._sep_left = self._make_separator(capsule)
+        layout.addWidget(self._host_left)
+        layout.addWidget(self._sep_left)
+
+        self._add_button = self._capsule_button("＋", "Добавить ноду")
         self._add_button.clicked.connect(self._open_palette)
-        self._delete_button = QPushButton("🗑 Удалить")
-        self._delete_button.setToolTip("Удалить выбранную ноду (Delete)")
+        self._delete_button = self._capsule_button("🗑", "Удалить выбранную ноду (Delete)")
         self._delete_button.setEnabled(False)
         self._delete_button.clicked.connect(self.delete_selected)
-        self._arrange_button = QPushButton("⇄ Упорядочить")
+        self._arrange_button = self._capsule_button("⇄", "Упорядочить")
         self._arrange_button.clicked.connect(self.arrange)
-        self._snap_button = QPushButton("▦ Сетка")
+        self._snap_button = self._capsule_button("▦", "Привязка к сетке")
         self._snap_button.setCheckable(True)
         self._snap_button.toggled.connect(self._scene.set_snap)
-        self._fit_button = QPushButton("⤢ Показать всё")
+        self._fit_button = self._capsule_button("⤢", "Показать всё")
         self._fit_button.clicked.connect(self._view.fit_all)
-        self._reset_button = QPushButton("1:1")
+        self._reset_button = self._capsule_button("1:1", "Масштаб 1:1")
         self._reset_button.clicked.connect(self._view.reset_zoom)
-        for button in (
-            self._add_button,
-            self._delete_button,
-            self._arrange_button,
-            self._snap_button,
-            self._fit_button,
-            self._reset_button,
-        ):
-            bar.addWidget(button)
-        bar.addStretch(1)
-        return bar
+
+        layout.addWidget(self._add_button)
+        layout.addWidget(self._delete_button)
+        layout.addWidget(self._make_separator(capsule))
+        layout.addWidget(self._arrange_button)
+        layout.addWidget(self._snap_button)
+        layout.addWidget(self._make_separator(capsule))
+        layout.addWidget(self._fit_button)
+        layout.addWidget(self._reset_button)
+
+        # Right host slot (статус · Тест · Сохранить) + its separator, after the tools.
+        self._sep_right = self._make_separator(capsule)
+        self._host_right = self._make_host()
+        layout.addWidget(self._sep_right)
+        layout.addWidget(self._host_right)
+
+        for slot in (self._host_left, self._sep_left, self._sep_right, self._host_right):
+            slot.hide()
+        capsule.adjustSize()
+
+    def _make_host(self) -> QWidget:
+        """A transparent inline container for controls the editor mounts into the capsule."""
+        host = QWidget(self._capsule)
+        host.setProperty("transparent", True)
+        host_layout = QHBoxLayout(host)
+        host_layout.setContentsMargins(0, 0, 0, 0)
+        host_layout.setSpacing(self._theme.metric("spacing_xs"))
+        return host
+
+    def _capsule_button(self, glyph: str, tooltip: str) -> QPushButton:
+        button = QPushButton(glyph)
+        button.setToolTip(tooltip)
+        button.setProperty("iconButton", True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        return button
+
+    def _make_separator(self, parent: QWidget) -> QFrame:
+        line = QFrame(parent)
+        line.setProperty("vline", True)
+        line.setFixedWidth(1)
+        line.setFixedHeight(self._theme.metric("icon_md"))
+        return line
+
+    def _position_overlays(self) -> None:
+        """Centre the floating command capsule along the bottom edge of the canvas.
+
+        The capsule carries the whole bottom bar (tools plus the editor's mounted
+        undo/redo and статус · Тест · Сохранить), floating over the graph so the canvas
+        fills the whole panel beneath it — no separate docked strip, no dead band below.
+        """
+        if not hasattr(self, "_capsule"):
+            return
+        viewport = self._view.viewport()
+        margin = self._theme.metric("spacing_lg")
+        # Never let the capsule spill past the canvas edges: cap it to the viewport so the
+        # status note (its one elastic, eliding item) gives up width instead of shoving
+        # «Тест / Сохранить» off the right edge («и в нижней панели … Сохранить → хран»).
+        # The toolbar and buttons keep their natural size; only the status elides.
+        self._capsule.setMaximumWidth(max(1, viewport.width() - 2 * margin))
+        self._capsule.adjustSize()
+        x = max(0, (viewport.width() - self._capsule.width()) // 2)
+        y = max(0, viewport.height() - self._capsule.height() - margin)
+        self._capsule.move(x, y)
+        self._capsule.raise_()
+
+    def mount_controls(self, left: QWidget | None, right: QWidget | None) -> None:
+        """Mount the editor's host controls into the capsule's left / right slots.
+
+        The macro editor hands over its undo/redo island (``left``) and its
+        статус · Тест · Сохранить group (``right``) while the node canvas is the shown
+        mode, so the whole bottom bar reads as one «Кинематограф» capsule instead of a
+        separate footer row. Passing ``None`` for a slot hides it; the caller then
+        re-parents that group back under the tabs.
+        """
+        self._mount_host(self._host_left, self._sep_left, left)
+        self._mount_host(self._host_right, self._sep_right, right)
+        self._position_overlays()
+
+    def _mount_host(self, host: QWidget, separator: QFrame, widget: QWidget | None) -> None:
+        if widget is None:
+            host.hide()
+            separator.hide()
+            return
+        current = widget.parentWidget()
+        current_layout = current.layout() if current is not None else None
+        if current_layout is not None:
+            current_layout.removeWidget(widget)
+        host_layout = host.layout()
+        if host_layout is not None:
+            host_layout.addWidget(widget)
+        widget.show()
+        host.show()
+        separator.show()
 
     # -- palette ------------------------------------------------------------
 
     def _open_palette(self) -> None:
         if self._palette_popup is None:
             popup = BlockPalette(self._theme, catalog=self._catalog, parent=self)
-            popup.setWindowFlags(Qt.WindowType.Popup)
+            # Frameless + translucent so only the QSS-rounded surface shows — no square
+            # window corners peeking out behind the radius («у панели есть углы»).
+            popup.setWindowFlags(
+                Qt.WindowType.Popup
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.NoDropShadowWindowHint
+            )
+            popup.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            popup.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
             popup.setFixedWidth(264)
             popup.block_chosen.connect(self._insert_block)
             self._palette_popup = popup
         popup = self._palette_popup
-        below = self._add_button.mapToGlobal(QPoint(0, self._add_button.height() + 4))
-        popup.move(below)
         popup.resize(264, 360)
+        # The capsule sits at the bottom of the canvas, so the palette opens UPWARDS —
+        # above the «＋» button rather than below it, where it would run off the window.
+        above = self._add_button.mapToGlobal(QPoint(0, -popup.height() - 4))
+        popup.move(above)
         popup.show()
 
     def _insert_block(self, block_type: str) -> None:
@@ -233,6 +355,107 @@ class NodeEditor(QWidget):
     def _on_scene_selection(self, path: object) -> None:
         self._delete_button.setEnabled(bool(path))
 
+    # -- context menu -------------------------------------------------------
+
+    def _show_context_menu(self, global_pos: QPoint, node_id: object) -> None:
+        """Open the right-click menu — «в браузер версии … ПКМ … добавить/упорядочить/показать всё».
+
+        Over a node (the view has already selected it) the menu duplicates, toggles or deletes
+        it; over empty canvas it adds a node, arranges the flow or fits it to the view — the
+        same commands the bottom capsule carries, reachable without aiming for the pill.
+        """
+        menu = QMenu(self)
+        # Frameless + translucent so the QSS border-radius isn't boxed by square window
+        # corners («в двойном клике у панели есть углы»).
+        menu.setWindowFlags(
+            menu.windowFlags()
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.NoDropShadowWindowHint
+        )
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        if node_id:
+            block = self._model.block_at(self._scene.selected_path())
+            enabled = block.enabled if block is not None else True
+            # Shortcut hints are shown right-aligned by Qt (the mockup's `.ci .k` spans);
+            # the matching QShortcuts on the view make them work from the canvas too.
+            rename = menu.addAction("Переименовать", self._rename_selected)
+            rename.setShortcut(QKeySequence(Qt.Key.Key_F2))
+            duplicate = menu.addAction("Дублировать", self._duplicate_selected)
+            duplicate.setShortcut(QKeySequence("Ctrl+D"))
+            menu.addAction("Выключить" if enabled else "Включить", self._toggle_enabled)
+            menu.addSeparator()
+            delete = menu.addAction("Удалить", self.delete_selected)
+            delete.setShortcut(QKeySequence(Qt.Key.Key_Delete))
+        else:
+            menu.addAction("Добавить ноду", self._open_palette)
+            menu.addAction("Упорядочить", self.arrange)
+            menu.addAction("Показать всё", self._view.fit_all)
+        menu.exec(global_pos)
+
+    def _duplicate_selected(self) -> None:
+        """Deep-copy the selected node as a fresh free node beside it, like the list «Дублировать».
+
+        The copy drops in detached (unwired) next to the original — the canvas paradigm where
+        wires, not list order, decide the flow — so duplicating never silently reroutes the
+        chain. Coordinates are snapshotted by block identity so the renumbered siblings keep
+        their spots while the new node is placed by :meth:`_place_new_node`.
+        """
+        path = self._scene.selected_path()
+        index = path[-1] if path else None
+        if not isinstance(index, int):
+            return
+        container = path[:-1]
+        snapshot = self._scene.positions_by_block()
+        new_path = self._model.duplicate(container, index)
+        if new_path is None:
+            return
+        new_block = self._model.block_at(new_path)
+        if new_block is not None:
+            new_block.detached = True
+        self._scene.restore_positions(snapshot)
+        self.rebuild()
+        self._place_new_node(new_path, path)
+        self.select_path(new_path)
+        self._ensure_visible(new_path)
+        self._on_command_changed()
+
+    def _toggle_enabled(self) -> None:
+        """Flip the selected node's «выключен» state through the model, then redraw it dimmed."""
+        path = self._scene.selected_path()
+        index = path[-1] if path else None
+        if not isinstance(index, int):
+            return
+        block = self._model.block_at(path)
+        if block is None:
+            return
+        self._model.set_enabled(path[:-1], index, enabled=not block.enabled)
+        self.rebuild()
+        self.select_path(path)
+        self._on_command_changed()
+
+    def _rename_selected(self) -> None:
+        """Rename the selected node — the "Переименовать" (F2) of the «Кинематограф» menu.
+
+        A block has no name field of its own, so the node's name is stored in its
+        ``comment``: it already doubles as the card's title (see ``bridge._build_list``) and
+        as the list view's row suffix, and it round-trips with the command. The prompt is
+        seeded with the current comment — clearing it reverts the card to the block's default
+        title. Mirrors the list view's «Комментарий…» and the enable-toggle model pattern.
+        """
+        path = self._scene.selected_path()
+        index = path[-1] if path else None
+        if not isinstance(index, int):
+            return
+        block = self._model.block_at(path)
+        if block is None:
+            return
+        text, ok = QInputDialog.getText(self, "Переименовать ноду", "Название:", text=block.comment)
+        if ok:
+            self._model.set_comment(path[:-1], index, text)
+            self.rebuild()
+            self.select_path(path)
+            self._on_command_changed()
+
     # -- wire delay ---------------------------------------------------------
 
     def _edit_delay(self, edge: object) -> None:
@@ -262,8 +485,6 @@ class NodeEditor(QWidget):
     def rebuild(self) -> None:
         self._scene.rebuild()
         self._view.grow_scene_rect()
-        self._minimap.update()
-        self._update_minimap_geometry()
         self._frame_if_pending()
 
     def selected_path(self) -> BlockPath:
@@ -339,7 +560,6 @@ class NodeEditor(QWidget):
     # -- signals ------------------------------------------------------------
 
     def _on_command_changed(self) -> None:
-        self._minimap.update()
         self.changed.emit()
 
     def _on_rejected(self, message: str) -> None:
@@ -351,40 +571,19 @@ class NodeEditor(QWidget):
 
     def _on_theme_changed(self, _theme: object) -> None:
         self._scene.refresh_theme()
-        self._minimap.update()
 
-    # -- minimap placement --------------------------------------------------
-
-    def _show_minimap(self) -> None:
-        self._minimap.show()
-        self._mm_toggle.hide()
-        self._update_minimap_geometry()
-
-    def _update_minimap_geometry(self) -> None:
-        margin = 14
-        vw = self._view.viewport().width()
-        vh = self._view.viewport().height()
-        self._minimap.move(
-            vw - self._minimap.width() - margin, vh - self._minimap.height() - margin
-        )
-        self._mm_toggle.move(
-            vw - self._mm_toggle.width() - margin, vh - self._mm_toggle.height() - margin
-        )
+    # -- events -------------------------------------------------------------
 
     def resizeEvent(self, event: object) -> None:  # noqa: N802 — Qt override.
         super().resizeEvent(event)  # type: ignore[arg-type]
-        self._update_minimap_geometry()
+        self._position_overlays()
         # A pending frame may have been deferred while the viewport was 0×0; now that the
         # canvas has a real size, fit the fresh command to it.
         self._frame_if_pending()
 
     def showEvent(self, event: object) -> None:  # noqa: N802 — Qt override.
         super().showEvent(event)  # type: ignore[arg-type]
+        self._position_overlays()
         # Opening a command while the node view sat behind the list view left the frame
         # pending (no viewport to fit to); the switch to «Ноды» shows it — frame it now.
         self._frame_if_pending()
-
-    def hide_minimap(self) -> None:
-        self._minimap.hide()
-        self._mm_toggle.show()
-        self._update_minimap_geometry()

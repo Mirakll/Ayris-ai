@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ayris — вариант «Кинематограф»</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ===== Вариант C «Кинематограф» + правки пользователя =====
+     Герой — светящиеся провода и цветные шапки нод (Unreal / ComfyUI).
+     Фон холста взят из варианта «Стекло»: тёмная база, мягкое цветное
+     сияние и точечная сетка. Карта убрана; каталог — все доступные блоки;
+     боковые панели можно свернуть и растянуть, отдавая ширину холсту. ===== */
+  :root {
+    --left-w: 250px;
+    --right-w: 300px;
+    --node-bg: color-mix(in srgb, var(--surface) 84%, #000);
+    --node-border: color-mix(in srgb, var(--role) 38%, var(--border));
+    --head-bg: color-mix(in srgb, var(--role) 42%, var(--surface-hi));
+    --panel-bg: color-mix(in srgb, var(--surface) 90%, #000);
+    --panel-border: var(--border);
+    --field-bg: color-mix(in srgb, var(--bg) 60%, #000);
+    --grid-dot: rgba(148,138,172,0.14);
+    --node-shadow: rgba(0,0,0,0.6);
+  }
+  .app { display:grid; grid-template-rows:auto 1fr; height:100vh; }
+
+  .topbar { display:flex; align-items:center; gap:16px; height:52px; padding:0 16px; background:var(--panel-bg); border-bottom:1px solid var(--border); }
+  .crumb { display:flex; align-items:center; gap:6px; color:var(--text-2); font-size:13px; cursor:pointer; }
+  .crumb:hover { color:var(--text); }
+  .cmd-name { font-size:14px; font-weight:600; color:var(--text); }
+  .cmd-name .badge { margin-left:8px; font-size:11px; color:var(--success); border:1px solid color-mix(in srgb,var(--success) 45%,transparent); border-radius:6px; padding:1px 7px; }
+  .tabs { display:flex; gap:2px; margin-left:auto; }
+  .tab { padding:7px 13px; border-radius:8px; font-size:13px; color:var(--text-2); cursor:pointer; }
+  .tab:hover { background:var(--surface-hi); color:var(--text); }
+  .tab.active { background:color-mix(in srgb,var(--accent) 22%,transparent); color:var(--text); font-weight:500; }
+
+  /* Раскладка: ширины боковых колонок — переменные, их двигают ресайзеры */
+  .work { position:relative; display:grid; grid-template-columns: var(--left-w) minmax(0,1fr) var(--right-w); min-height:0; }
+  .panel { position:relative; background:var(--panel-bg); display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+  .catalog-panel { border-right:1px solid var(--border); }
+  .inspector-panel { border-left:1px solid var(--border); }
+  .panel-head { padding:14px 16px 10px; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  .catalog-search { margin:0 12px 8px; padding:8px 12px; border-radius:8px; background:var(--field-bg); border:1px solid var(--border); color:var(--text); font-size:13px; font-family:inherit; }
+  .catalog-search:focus { outline:none; border-color:var(--accent); }
+  #catalog { padding:2px 8px 8px; overflow-y:auto; flex:1; }
+  #inspector { display:flex; flex-direction:column; height:100%; }
+  /* Ресайзеры и сворачивание боковых панелей */
+  .rez { position:absolute; top:0; bottom:0; width:7px; z-index:14; cursor:col-resize; }
+  .rez::after { content:""; position:absolute; top:0; bottom:0; left:50%; width:1px; background:transparent; transition:background .12s; }
+  .rez:hover::after { background:var(--accent); }
+  .rez-left { right:-3px; }
+  .rez-right { left:-3px; }
+  .colb { position:absolute; z-index:16; top:12px; width:22px; height:22px; border-radius:7px; display:grid; place-items:center;
+    background:var(--surface-hi); border:1px solid var(--border); color:var(--text-2); font-size:13px; cursor:pointer; }
+  .colb:hover { color:var(--text); border-color:var(--accent); }
+  .col-left { right:8px; }
+  .col-right { left:8px; }
+  .reopen { position:absolute; z-index:18; top:60px; display:none; align-items:center; justify-content:center; width:20px; height:44px;
+    background:var(--surface-hi); border:1px solid var(--border); color:var(--text-2); cursor:pointer; font-size:13px; }
+  .reopen-left { left:0; border-radius:0 10px 10px 0; border-left:none; }
+  .reopen-right { right:0; border-radius:10px 0 0 10px; border-right:none; }
+  .reopen:hover { color:var(--text); border-color:var(--accent); }
+  .work.l-collapsed .reopen-left { display:flex; }
+  .work.r-collapsed .reopen-right { display:flex; }
+
+  /* Фон холста из варианта «Стекло»: тёмная база + сияние + точки */
+  .canvas-wrap { background-color: color-mix(in srgb, var(--bg) 90%, #000); }
+  .canvas-wrap::before {
+    content:""; position:absolute; inset:-10%; z-index:0; pointer-events:none;
+    background:
+      radial-gradient(38% 42% at 20% 24%, color-mix(in srgb,var(--accent) 40%,transparent), transparent 70%),
+      radial-gradient(34% 36% at 82% 16%, color-mix(in srgb,var(--info) 32%,transparent), transparent 72%),
+      radial-gradient(48% 48% at 66% 92%, color-mix(in srgb,var(--r-sound) 30%,transparent), transparent 72%),
+      radial-gradient(42% 42% at 26% 86%, color-mix(in srgb,var(--r-action) 24%,transparent), transparent 74%);
+    filter: blur(64px) saturate(1.15); opacity:0.5;
+    animation: drift 22s ease-in-out infinite alternate;
+  }
+  @keyframes drift { 0%{transform:translate3d(0,0,0) scale(1);} 100%{transform:translate3d(2%,-2%,0) scale(1.08);} }
+  .canvas {
+    background-color: transparent;
+    background-image: radial-gradient(var(--grid-dot) 1.4px, transparent 1.4px);
+    background-position: var(--vx,0px) var(--vy,0px);
+    background-size: calc(26px * var(--vk,1)) calc(26px * var(--vk,1));
+    z-index:1;
+  }
+  /* Ноды — цветная светящаяся шапка + рамка роли сверху и слева.
+     Отдельную accent-bar убираем: 4px полоса со скруглением 12px давала
+     артефакт-«полоску» у угла. Роль теперь несут рамки (следуют радиусу
+     ноды — угол чистый) и цветная шапка. */
+  .node { border-top:2px solid var(--role); border-left:3px solid var(--role); }
+  .node .accent-bar { display:none; }
+  .node .head { box-shadow: inset 0 1px 0 color-mix(in srgb,#fff 8%,transparent); }
+  .node .head .title { color:#fff; }
+
+  /* Плавающая командная капсула снизу по центру — «пульт» команды.
+     Компактные иконки + перенос, чтобы капсула не обрезалась на узком холсте. */
+  .toolbar { position:absolute; z-index:30; bottom:18px; left:50%; transform:translateX(-50%);
+    display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:4px; padding:7px;
+    max-width:calc(100% - 24px); border-radius:16px;
+    background:color-mix(in srgb, var(--surface) 92%, #000); border:1px solid var(--border);
+    box-shadow:0 16px 44px rgba(0,0,0,0.6), 0 0 0 1px color-mix(in srgb,var(--accent) 12%,transparent); }
+  .tbtn { display:inline-flex; align-items:center; justify-content:center; gap:7px; height:34px; min-width:34px; padding:0 10px; border-radius:11px; border:1px solid transparent; background:transparent; color:var(--text-2); font-size:13px; white-space:nowrap; cursor:pointer; }
+  .tbtn.icon { padding:0; width:34px; }
+  .tbtn:hover { background:var(--surface-hi); color:var(--text); }
+  .tbtn:disabled, .tbtn.disabled { opacity:0.35; cursor:default; }
+  .tbtn:disabled:hover, .tbtn.disabled:hover { background:transparent; color:var(--text-2); }
+  .tbtn.active { background:color-mix(in srgb,var(--accent) 24%,transparent); color:var(--text); }
+  .sep-v { width:1px; height:22px; background:var(--border); margin:0 3px; }
+  .btn { height:34px; padding:0 16px; border-radius:11px; border:1px solid var(--border); background:var(--surface-hi); color:var(--text); font-size:13px; font-weight:500; cursor:pointer; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); box-shadow:0 6px 20px color-mix(in srgb,var(--accent) 55%,transparent); }
+  .btn.primary:hover { background:var(--accent-hover); }
+  .hint { position:absolute; top:14px; left:50%; transform:translateX(-50%); z-index:20; font-size:12px; color:var(--muted); background:color-mix(in srgb,var(--surface) 80%,transparent); border:1px solid var(--border); padding:7px 14px; border-radius:999px; pointer-events:none; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="crumb">← <span>К списку команд</span></div>
+    <span style="color:var(--muted)">/</span>
+    <div class="cmd-name">Приветствие <span class="badge">включена</span></div>
+    <nav class="tabs">
+      <div class="tab">Обзор</div><div class="tab active">Действия</div><div class="tab">Переменные</div><div class="tab">Звуки</div><div class="tab">История</div>
+    </nav>
+  </header>
+  <!-- @@C@@ -->
+  <div class="work">
+    <aside class="panel catalog-panel">
+      <div class="panel-head">Каталог блоков</div>
+      <input class="catalog-search" id="catalogSearch" placeholder="Поиск блока…">
+      <div id="catalog"></div>
+      <div class="colb col-left" title="Свернуть панель">‹</div>
+      <div class="rez rez-left"></div>
+    </aside>
+
+    <div class="canvas-wrap">
+      <div class="canvas" id="canvas"><div class="world" id="world"><svg class="wires" id="wires"></svg></div></div>
+      <div class="hint">Тяни от порта — провод · ПКМ — меню · клик по чипу — задержка · поток слева направо</div>
+      <div class="toolbar">
+        <button class="tbtn icon" id="undoBtn" title="Отменить (Ctrl+Z)">↶</button>
+        <button class="tbtn icon" id="redoBtn" title="Повторить (Ctrl+Y)">↷</button>
+        <span class="sep-v"></span>
+        <button class="tbtn icon" id="addBtn" title="Добавить ноду">＋</button>
+        <button class="tbtn icon" id="arrangeBtn" title="Упорядочить">⇄</button>
+        <button class="tbtn icon" id="snapBtn" title="Привязка к сетке">▦</button>
+        <button class="tbtn icon" id="fitBtn" title="Показать всё">⤢</button>
+        <button class="tbtn icon" id="resetBtn" title="Масштаб 1:1">1:1</button>
+        <span class="sep-v"></span>
+        <button class="tbtn active" id="runBtn">▶ Тест</button>
+        <button class="btn primary" id="saveBtn">Сохранить</button>
+      </div>
+      <div class="palette" id="palette"><input class="p-search" id="pSearch" placeholder="Поиск блока…"><div class="p-list" id="pList"></div></div>
+      <div class="ctx" id="ctx"></div>
+    </div>
+
+    <aside class="panel inspector-panel">
+      <div id="inspector"></div>
+      <div class="colb col-right" title="Свернуть панель">›</div>
+      <div class="rez rez-right"></div>
+    </aside>
+
+    <div class="reopen reopen-left" title="Показать каталог">›</div>
+    <div class="reopen reopen-right" title="Показать инспектор">‹</div>
+  </div>
+</div>
+<script>window.AYRIS_WIRE = { glow:[[10,0.16],[5,0.42],[2.2,0.98]] };</script>
+<script src="engine.js"></script>
+<script>
+(function(){
+  const work = document.querySelector('.work');
+  let L=250, R=300, Lp=250, Rp=300;
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const rawL=v=>work.style.setProperty('--left-w',v+'px');
+  const rawR=v=>work.style.setProperty('--right-w',v+'px');
+  const setL=v=>{ L=clamp(v,180,460); rawL(L); };
+  const setR=v=>{ R=clamp(v,200,480); rawR(R); };
+  setL(250); setR(300);
+  function resizer(el,which){ if(!el) return;
+    el.addEventListener('mousedown',e=>{ e.preventDefault();
+      const sx=e.clientX, s0=(which==='l'?L:R);
+      const mv=ev=>{ const dx=ev.clientX-sx; which==='l'?setL(s0+dx):setR(s0-dx); };
+      const up=()=>{ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); document.body.style.userSelect=''; };
+      document.body.style.userSelect='none';
+      document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+    });
+  }
+  resizer(document.querySelector('.rez-left'),'l');
+  resizer(document.querySelector('.rez-right'),'r');
+  function toggle(side){
+    if(side==='l'){ if(work.classList.toggle('l-collapsed')){ Lp=L; rawL(0); } else setL(Lp); }
+    else { if(work.classList.toggle('r-collapsed')){ Rp=R; rawR(0); } else setR(Rp); }
+  }
+  const bind=(sel,side)=>{ const b=document.querySelector(sel); if(b) b.addEventListener('click',()=>toggle(side)); };
+  bind('.col-left','l'); bind('.reopen-left','l');
+  bind('.col-right','r'); bind('.reopen-right','r');
+})();
+</script>
+</body>
+</html>

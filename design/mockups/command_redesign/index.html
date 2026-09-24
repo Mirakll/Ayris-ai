@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ayris — редизайн вкладки «Команды»: варианты</title>
+<link rel="stylesheet" href="tokens.css">
+<style>
+  body { overflow:auto; }
+  .wrap { max-width:1200px; margin:0 auto; padding:40px 24px 64px; }
+  h1 { font-size:26px; font-weight:700; letter-spacing:-0.01em; }
+  .lead { color:var(--text-2); font-size:14px; margin-top:8px; max-width:70ch; line-height:1.6; }
+  .note { margin-top:14px; font-size:12.5px; color:var(--muted); background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:12px 14px; max-width:80ch; line-height:1.55; }
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:20px; margin-top:28px; }
+  .card { background:var(--surface); border:1px solid var(--border); border-radius:16px; overflow:hidden; display:flex; flex-direction:column; }
+  .thumb { position:relative; height:230px; border-bottom:1px solid var(--border); overflow:hidden; background:var(--bg); }
+  .thumb iframe { position:absolute; top:0; left:0; width:1280px; height:800px; border:0; transform:scale(0.36); transform-origin:top left; pointer-events:none; }
+  .thumb a.cover { position:absolute; inset:0; z-index:2; }
+  .c-body { padding:16px 16px 18px; display:flex; flex-direction:column; gap:10px; flex:1; }
+  .c-tag { font-size:11px; text-transform:uppercase; letter-spacing:0.08em; font-weight:600; color:var(--accent); }
+  .c-name { font-size:17px; font-weight:600; }
+  .c-desc { font-size:13px; color:var(--text-2); line-height:1.55; flex:1; }
+  .c-meta { font-size:12px; color:var(--muted); line-height:1.5; }
+  .open { margin-top:6px; display:inline-flex; align-items:center; justify-content:center; height:38px; border-radius:10px; background:var(--accent); color:var(--on-accent); font-weight:500; font-size:13px; text-decoration:none; }
+  .open:hover { background:var(--accent-hover); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Редизайн вкладки «Команды»</h1>
+  <p class="lead">Три варианта оформления одного и того же экрана. Холст нод, порты, провода,
+  задержки, инспектор и каталог блоков — общий движок и одна палитра Ayris. Меняется только «шкура»:
+  фон, панели, кнопки и подача проводов. Открой любой — он живой: тяни ноды, тяни провода от портов,
+  жми «Тест», добавляй блоки из каталога слева.</p>
+  <p class="note"><b>Важно про «Стекло»:</b> размытие фона (backdrop-blur) — это web-эффект.
+  В нашем Qt-стеке живого размытия нет, поэтому в приложении стекло придётся приблизить полупрозрачными
+  поверхностями и статичным градиентом-сиянием без настоящего blur. Остальные два варианта переносятся 1:1.</p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="thumb"><iframe src="variant-studio.html" scrolling="no"></iframe><a class="cover" href="variant-studio.html"></a></div>
+      <div class="c-body">
+        <div class="c-tag">Вариант A</div>
+        <div class="c-name">Студия</div>
+        <div class="c-desc">Тихо и дисциплинированно: плоские поверхности, волосяные границы, тонкий одинарный провод,
+        много воздуха. Акцент только на главной кнопке. Ближе всего к текущему стеку — переносится без компромиссов.</div>
+        <div class="c-meta">Ориентир: Linear · Raycast · n8n</div>
+        <a class="open" href="variant-studio.html">Открыть вариант →</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="thumb"><iframe src="variant-glass.html" scrolling="no"></iframe><a class="cover" href="variant-glass.html"></a></div>
+      <div class="c-body">
+        <div class="c-tag">Вариант B</div>
+        <div class="c-name">Стекло</div>
+        <div class="c-desc">Парящие матовые панели над цветным «сиянием», глубина слоёв, ноды из матового стекла.
+        Самый нарядный вариант. В Qt — с оговоркой про размытие (см. заметку выше).</div>
+        <div class="c-meta">Ориентир: Apple Liquid Glass · aurora UI</div>
+        <a class="open" href="variant-glass.html">Открыть вариант →</a>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="thumb"><iframe src="variant-cinematic.html" scrolling="no"></iframe><a class="cover" href="variant-cinematic.html"></a></div>
+      <div class="c-body">
+        <div class="c-tag">Вариант C</div>
+        <div class="c-name">Кинематограф</div>
+        <div class="c-desc">Герой — светящиеся провода и цветные шапки нод. Тёмный чертёжный холст с крупной и мелкой сеткой,
+        плавающая командная капсула-пульт снизу. Самый «нодовый» и техничный вид.</div>
+        <div class="c-meta">Ориентир: Unreal Blueprints · ComfyUI</div>
+        <a class="open" href="variant-cinematic.html">Открыть вариант →</a>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

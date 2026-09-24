@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ayris — вариант «Студия»</title>
+<link rel="stylesheet" href="tokens.css">
+<link rel="stylesheet" href="base.css">
+<style>
+  /* ===== Вариант A «Студия» — тихо, дисциплинированно, акцент только на главном.
+     Ориентир: Linear / Raycast / n8n. Плоские поверхности, волосяные границы,
+     тонкий одинарный провод, много воздуха. ===== */
+  .app { display:grid; grid-template-rows:auto 1fr auto; height:100vh; }
+
+  .topbar { display:flex; align-items:center; gap:16px; height:52px; padding:0 16px;
+    background:var(--surface); border-bottom:1px solid var(--border); }
+  .crumb { display:flex; align-items:center; gap:8px; color:var(--text-2); font-size:13px; cursor:pointer; }
+  .crumb:hover { color:var(--text); }
+  .crumb .chev { color:var(--muted); }
+  .cmd-name { font-size:14px; font-weight:600; color:var(--text); }
+  .cmd-name .badge { margin-left:8px; font-size:11px; color:var(--success); border:1px solid color-mix(in srgb,var(--success) 45%,transparent); border-radius:6px; padding:1px 7px; }
+  .tabs { display:flex; gap:2px; margin-left:auto; }
+  .tab { padding:7px 13px; border-radius:8px; font-size:13px; color:var(--text-2); cursor:pointer; }
+  .tab:hover { background:var(--surface-hi); color:var(--text); }
+  .tab.active { background:color-mix(in srgb,var(--accent) 16%,transparent); color:var(--text); font-weight:500; }
+
+  .work { display:grid; grid-template-columns:250px 1fr 300px; min-height:0; }
+  .panel { background:var(--surface); display:flex; flex-direction:column; min-height:0; }
+  .catalog-panel { border-right:1px solid var(--border); }
+  .inspector-panel { border-left:1px solid var(--border); }
+  .panel-head { padding:14px 16px 10px; font-size:12px; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  .catalog-search { margin:0 12px 8px; padding:8px 12px; border-radius:8px; background:var(--bg); border:1px solid var(--border); color:var(--text-2); font-size:13px; font-family:inherit; }
+  .catalog-search:focus { outline:none; border-color:var(--accent); }
+  #catalog { padding:2px 8px 8px; overflow-y:auto; flex:1; }
+  #inspector { display:flex; flex-direction:column; height:100%; }
+
+  .canvas-wrap { background:var(--bg); }
+  /* тулбар — один сегментированный островок слева, второй справа */
+  .toolbar { position:absolute; top:14px; left:14px; right:14px; z-index:30; display:flex; align-items:center; gap:10px; pointer-events:none; }
+  .group { display:flex; gap:2px; background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:4px; pointer-events:auto; box-shadow:0 2px 10px rgba(0,0,0,0.25); }
+  .tbtn { display:inline-flex; align-items:center; gap:7px; height:30px; padding:0 11px; border-radius:7px; border:1px solid transparent; background:transparent; color:var(--text-2); font-size:13px; white-space:nowrap; }
+  .tbtn:hover { background:var(--surface-hi); color:var(--text); }
+  .tbtn.active { background:color-mix(in srgb,var(--accent) 16%,transparent); color:var(--text); }
+  .tbtn svg { width:15px; height:15px; }
+  .spacer { flex:1; pointer-events:none; }
+  .hint { position:absolute; bottom:14px; left:50%; transform:translateX(-50%); z-index:20; font-size:12px; color:var(--muted); background:var(--surface); border:1px solid var(--border); padding:7px 14px; border-radius:999px; }
+
+  .footer-bar { display:flex; align-items:center; height:56px; padding:0 16px; background:var(--surface); border-top:1px solid var(--border); }
+  .btn { height:38px; padding:0 18px; border-radius:9px; border:1px solid var(--border); background:var(--surface-hi); color:var(--text); font-size:13px; font-weight:500; }
+  .btn:hover { border-color:var(--accent); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
+  .btn.primary:hover { background:var(--accent-hover); }
+  .footer-actions { margin-left:auto; display:flex; gap:10px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <div class="crumb">← <span>К списку команд</span></div>
+    <span class="chev" style="color:var(--muted)">/</span>
+    <div class="cmd-name">Приветствие <span class="badge">включена</span></div>
+    <nav class="tabs">
+      <div class="tab">Обзор</div>
+      <div class="tab active">Действия</div>
+      <div class="tab">Переменные</div>
+      <div class="tab">Звуки</div>
+      <div class="tab">История</div>
+    </nav>
+  </header>
+
+  <div class="work">
+    <aside class="panel catalog-panel">
+      <div class="panel-head">Каталог блоков</div>
+      <input class="catalog-search" id="catalogSearch" placeholder="Поиск блока…">
+      <div id="catalog"></div>
+    </aside>
+
+    <div class="canvas-wrap">
+      <div class="canvas" id="canvas"><div class="world" id="world"><svg class="wires" id="wires"></svg></div></div>
+      <div class="toolbar">
+        <div class="group">
+          <button class="tbtn" id="addBtn">＋ Нода</button>
+          <button class="tbtn" id="arrangeBtn" title="Разложить слева направо">⇄ Упорядочить</button>
+          <button class="tbtn" id="snapBtn" title="Привязка к сетке">▦ Сетка</button>
+        </div>
+        <div class="spacer"></div>
+        <div class="group">
+          <button class="tbtn" id="fitBtn" title="Показать всё">⤢ Показать всё</button>
+          <button class="tbtn" id="resetBtn" title="Масштаб 1:1">1:1</button>
+          <button class="tbtn active" id="runBtn">▶ Тест</button>
+        </div>
+      </div>
+      <div class="hint">Тяни от порта — провод · ПКМ — меню · клик по чипу — задержка · поток слева направо</div>
+      <div class="minimap" id="minimap"><canvas id="mmCanvas" width="380" height="260"></canvas><div class="mm-head"><span>Карта</span><span class="mm-close" id="mmClose">✕</span></div></div>
+      <div class="mm-toggle" id="mmToggle" title="Показать карту">🗺</div>
+      <div class="palette" id="palette"><input class="p-search" id="pSearch" placeholder="Поиск блока…"><div class="p-list" id="pList"></div></div>
+      <div class="ctx" id="ctx"></div>
+    </div>
+
+    <aside class="panel inspector-panel"><div id="inspector"></div></aside>
+  </div>
+
+  <footer class="footer-bar">
+    <div class="footer status"><span class="dot"></span> Готово к запуску · 6 нод · 5 связей</div>
+    <div class="footer-actions">
+      <button class="btn" id="runBtn2">▶ Тест</button>
+      <button class="btn primary" id="saveBtn">Сохранить</button>
+    </div>
+  </footer>
+</div>
+<script>window.AYRIS_WIRE = { glow:[[3,0.14],[1.6,0.95]] };</script>
+<script src="engine.js"></script>
+<script>document.getElementById('runBtn2').onclick = ()=>document.getElementById('runBtn').click();</script>
+</body>
+</html>

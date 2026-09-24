@@ -315,11 +315,16 @@ def _build_list(
     for index, block in enumerate(blocks):
         node_id = _path_text((*container, index))
         meta = catalog.try_get(block.type)
+        # A user-set comment doubles as the node's custom name — the «Переименовать» of the
+        # mockup writes it, and the list view already appends it to the row label. So a
+        # renamed node shows that name; an untouched one shows its catalog title (its type
+        # is still read from the header glyph, which is keyed by block type, not title).
+        title = block.comment.strip() or (meta.title_ru if meta is not None else block.type)
         node = GraphNode(
             id=node_id,
             block=block,
             role=role_of(block.type, catalog),
-            title=meta.title_ru if meta is not None else block.type,
+            title=title,
         )
         if node_id in positions:
             node.x, node.y = positions[node_id]

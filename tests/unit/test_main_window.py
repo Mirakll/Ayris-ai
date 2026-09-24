@@ -18,7 +18,9 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from PySide6.QtWidgets import QApplication, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QApplication, QFrame, QWidget
 
 from ayris.core.config import ConfigManager
 from ayris.core.events import (
@@ -133,6 +135,26 @@ def test_settings_layer_opens_and_closes_in_window(
         window.close_settings()
         assert window.settings_open is False
         assert window.created_sections  # sections still registered
+    finally:
+        window.exit()
+
+
+def test_settings_header_drags_the_window(theme: ThemeManager, manager: ConfigManager) -> None:
+    # The layer covers the draggable dashboard panels, so its title bar has to
+    # take over moving the frameless window while settings are open.
+    window = _window(theme, manager)
+    try:
+        window.show()
+        QApplication.instance().processEvents()  # type: ignore[union-attr]
+        window.open_settings()
+
+        header = window._settings_layer.findChild(QFrame, "settingsHeader")
+        assert header is not None
+
+        moved: list[bool] = []
+        window._settings_layer.drag_started.connect(lambda: moved.append(True))
+        QTest.mousePress(header, Qt.MouseButton.LeftButton, pos=header.rect().center())
+        assert moved == [True]
     finally:
         window.exit()
 

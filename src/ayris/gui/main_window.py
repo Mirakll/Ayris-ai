@@ -287,11 +287,26 @@ class MainWindow(QMainWindow):
             self._stack.addWidget(page)
             page.search_entries_changed.connect(lambda page=page: self._index_page(page))
             self._index_page(page)
+            # The «Команды» editor asks for the whole layer while a command is open;
+            # collapse the section nav + search then, restore it on the way back.
+            immersive = getattr(page, "immersive_changed", None)
+            if immersive is not None:
+                immersive.connect(self._set_settings_immersive)
         self._current_section = key
         self._stack.setCurrentWidget(page)
         self._sidebar.select_section(key)
         self._schedule_state_save()
         return page
+
+    def _set_settings_immersive(self, immersive: bool) -> None:
+        """Hide the section nav + search while a full-layer editor (node canvas) is open.
+
+        The «Команды» tab fires this when its editor screen opens: the node canvas then
+        spans the whole layer instead of sharing it with the settings block, and the
+        editor's own «← К списку команд» brings the nav back.
+        """
+        self._sidebar.setVisible(not immersive)
+        self._search_field.setVisible(not immersive)
 
     def open_settings(self) -> None:
         # Drop the WebGL sphere's native surface so the layer can cover the panel.
@@ -473,6 +488,7 @@ class MainWindow(QMainWindow):
     def _build_settings_layer(self) -> None:
         self._settings_layer = SettingsLayer(self._theme, self._root)
         self._settings_layer.closed.connect(self._on_settings_closed)
+        self._settings_layer.drag_started.connect(self._start_system_move)
 
         self._search_field = SearchField(
             self._settings_layer, placeholder="Найти настройку", theme=self._theme

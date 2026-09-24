@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QKeyEvent, QMouseEvent, QPainter, QWheelEvent
+from PySide6.QtGui import QContextMenuEvent, QKeyEvent, QMouseEvent, QPainter, QWheelEvent
 from PySide6.QtWidgets import QGraphicsView
 
 from ayris.gui.widgets.node_editor.bridge import MAIN_PORT
@@ -48,6 +48,10 @@ class NodeView(QGraphicsView):
     #: Emitted when a wire's delay chip is clicked, carrying its :class:`EdgeItem` so the
     #: editor can open the «Пауза» prompt for that connection.
     delay_chip_clicked = Signal(object)
+    #: Emitted on right-click: (global position, node id under the cursor or ``None``). The
+    #: editor builds the context menu — an empty-canvas menu (add / arrange / fit) or a node
+    #: menu (duplicate / enable-disable / delete) — since it owns those actions and the model.
+    context_menu_requested = Signal(QPoint, object)
 
     def __init__(self, scene: NodeScene, parent: QWidget | None = None) -> None:
         super().__init__(scene, parent)
@@ -82,17 +86,35 @@ class NodeView(QGraphicsView):
         return self.transform().m11()
 
     def wheelEvent(self, event: QWheelEvent) -> None:  # noqa: N802 — Qt override.
-        factor = _ZOOM_IN if event.angleDelta().y() > 0 else _ZOOM_OUT
-        target = self.scale_factor * factor
-        if target < _MIN_SCALE or target > _MAX_SCALE:
+        zoom_in = event.angleDelta().y() > 0
+        current = self.scale_factor
+        # У края диапазона колесо замирает, но всегда пускает обратно внутрь него: после
+        # «Показать всё» масштаб бывает ниже _MIN_SCALE, и зум-ин должен вернуть к порогу,
+        # а не заблокироваться намертво. Шаг подрезаем, чтобы одна нотка не проскочила край.
+        if zoom_in and current >= _MAX_SCALE:
             return
+        if not zoom_in and current <= _MIN_SCALE:
+            return
+        factor = _ZOOM_IN if zoom_in else _ZOOM_OUT
+        target = current * factor
+        if target > _MAX_SCALE:
+            factor = _MAX_SCALE / current
+        elif target < _MIN_SCALE:
+            factor = _MIN_SCALE / current
         self.scale(factor, factor)
 
     def reset_zoom(self) -> None:
         self.resetTransform()
 
     def fit_all(self) -> None:
-        """Frame the whole graph, then clamp the zoom into the allowed range."""
+        """Вместить весь граф; лишь не приближать мелкий граф сильнее верхнего предела.
+
+        Нижний порог масштаба (тот, что держит колесо) здесь НЕ применяется намеренно:
+        «Показать всё» обязано вместить весь граф целиком, даже широкий, в узкий холст —
+        а на трёх-панельном сплиттере холст бывает уже графа. Прежний подъём до
+        ``_MIN_SCALE`` обрезал крайние ветви (правый столбец уезжал за край, а прокрутки
+        у холста нет). Верхний порог остаётся: одинокая нода не должна раздуваться до 2.2×.
+        """
         rect = self._node_scene.itemsBoundingRect()
         if rect.isEmpty():
             return
@@ -100,9 +122,6 @@ class NodeView(QGraphicsView):
         if self.scale_factor > _MAX_SCALE:
             self.resetTransform()
             self.scale(_MAX_SCALE, _MAX_SCALE)
-        elif self.scale_factor < _MIN_SCALE:
-            self.resetTransform()
-            self.scale(_MIN_SCALE, _MIN_SCALE)
 
     def center_on_node(self, node_id: str) -> None:
         item = self._node_scene.node_item(node_id)
@@ -235,6 +254,23 @@ class NodeView(QGraphicsView):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:  # noqa: N802 — Qt override.
+        """Right-click: hand the editor a global point and the node under the cursor (if any).
+
+        A right-click over a node selects it first, so the node menu's actions (duplicate,
+        enable/disable, delete) all target what the user actually clicked; over empty canvas
+        the node id is ``None`` and the editor shows the add/arrange/fit menu instead.
+        """
+        scene_point = self.mapToScene(event.pos())
+        node = self._node_scene.node_at_point(scene_point)
+        node_id: str | None = None
+        if node is not None:
+            node_id = node.node_id
+            self._node_scene.clearSelection()
+            node.setSelected(True)
+        self.context_menu_requested.emit(event.globalPos(), node_id)
+        event.accept()
 
     # -- live wire (also driven directly by tests) --------------------------
 

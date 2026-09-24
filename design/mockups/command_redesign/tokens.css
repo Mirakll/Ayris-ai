@@ -1,0 +1,60 @@
+/* ==========================================================================
+   Токены темы Ayris «Тёмная фиолетовая» — 1:1 с resources/themes/dark_purple.json
+   Общий слой для всех вариантов редизайна. Меняем ОФОРМЛЕНИЕ (в concept-CSS),
+   а палитра/метрики остаются едиными — чтобы варианты честно жили в теме проекта.
+   ========================================================================== */
+:root {
+  /* Цвета */
+  --bg: #16131F;
+  --surface: #1C1830;
+  --surface-hi: #29223C;
+  --border: #2E2742;
+  --accent: #9B6DFF;
+  --accent-hover: #B092FF;
+  --accent-pressed: #8458E8;
+  --accent-disabled: #4E4468;
+  --text: #ECE7F6;
+  --text-2: #C3BAD9;
+  --muted: #948AAC;
+  --success: #45D6A1;
+  --warning: #F6C85F;
+  --error: #FF6685;
+  --info: #68B8FF;
+  --role-action: #3FD6C0;
+  --role-sound: #5FD0E6;
+  --focus: #BCA0FF;
+  --on-accent: #140D22;
+
+  /* Типографика */
+  --font: "Inter", "Segoe UI Variable", "Segoe UI", Arial, sans-serif;
+
+  /* Метрики */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+
+  /* Роли нод → цвет акцента */
+  --r-trigger: var(--info);
+  --r-response: var(--accent);
+  --r-action: var(--role-action);
+  --r-condition: var(--success);
+  --r-sound: var(--role-sound);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+button { font-family: inherit; cursor: pointer; }

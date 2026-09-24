@@ -20,15 +20,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QStackedWidget,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QLabel, QStackedWidget
 
 from ayris.actions.macros.schema import SoundBinding
 from ayris.actions.macros.sounds import (
@@ -146,6 +139,11 @@ def _build_sound_preview() -> _LibrarySoundPreview | None:
 class CommandsTab(SettingsTab):
     """The «Команды» settings page: full-width library, editor on a second screen."""
 
+    #: Fired ``True`` when the editor screen opens and ``False`` when the library
+    #: returns, so the window can collapse the settings nav + search and give the
+    #: node canvas the whole layer while a command is being edited.
+    immersive_changed = Signal(bool)
+
     def __init__(
         self,
         manager: ConfigManager,
@@ -223,27 +221,13 @@ class CommandsTab(SettingsTab):
         self._editor = MacroEditor(resolved, theme, services=services)
         self._editor.command_saved.connect(self._on_command_saved)
         self._editor.dirty_changed.connect(self._on_editor_dirty)
+        # The editor now carries its own browser-style top row (crumb · name · section
+        # tabs, the mockup's `.topbar`), so the «← К списку команд» crumb lives there and
+        # only asks us to leave — the unsaved-edit guard stays here.
+        self._editor.back_requested.connect(self._back_to_library)
 
-        # Screen 1 — the editor under a back bar that guards unsaved edits.
-        editor_page = QWidget()
-        editor_page.setProperty("transparent", True)
-        editor_layout = QVBoxLayout(editor_page)
-        editor_layout.setContentsMargins(0, 0, 0, 0)
-        editor_layout.setSpacing(theme.metric("spacing_xs"))
-        top_bar = QHBoxLayout()
-        top_bar.setContentsMargins(0, 0, 0, 0)
-        # A flat text link, not a boxed button: no border or left padding, so its
-        # arrow sits flush with the editor's left edge below it, and the bar hugs
-        # the top instead of standing off on a control-height row.
-        self._back_button = QPushButton("← К списку команд")
-        self._back_button.setProperty("link", True)
-        self._back_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._back_button.clicked.connect(self._back_to_library)
-        top_bar.addWidget(self._back_button)
-        top_bar.addStretch(1)
-        editor_layout.addLayout(top_bar)
-        editor_layout.addWidget(self._editor, 1)
-        self._stack.addWidget(editor_page)
+        # Screen 1 — the editor itself; its top row is the only chrome above the canvas.
+        self._stack.addWidget(self._editor)
 
         if bus is not None:
             self._unsub_commands = bus.subscribe(CommandsChanged, self._on_commands_changed)
@@ -252,12 +236,21 @@ class CommandsTab(SettingsTab):
 
     # -- event wiring -------------------------------------------------------
 
+    def _set_screen(self, index: int) -> None:
+        """Switch library ↔ editor and announce immersion so the nav can collapse."""
+        self._stack.setCurrentIndex(index)
+        # The library keeps the «Команды» page heading; the editor hides it so its own
+        # browser top row (crumb · name · tabs) is the only chrome above the canvas —
+        # the mockup's single line, which lets the canvas rise.
+        self.title_label.setVisible(index == 0)
+        self.immersive_changed.emit(index == 1)
+
     def _open_editor(self, command_id: int) -> None:
         """Load a command into the editor and switch to the editor screen."""
         if self._editor is None:
             return
         self._editor.load_command(command_id)
-        self._stack.setCurrentIndex(1)
+        self._set_screen(1)
 
     def reveal_command(self, command_id: int) -> None:
         """Show a command in the library, selected — the «Открыть команду» target.
@@ -274,7 +267,7 @@ class CommandsTab(SettingsTab):
             and not self._editor.guard_unsaved()
         ):
             return
-        self._stack.setCurrentIndex(0)
+        self._set_screen(0)
         self._tree.refresh()
         self._tree.select_command(command_id)
 
@@ -287,7 +280,7 @@ class CommandsTab(SettingsTab):
         """
         if self._editor is not None and not self._editor.guard_unsaved():
             return
-        self._stack.setCurrentIndex(0)
+        self._set_screen(0)
         if self._tree is not None:
             self._tree.refresh()
 
@@ -351,7 +344,7 @@ class CommandsTab(SettingsTab):
                 self._editor.set_store(store)
         # The open command belonged to the old profile's library; fall back to the
         # list so the user is not left staring at a now-cleared editor.
-        self._stack.setCurrentIndex(0)
+        self._set_screen(0)
 
     # -- lifecycle ----------------------------------------------------------
 

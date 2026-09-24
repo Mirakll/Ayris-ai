@@ -10,7 +10,7 @@ search field, section sidebar and page stack are put into :attr:`body_layout` by
 from __future__ import annotations
 
 from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, Qt, Signal
-from PySide6.QtGui import QKeyEvent
+from PySide6.QtGui import QKeyEvent, QMouseEvent
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ayris.gui.theme import ThemeManager
@@ -18,10 +18,24 @@ from ayris.gui.theme import ThemeManager
 __all__ = ["SettingsLayer"]
 
 
+class _SettingsHeader(QFrame):
+    """The settings title bar; its empty area drags the frameless window."""
+
+    drag_started = Signal()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.drag_started.emit()
+        super().mousePressEvent(event)
+
+
 class SettingsLayer(QWidget):
     """A dimmed, slide-down container for the settings UI."""
 
     closed = Signal()
+    #: Fired when the title bar is pressed, so the window can start a system move
+    #: while the layer covers the draggable dashboard panels underneath.
+    drag_started = Signal()
 
     def __init__(self, theme: ThemeManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -35,10 +49,14 @@ class SettingsLayer(QWidget):
         self._content.setObjectName("settingsLayer")
         content_layout = QVBoxLayout(self._content)
 
-        header = QHBoxLayout()
-        self._title = QLabel("Настройки", self._content)
+        header_widget = _SettingsHeader(self._content)
+        header_widget.setObjectName("settingsHeader")
+        header_widget.drag_started.connect(self.drag_started)
+        header = QHBoxLayout(header_widget)
+        header.setContentsMargins(0, 0, 0, 0)
+        self._title = QLabel("Настройки", header_widget)
         self._title.setObjectName("settingsTitle")
-        self.close_button = QPushButton("✕", self._content)  # ✕
+        self.close_button = QPushButton("✕", header_widget)  # ✕
         self.close_button.setObjectName("settingsClose")
         self.close_button.setAccessibleName("Закрыть настройки")
         self.close_button.setToolTip("Закрыть настройки")
@@ -47,7 +65,7 @@ class SettingsLayer(QWidget):
         header.addWidget(self._title)
         header.addStretch(1)
         header.addWidget(self.close_button)
-        content_layout.addLayout(header)
+        content_layout.addWidget(header_widget)
 
         self.body_layout = QVBoxLayout()
         content_layout.addLayout(self.body_layout, 1)

@@ -295,6 +295,70 @@ QFrame[toolgroup="true"] QToolButton::menu-indicator {
     width: 0;
     height: 0;
 }
+/* Плавающая командная капсула нодового холста (вариант «Кинематограф»): «пульт»
+   инструментов, парящий у нижнего края холста поверх нод. Фон и обводку несёт сама
+   капсула; кнопки внутри — плоские, без своей рамки, с квадратной иконкой (iconButton).
+   Разделители — тонкие вертикальные линии цвета границы. */
+QFrame[capsule="true"] {
+    background-color: {{color.surface}};
+    border: {{metric.border_width}}px solid {{color.border}};
+    border-radius: {{metric.radius_lg}}px;
+}
+QFrame[capsule="true"] QPushButton {
+    background-color: transparent;
+    border: none;
+    border-radius: {{metric.radius_md}}px;
+    color: {{color.text_secondary}};
+    padding: 0;
+}
+QFrame[capsule="true"] QPushButton:hover {
+    background-color: {{color.surface_highlight}};
+    border: none;
+    color: {{color.text_primary}};
+}
+QFrame[capsule="true"] QPushButton:pressed,
+QFrame[capsule="true"] QPushButton:checked {
+    background-color: {{color.accent}};
+    border: none;
+    color: {{color.on_accent}};
+}
+QFrame[capsule="true"] QPushButton:disabled {
+    background-color: transparent;
+    border: none;
+    color: {{color.text_muted}};
+}
+QFrame[capsule="true"] QFrame[vline="true"] {
+    background-color: {{color.border}};
+    border: none;
+}
+/* Капсула теперь несёт и мостик редактора: слева — «островок» истории, справа —
+   статус · «Тест» · «Сохранить». Базовое правило капсулы гасит любые QPushButton до
+   плоских иконок (padding:0), поэтому текстовым кнопкам и акцентному «Сохранить»
+   нужны точечные, более специфичные переопределения — иначе «Тест»/«Сохранить»
+   схлопнутся без полей, а «Сохранить» потеряет заливку. */
+QFrame[capsule="true"] QPushButton[textButton="true"] {
+    padding: 0 {{metric.spacing_md}}px;
+    min-height: {{metric.control_height}}px;
+}
+QFrame[capsule="true"] QPushButton[kind="primary"] {
+    color: {{color.on_accent}};
+    background-color: {{color.accent}};
+}
+QFrame[capsule="true"] QPushButton[kind="primary"]:hover {
+    background-color: {{color.accent_hover}};
+    color: {{color.on_accent}};
+}
+QFrame[capsule="true"] QPushButton[kind="primary"]:pressed {
+    background-color: {{color.accent_pressed}};
+    color: {{color.on_accent}};
+}
+/* Вложенный «островок» истории внутри капсулы читается плоско: своя поверхность и
+   рамка убираются, чтобы не было «коробки в коробке» на фоне капсулы. Кнопки внутри
+   островка сохраняют своё поведение — их задают отдельные toolgroup-правила. */
+QFrame[capsule="true"] QFrame[toolgroup="true"] {
+    background: transparent;
+    border: none;
+}
 /* Плоская ссылка (например «← К списку команд»): без рамки и фона, левый край
    без отступа — так стрелка встаёт вровень с левым краем панели под кнопкой. */
 QPushButton[link="true"] {
@@ -312,6 +376,40 @@ QPushButton[link="true"]:hover {
 }
 QPushButton[link="true"]:pressed { border: none; }
 QPushButton[link="true"]:focus { border: none; }
+/* Вкладки браузерной верхней панели («Обзор … История») и переключатель «Список /
+   Ноды» рядом: плоская «пилюля» вместо рамки-кнопки, чтобы весь ряд читался как один
+   браузерный таб-бар. Активная вкладка залита подсветкой с акцентным текстом —
+   приближение к `.tab.active` макета (там accent 22 %; отдельного мягкого токена нет). */
+QPushButton[navTab="true"] {
+    background: transparent;
+    border: none;
+    border-radius: {{metric.radius_md}}px;
+    padding: {{metric.spacing_xs}}px {{metric.spacing_md}}px;
+    min-height: 0;
+    color: {{color.text_secondary}};
+    font-weight: {{typography.weight_medium}};
+}
+QPushButton[navTab="true"]:hover {
+    background: {{color.surface_highlight}};
+    color: {{color.text_primary}};
+}
+QPushButton[navTab="true"]:checked {
+    background: {{color.surface_highlight}};
+    color: {{color.accent}};
+}
+QPushButton[navTab="true"]:focus { border: none; }
+/* «Пилюля» состояния команды в верхней панели: обведённая капсула цветом состояния
+   (включена — успех, выключена — приглушённая), как зелёный `.badge` в макете, а не
+   просто цветной текст. */
+QLabel[statePill="on"], QLabel[statePill="off"] {
+    font-size: {{typography.caption_size}}px;
+    font-weight: {{typography.weight_medium}};
+    border: {{metric.border_width}}px solid {{color.border}};
+    border-radius: {{metric.radius_sm}}px;
+    padding: 1px {{metric.spacing_xs}}px;
+}
+QLabel[statePill="on"] { color: {{color.success}}; border-color: {{color.success}}; }
+QLabel[statePill="off"] { color: {{color.text_muted}}; }
 /* Тонкая разделительная линия (например под заголовком инспектора параметров):
    один горизонтальный штрих цветом границы, без рамки-рельефа QFrame. */
 QFrame[rule="true"] {
@@ -490,6 +588,40 @@ QMenu::right-arrow {
     width: {{metric.spacing_sm}}px;
     height: {{metric.spacing_sm}}px;
     margin-right: {{metric.spacing_md}}px;
+}
+/* Палитра блоков (каталог задачи 33) — карточками, как в браузерном макете: панель с
+   поверхностью и рамкой, заголовки категорий капсом и строки «значок + название +
+   описание». Наводка подсвечивает только доступные карточки; недоступные приглушены. */
+QWidget[blockPalette="true"] {
+    background-color: {{color.surface}};
+    border: {{metric.border_width}}px solid {{color.border}};
+    border-radius: {{metric.radius_md}}px;
+}
+QLabel[catTitle="true"] {
+    color: {{color.text_muted}};
+    font-size: 10px;
+    font-weight: {{typography.weight_medium}};
+    padding: {{metric.spacing_sm}}px {{metric.spacing_xs}}px {{metric.spacing_xs}}px;
+}
+QFrame[catItem="true"] {
+    border: none;
+    border-radius: {{metric.radius_md}}px;
+}
+QFrame[catItem="true"][interactive="true"]:hover {
+    background-color: {{color.surface_highlight}};
+}
+QFrame[catItem="true"] QLabel[ciName="true"] {
+    color: {{color.text_primary}};
+    font-size: 13px;
+    font-weight: {{typography.weight_medium}};
+}
+QFrame[catItem="true"] QLabel[ciDesc="true"] {
+    color: {{color.text_secondary}};
+    font-size: 11px;
+}
+QFrame[catItem="true"][interactive="false"] QLabel[ciName="true"],
+QFrame[catItem="true"][interactive="false"] QLabel[ciDesc="true"] {
+    color: {{color.text_muted}};
 }
 """.strip()
 
