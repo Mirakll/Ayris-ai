@@ -4,6 +4,7 @@
 # in SECTIONS for the real factory. It imports the registry from its submodule
 # directly, so the order relative to the re-exports below does not matter.
 from ayris.gui.tabs import commands as _commands  # noqa: F401
+from ayris.gui.tabs import devtools as _devtools  # noqa: F401
 from ayris.gui.tabs import general as _general  # noqa: F401
 from ayris.gui.tabs import hotkeys as _hotkeys  # noqa: F401
 from ayris.gui.tabs import overlay_settings as _overlay  # noqa: F401

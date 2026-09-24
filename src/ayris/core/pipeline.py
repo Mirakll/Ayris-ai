@@ -381,6 +381,10 @@ class _Session:
     reason: str = ""
     speech: SpeechHandleLike | None = None
     from_text: bool = False
+    #: «Сухой прогон» (DevTools, task 58): распознать и разобрать фразу, но не
+    #: выполнять действие и не рассылать ``IntentMatched``, иначе диспетчер
+    #: триггеров запустил бы команду по событию.
+    dry_run: bool = False
 
     def mark_cancelled(self, reason: str) -> SpeechHandleLike | None:
         """Flag the session and hand back the speech to stop, if any."""
@@ -718,7 +722,7 @@ class Pipeline:
         self._runner(lambda: self._run_detached(session))
         return session.session_id
 
-    def run_text(self, text: str) -> PipelineResult:
+    def run_text(self, text: str, *, execute: bool = True) -> PipelineResult:
         """Run one phrase through the pipeline without audio.
 
         The DevTools text field and most of the tests come in here. The stages
@@ -728,6 +732,12 @@ class Pipeline:
         A typed command outranks whatever was happening: it came from a window,
         so it cannot be an echo or a misheard wake word, and making the user wait
         for an answer they are already reading would be silly.
+
+        With ``execute=False`` the DevTools «сухой прогон» runs recognition and
+        matching but stops short of acting: no command runs and no
+        ``IntentMatched`` goes out. The confirmation of a dangerous action is
+        never a casualty of this — a real run still builds an unconfirmed request
+        and passes through the same task-40 gate as a spoken command.
         """
         phrase = text.strip()
         if not phrase:
@@ -737,6 +747,7 @@ class Pipeline:
                 self._cancel_locked(reason=CANCEL_REASON_BARGE_IN, publish=True)
             session = self._begin_locked(source=SOURCE_TEXT)
             session.from_text = True
+            session.dry_run = not execute
             session.text = phrase
             session.trace.stt_raw = phrase
             self._states.enter(PipelineState.UNDERSTANDING, session_id=session.session_id)
@@ -1121,6 +1132,10 @@ class Pipeline:
         slots = self._bind_slots(matcher, result)
         if slots is not None:
             trace.slots = {name: _plain(value) for name, value in slots.as_dict().items()}
+        if session.dry_run:
+            # «Сухой прогон»: показать, что совпало, но не выпускать событие, по
+            # которому диспетчер триггеров запустил бы команду.
+            return True
         self._bus.publish(
             IntentMatched(
                 intent=trace.intent,
@@ -1228,6 +1243,11 @@ class Pipeline:
             confirmed=trace.match_source in _PREFILLED_SOURCES,
         )
         trace.action = request.name
+        if session.dry_run:
+            # «Сухой прогон»: команда выбрана и записана в трейс, но не
+            # выполняется — ни встроенным раннером, ни через диспетчер.
+            trace.outcome = ExecutionResult.OK
+            return ActionOutcome(result=ExecutionResult.OK)
         runner = self._actions
         if runner is None:
             # No in-pipeline runner: a matched command has already gone out as

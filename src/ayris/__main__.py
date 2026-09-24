@@ -244,9 +244,11 @@ def _run_application(options: CliOptions) -> int:
     from PySide6.QtWidgets import QApplication
 
     from ayris.actions.timers import MissedPolicy, TimerScheduler, set_active_scheduler
+    from ayris.core.models import AuditEntry
     from ayris.core.pipeline_app import install_pipeline
     from ayris.gui.main_window import MainWindow, ShowWindowNativeEventFilter
     from ayris.gui.overlay import ActiveTimer as OverlayTimer
+    from ayris.gui.tabs.devtools import DevToolsServices, set_active_devtools_services
     from ayris.gui.theme import ThemeManager
     from ayris.gui.tray import TrayController
     from ayris.gui.widgets import set_active_worker_control
@@ -292,7 +294,7 @@ def _run_application(options: CliOptions) -> int:
     with ayris:
         from ayris.triggers import install_triggers
 
-        install_triggers(ayris)
+        dispatcher = install_triggers(ayris)
         bridge = _QtBridge(ayris)
 
         # Workers come up on their own background thread (start is blocking by
@@ -324,6 +326,46 @@ def _run_application(options: CliOptions) -> int:
                 name="ayris-text-command",
                 daemon=True,
             ).start()
+
+        # The DevTools tab reads its live objects through a module seam, so the
+        # settings window can keep building it through the plain factory. The REPL
+        # namespace is the running application; the audit callback writes every
+        # submission to the security journal unconditionally, and is_session_active
+        # lets the worker buttons warn before they cut a live session short.
+        def audit_repl(source: str) -> None:
+            ayris.repositories.audit.add(
+                AuditEntry(command_name="devtools.repl", params={"code": source})
+            )
+
+        engine = dispatcher._engine
+        set_active_devtools_services(
+            DevToolsServices(
+                pipeline=pipeline,
+                worker_control=worker_manager,
+                repl_namespace={
+                    "app": ayris,
+                    "config": ayris.config,
+                    "settings": ayris.settings,
+                    "bus": ayris.bus,
+                    "repositories": ayris.repositories,
+                    "state": ayris.state,
+                    "pipeline": pipeline,
+                    "dispatcher": dispatcher,
+                    "engine": engine,
+                    "registry": engine.registry,
+                    "workers": worker_manager,
+                },
+                audit=audit_repl,
+                is_session_active=lambda: pipeline.busy,
+            )
+        )
+        ayris.add_component(
+            Component(
+                name="devtools_services",
+                stage=LifecycleStage.GUI,
+                stop=lambda: set_active_devtools_services(None),
+            )
+        )
 
         timers_cfg = ayris.settings.timers
         scheduler = TimerScheduler(
