@@ -35,7 +35,11 @@ __all__ = [
     "ConfigError",
     "DatabaseError",
     "HotkeyError",
+    "LlmAuthError",
+    "LlmCancelledError",
+    "LlmContextOverflowError",
     "LlmError",
+    "LlmQuotaError",
     "MacroError",
     "ModelError",
     "ParamProblem",
@@ -141,6 +145,53 @@ class LlmError(AyrisError):
     """LLM provider is unreachable, rejected the request or returned garbage."""
 
     default_user_message = "Языковая модель недоступна."
+
+
+class LlmAuthError(LlmError):
+    """Provider rejected the API key (HTTP 401/403).
+
+    The key itself is never carried here — only the provider name — so the
+    message is safe to log and to show. The user fixes it by re-entering the key
+    in the «ИИ» settings, which is exactly what the Russian text says.
+    """
+
+    default_user_message = (
+        "Ключ доступа к языковой модели не принят. Проверьте ключ в настройках, в разделе «ИИ»."
+    )
+
+
+class LlmQuotaError(LlmError):
+    """Provider refused the request for quota/rate reasons (HTTP 429).
+
+    Raised after the retry budget for 429 is spent, so by the time the user sees
+    it the request has already been retried with backoff and still failed.
+    """
+
+    default_user_message = (
+        "Превышен лимит запросов или исчерпана квота языковой модели. Повторите позже."
+    )
+
+
+class LlmContextOverflowError(LlmError):
+    """The request exceeded the model's context window.
+
+    Distinguished from a generic bad request because the caller can react —
+    trim the history and retry — instead of only surfacing the failure.
+    """
+
+    default_user_message = (
+        "Слишком длинный запрос для языковой модели. Сократите историю или сообщение."
+    )
+
+
+class LlmCancelledError(LlmError):
+    """Generation was cancelled mid-stream by the user.
+
+    Recoverable and expected: the connection is closed, any spoken output is
+    silenced, and nothing about it is an error the user needs to act on.
+    """
+
+    default_user_message = "Ответ языковой модели отменён."
 
 
 class ModelError(AyrisError):

@@ -81,6 +81,8 @@ __all__ = [
     "Handler",
     "HotkeyTriggered",
     "IntentMatched",
+    "LlmSentenceReady",
+    "LlmUsageReported",
     "LogLine",
     "MacroBlockFinished",
     "MacroCancelled",
@@ -449,6 +451,51 @@ class TtsFinished(Event):
     def interrupted(self) -> bool:
         """Whether «Айрис, стоп» - or anything else - cut this phrase short."""
         return self.reason == TTS_REASON_CANCELLED
+
+
+@dataclass(frozen=True, slots=True)
+class LlmSentenceReady(Event):
+    """One finished sentence assembled from the LLM's token stream.
+
+    Published while the model is still generating, not after: this is the event
+    that lets TTS start speaking the first sentence before the answer is
+    complete, which is the whole reason the LLM path streams at all.
+
+    ``index`` counts sentences within one request from zero, so a consumer can
+    tell order and detect gaps; ``final`` marks the last sentence of the answer,
+    which is the tail flushed at stream end.
+    """
+
+    text: str
+    index: int = 0
+    final: bool = False
+    engine: str = ""
+    request_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class LlmUsageReported(Event):
+    """Token counts and estimated cost for one finished LLM request.
+
+    Emitted once, after generation ends. ``cost_usd`` is a best-effort estimate
+    from a local price table — the token counts are authoritative when the
+    provider returned them and heuristic otherwise, which ``estimated`` records.
+    The DevTools log shows model + tokens + cost from this event.
+    """
+
+    provider: str
+    model: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+    session_cost_usd: float = 0.0
+    estimated: bool = False
+    request_id: str = ""
+
+    @property
+    def total_tokens(self) -> int:
+        """Prompt plus completion, the figure shown next to the model name."""
+        return self.prompt_tokens + self.completion_tokens
 
 
 @dataclass(frozen=True, slots=True)

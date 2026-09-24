@@ -15,28 +15,44 @@ ever waits for, and «отмена» has to reach it.
 
 Messages are frozen dataclasses rather than dicts so mypy checks the role at the
 call site; :meth:`LlmMessage.as_payload` produces the dict the wire wants.
+
+Two answer shapes live here. ``complete()`` returns the whole :class:`LlmResponse`
+at once and is what the pipeline calls today. ``stream()`` yields
+:class:`LlmDelta` fragments as they arrive — text, tool-call pieces, a usage
+report, a terminal done marker — and is what lets TTS start speaking the first
+sentence before the model has finished. A provider implements one and gets the
+other free: the base ``stream()`` wraps ``complete()`` and the cloud clients of
+task 61 wrap ``complete()`` around a real ``stream()``, so callers pick the shape
+they need and no provider has to write both.
 """
 
 from __future__ import annotations
 
+import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, ClassVar, Final, Self
+from typing import Any, ClassVar, Final, Self, TypeAlias
 
 from ayris.core.models import JsonObject
 
 __all__ = [
     "NOT_CONFIGURED_MESSAGE",
+    "CredentialCheck",
     "FinishReason",
     "LlmClient",
+    "LlmDelta",
+    "LlmDoneDelta",
     "LlmMessage",
     "LlmResponse",
     "LlmRole",
+    "LlmTextDelta",
     "LlmTool",
     "LlmToolCall",
+    "LlmToolCallDelta",
     "LlmUsage",
+    "LlmUsageDelta",
     "NullLlmClient",
 ]
 
@@ -184,6 +200,90 @@ class LlmResponse:
         return self.finish_reason is FinishReason.CANCELLED
 
 
+@dataclass(frozen=True, slots=True)
+class LlmTextDelta:
+    """A fragment of the answer's text, in the order it was generated."""
+
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class LlmToolCallDelta:
+    """A fragment of a tool call the model is assembling.
+
+    Providers stream tool calls the same way they stream text — a bit at a time —
+    so ``arguments`` here is a raw JSON *fragment*, not decoded and not
+    necessarily complete on its own. ``index`` groups fragments of the same call
+    when the model builds several at once; the assembler concatenates by index
+    and decodes once the run finishes.
+    """
+
+    index: int = 0
+    call_id: str = ""
+    name: str = ""
+    arguments: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class LlmUsageDelta:
+    """Token counts, usually arriving once near the end of the stream."""
+
+    usage: LlmUsage
+
+
+@dataclass(frozen=True, slots=True)
+class LlmDoneDelta:
+    """The stream ended; ``finish_reason`` says why.
+
+    Exactly one of these terminates every stream, including a cancelled or failed
+    one, so a consumer can flush its sentence buffer and report usage without
+    guessing whether more is coming.
+    """
+
+    finish_reason: FinishReason = FinishReason.STOP
+
+
+#: One piece of a streamed answer. A stream is a sequence of these ending in
+#: exactly one :class:`LlmDoneDelta`.
+LlmDelta: TypeAlias = LlmTextDelta | LlmToolCallDelta | LlmUsageDelta | LlmDoneDelta
+
+
+@dataclass(frozen=True, slots=True)
+class CredentialCheck:
+    """The result of :meth:`LlmClient.check_credentials`.
+
+    ``ok`` is the only field the caller must read; ``detail`` is a short Russian
+    explanation for the settings dialog when it is ``False``, and ``models`` is
+    whatever the check happened to learn, so a successful check can populate the
+    model picker without a second round trip.
+    """
+
+    ok: bool
+    detail: str = ""
+    models: tuple[str, ...] = ()
+
+
+def _response_to_deltas(response: LlmResponse) -> Iterator[LlmDelta]:
+    """Replay a finished :class:`LlmResponse` as the stream it could have been.
+
+    The base :meth:`LlmClient.stream` uses this so a provider that only wrote
+    ``complete()`` still satisfies the streaming contract — one text chunk, the
+    tool calls, a usage report, then the terminal marker.
+    """
+    if response.text:
+        yield LlmTextDelta(text=response.text)
+    for index, call in enumerate(response.tool_calls):
+        yield LlmToolCallDelta(
+            index=index,
+            call_id=call.call_id,
+            name=call.name,
+            arguments=json.dumps(call.arguments, ensure_ascii=False),
+        )
+    if response.usage.total_tokens:
+        yield LlmUsageDelta(usage=response.usage)
+    yield LlmDoneDelta(finish_reason=response.finish_reason)
+
+
 class LlmClient(ABC):
     """What every provider implements.
 
@@ -194,6 +294,14 @@ class LlmClient(ABC):
 
     #: Value of ``ai.provider`` this client serves.
     name: ClassVar[str] = ""
+
+    #: Whether this client streams token deltas natively. ``False`` means
+    #: :meth:`stream` falls back to replaying a finished :meth:`complete`, so the
+    #: first sentence only reaches TTS once the whole answer is in.
+    supports_streaming: ClassVar[bool] = False
+
+    #: Whether this client can pass ``tools`` to the model and return tool calls.
+    supports_tools: ClassVar[bool] = False
 
     #: Whether this client can reach a model at all. ``False`` on
     #: :class:`NullLlmClient` and on a provider missing its API key, and the
@@ -232,6 +340,60 @@ class LlmClient(ABC):
             ayris.core.errors.LlmError: The provider was unreachable, refused the
                 request or returned something unparseable.
         """
+
+    def stream(
+        self,
+        messages: Sequence[LlmMessage],
+        tools: Sequence[LlmTool] = (),
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        cancel: Callable[[], bool] | None = None,
+    ) -> Iterator[LlmDelta]:
+        """Answer ``messages``, yielding the answer in pieces as it is generated.
+
+        The arguments mirror :meth:`complete`. The stream is a sequence of
+        :class:`LlmDelta` — text fragments, tool-call fragments and an optional
+        usage report — terminated by exactly one :class:`LlmDoneDelta`, whose
+        :attr:`FinishReason` is :attr:`FinishReason.CANCELLED` when ``cancel``
+        returned true. A provider polls ``cancel`` between fragments and closes
+        the connection when it flips.
+
+        The base implementation delegates to :meth:`complete` and replays the
+        finished answer, so a non-streaming provider still satisfies the
+        contract; a real streaming provider overrides this and wraps
+        :meth:`complete` around it instead.
+
+        Raises:
+            ayris.core.errors.LlmError: Same failures as :meth:`complete`.
+        """
+        response = self.complete(
+            messages,
+            tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            cancel=cancel,
+        )
+        yield from _response_to_deltas(response)
+
+    def list_models(self) -> tuple[str, ...]:
+        """The models this client can reach, best-effort and possibly empty.
+
+        A provider that can enumerate its catalogue overrides this; the default
+        returns nothing, which the settings UI shows as «список недоступен»
+        rather than an error. Any network call this makes counts as an explicit
+        user action — the UI only calls it when the user opens the picker.
+        """
+        return ()
+
+    def check_credentials(self) -> CredentialCheck:
+        """Whether the configured key actually works, without generating.
+
+        The default answers from :attr:`configured` alone and makes no request.
+        A provider overrides this to probe cheaply — a models list, a tokenizer
+        call — but only ever when the user pressed «проверить», never on start.
+        """
+        return CredentialCheck(ok=self.configured)
 
     def close(self) -> None:  # noqa: B027 - optional hook, most providers hold nothing
         """Release sockets and unload a local runtime. Safe to call twice."""
