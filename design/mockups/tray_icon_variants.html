@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Ayris — значок в трее: варианты</title>
+<style>
+:root{
+  --bg:#14121C; --panel:#1B1828; --border:#2A2540;
+  --tp:#ECE7F6; --ts:#B9B1CC; --tm:#8E86A4; --accent:#9B6DFF;
+  --font:"Segoe UI Variable","Segoe UI",Inter,system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);color:var(--tp);min-height:100vh;padding:44px 30px 90px;
+  background:
+    radial-gradient(900px 520px at 82% -8%, #241a3a 0%, transparent 60%),
+    radial-gradient(760px 520px at -5% 108%, #1a1430 0%, transparent 55%),
+    var(--bg);}
+.wrap{max-width:1200px;margin:0 auto}
+h1{font-size:25px;font-weight:700;letter-spacing:-.01em}
+.lead{color:var(--ts);margin-top:8px;font-size:14px;max-width:780px;line-height:1.6}
+.legend{display:flex;gap:18px;margin-top:16px;flex-wrap:wrap;font-size:12.5px;color:var(--ts)}
+.legend .k{display:flex;align-items:center;gap:7px}
+.legend .sw{width:11px;height:11px;border-radius:50%}
+.cards{display:grid;grid-template-columns:repeat(2,1fr);gap:26px;margin-top:34px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:16px;
+  padding:20px 20px 22px;box-shadow:0 18px 46px -18px #000a}
+.card h2{font-size:16px;font-weight:650;display:flex;align-items:baseline;gap:10px}
+.card h2 .n{color:var(--accent);font-size:13px;font-weight:700}
+.card p{color:var(--ts);font-size:12.7px;line-height:1.5;margin-top:7px;min-height:54px}
+.hero{display:flex;gap:14px;margin:14px 0 4px}
+.herobox{width:74px;height:74px;border-radius:15px;display:grid;place-items:center;
+  background:radial-gradient(circle at 50% 40%, #241d38, #14111e)}
+.tb{margin-top:14px}
+.tb .lab{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--tm);margin-bottom:7px}
+.strip{display:flex;align-items:center;gap:8px;border-radius:10px;padding:8px 12px}
+.strip.dark{background:#1f2023;border:1px solid #0b0b0d}
+.strip.light{background:#e6e6ec;border:1px solid #cfcfda}
+.sizes{display:flex;align-items:flex-end;gap:15px}
+.sizes .col{display:flex;flex-direction:column;align-items:center;gap:6px}
+.sizes .col span{font-size:10px;color:var(--tm)}
+.strip.light .sizes .col span{color:#7a7a86}
+.divv{width:1px;height:28px;margin:0 3px}
+.strip.dark .divv{background:#ffffff1c}.strip.light .divv{background:#00000018}
+.slot{display:grid;place-items:center;padding:0 1px}
+.clock{margin-left:auto;font-size:11px;line-height:1.2;text-align:right}
+.strip.dark .clock{color:#d6d6da}.strip.light .clock{color:#3a3a44}
+</style>
+</head>
+<body><div class="wrap">
+<h1>Значок в трее — варианты</h1>
+<p class="lead">Одна марка Ayris в четырёх решениях. Каждое показано так, как его увидит Windows: на тёмной и светлой панели задач, в реальных размерах 16 / 20 / 24 / 32&nbsp;px и во всех трёх состояниях. Монохромные варианты подстраивают цвет глифа под панель — цвет несёт только статус; объёмная сфера окрашена целиком.</p>
+<div class="legend" id="legend"></div>
+<div class="cards" id="cards"></div>
+</div>
+<script>
+const STATUS={
+  healthy:{mid:'#22C55E',light:'#86EFAC',dark:'#15803D',label:'В норме'},
+  warning:{mid:'#F59E0B',light:'#FCD34D',dark:'#B45309',label:'Внимание'},
+  paused:{mid:'#9CA3AF',light:'#D1D5DB',dark:'#4B5563',label:'Пауза'},
+};
+const ORDER=['healthy','warning','paused'];
+let uid=0;
+function orbit(s,glyph,bg){
+  const st=STATUS[s].mid;
+  return `<circle cx="16" cy="16" r="9" fill="none" stroke="${glyph}" stroke-width="2.1"/>`+
+    `<circle cx="22.4" cy="9.6" r="4.4" fill="${bg}"/>`+
+    `<circle cx="22.4" cy="9.6" r="3.3" fill="${st}"/>`;
+}
+function orb(s,glyph,bg){
+  const c=STATUS[s], id='g'+(uid++);
+  return `<defs><radialGradient id="${id}" cx="34%" cy="30%" r="80%">`+
+    `<stop offset="0%" stop-color="${c.light}"/>`+
+    `<stop offset="55%" stop-color="${c.mid}"/>`+
+    `<stop offset="100%" stop-color="${c.dark}"/></radialGradient></defs>`+
+    `<circle cx="16" cy="16" r="11" fill="url(#${id})"/>`+
+    `<circle cx="16" cy="16" r="11" fill="none" stroke="${c.dark}" stroke-width="0.7" opacity="0.55"/>`+
+    `<ellipse cx="11.8" cy="10.4" rx="3.6" ry="2.2" fill="#fff" opacity="0.42"/>`;
+}
+function pulse(s,glyph,bg){
+  const st=STATUS[s].mid;
+  return `<circle cx="16" cy="16" r="3.3" fill="${st}"/>`+
+    `<circle cx="16" cy="16" r="6.8" fill="none" stroke="${glyph}" stroke-width="1.8" opacity="0.82"/>`+
+    `<circle cx="16" cy="16" r="10.4" fill="none" stroke="${glyph}" stroke-width="1.8" opacity="0.36"/>`;
+}
+function voice(s,glyph,bg){
+  const st=STATUS[s].mid;
+  const bar=(x,y,h)=>`<rect x="${x}" y="${y}" width="2.5" height="${h}" rx="1.25" fill="${st}"/>`;
+  return `<circle cx="16" cy="16" r="10.6" fill="none" stroke="${glyph}" stroke-width="1.8" opacity="0.9"/>`+
+    bar(10.6,13,6)+bar(14.75,9.5,13)+bar(18.9,11.6,8.8);
+}
+const VARIANTS=[
+  {n:'01',t:'Орбита',fn:orbit,d:'Кольцо-сфера и «спутник» — бусина статуса на орбите. Узнаваемая марка, статус читается даже в 16&nbsp;px. Глиф монохромный, подстраивается под панель.'},
+  {n:'02',t:'Объёмная сфера',fn:orb,d:'Эволюция нынешней точки: та же сфера, но с бликом и объёмом, окрашена целиком по статусу. Никаких линий — мягкий стеклянный шар.'},
+  {n:'03',t:'Импульс',fn:pulse,d:'Точка статуса и расходящиеся волны — «слушаю». Живой, ассистентский характер; центр несёт цвет, волны монохромны.'},
+  {n:'04',t:'Голос',fn:voice,d:'Эквалайзер внутри сферы — самый прямой знак голосового помощника. Столбики несут цвет статуса, кольцо подстраивается под панель.'},
+];
+const TASKBARS=[{cls:'dark',glyph:'#EDEDED',bg:'#1f2023'},{cls:'light',glyph:'#20222A',bg:'#e6e6ec'}];
+const SIZES=[16,20,24,32];
+function svg(v,s,tb,size){
+  return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg" style="display:block">${v.fn(s,tb.glyph,tb.bg)}</svg>`;
+}
+const HERO={glyph:'#EDEDED',bg:'#14111e'};
+document.getElementById('legend').innerHTML =
+  ORDER.map(k=>`<div class="k"><span class="sw" style="background:${STATUS[k].mid}"></span>${STATUS[k].label}</div>`).join('')+
+  `<div class="k" style="color:var(--tm)">16 / 20 / 24 / 32&nbsp;px — реальные размеры значка</div>`;
+
+function strip(v,tb,lab){
+  const ladder=SIZES.map(sz=>`<div class="col">${svg(v,'healthy',tb,sz)}<span>${sz}</span></div>`).join('');
+  const states=ORDER.map(s=>`<div class="slot">${svg(v,s,tb,20)}</div>`).join('');
+  return `<div class="tb"><div class="lab">${lab}</div><div class="strip ${tb.cls}">`+
+    `<div class="sizes">${ladder}</div><div class="divv"></div>${states}`+
+    `<div class="clock">15:24<br>24.09.2026</div></div></div>`;
+}
+document.getElementById('cards').innerHTML = VARIANTS.map(v=>{
+  const hero=ORDER.map(s=>`<div class="herobox">${svg(v,s,HERO,54)}</div>`).join('');
+  return `<div class="card"><h2><span class="n">${v.n}</span>${v.t}</h2><p>${v.d}</p>`+
+    `<div class="hero">${hero}</div>`+
+    strip(v,TASKBARS[0],'Тёмная панель задач')+
+    strip(v,TASKBARS[1],'Светлая панель задач')+
+    `</div>`;
+}).join('');
+</script>
+</body></html>

@@ -6,10 +6,9 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from typing import Final
 
-from PySide6.QtCore import QObject, Qt
+from PySide6.QtCore import QObject, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QSystemTrayIcon
 
@@ -56,26 +55,56 @@ def status_for(snapshot: StatusSnapshot, *, problem: str = "") -> TrayStatus:
     return TrayStatus(TrayLevel.HEALTHY, f"Ayris — {snapshot.describe()}")
 
 
-def _icon(level: TrayLevel, *, light_panel: bool) -> QIcon:
-    assets = Path(__file__).resolve().parents[3] / "resources" / "icons"
-    variant = "light" if light_panel else "dark"
-    path = assets / f"tray_{level.value}_{variant}.png"
-    if path.is_file():
-        return QIcon(str(path))
-    colors = {
-        TrayLevel.HEALTHY: "#22C55E",
-        TrayLevel.WARNING: "#F59E0B",
-        TrayLevel.PAUSED: "#9CA3AF",
-    }
-    pixmap = QPixmap(64, 64)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
+# Voice waveform in a 32×32 viewbox: (x, top, height); every bar shares a
+# width.  A tall centre column tapering to short outer bars reads at a glance
+# as "voice" — the mark stays the same across states, only its colour changes.
+_WAVE_VIEWBOX: Final = 32.0
+_WAVE_BAR_WIDTH: Final = 2.6
+_WAVE_BARS: Final = (
+    (5.9, 12.5, 7.0),
+    (10.3, 9.5, 13.0),
+    (14.7, 6.0, 20.0),
+    (19.1, 9.5, 13.0),
+    (23.5, 12.5, 7.0),
+)
+# (dark panel, light panel) per level: the bright tint suits a dark taskbar,
+# the deeper shade keeps the same bars legible on a light one where the bright
+# green/grey would otherwise wash out.
+_WAVE_COLORS: Final = {
+    TrayLevel.HEALTHY: ("#22C55E", "#16A34A"),
+    TrayLevel.WARNING: ("#F59E0B", "#D97706"),
+    TrayLevel.PAUSED: ("#9CA3AF", "#6B7280"),
+}
+# Draw each tray size natively so Windows picks a crisp pixmap instead of
+# downscaling one — thin bars survive 16 px only when rasterised at 16 px.
+_TRAY_ICON_SIZES: Final = (16, 20, 24, 32, 48, 64)
+
+
+def _paint_waveform(painter: QPainter, size: int, color: QColor) -> None:
+    unit = size / _WAVE_VIEWBOX
+    radius = 1.3 * unit
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(QColor("#111827" if light_panel else "#F9FAFB"))
-    painter.setBrush(QColor(colors[level]))
-    painter.drawEllipse(8, 8, 48, 48)
-    painter.end()
-    return QIcon(pixmap)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    for x, top, height in _WAVE_BARS:
+        painter.drawRoundedRect(
+            QRectF(x * unit, top * unit, _WAVE_BAR_WIDTH * unit, height * unit),
+            radius,
+            radius,
+        )
+
+
+def _icon(level: TrayLevel, *, light_panel: bool) -> QIcon:
+    color = QColor(_WAVE_COLORS[level][1 if light_panel else 0])
+    icon = QIcon()
+    for size in _TRAY_ICON_SIZES:
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        _paint_waveform(painter, size, color)
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
 
 
 class TrayController(QObject):
