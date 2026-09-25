@@ -86,6 +86,16 @@ from ayris.nlu.followup import (
     resolve_followup,
 )
 from ayris.nlu.llm.base import LlmClient, LlmMessage, LlmResponse, LlmTool, NullLlmClient
+from ayris.nlu.llm.json_nlu import NluDecision, interpret, resolve_command
+from ayris.nlu.llm.memory import DialogMemory, is_reset
+from ayris.nlu.llm.prompts import build_chat_prompt, build_nlu_prompt
+from ayris.nlu.llm.tools import (
+    CommandCard,
+    RegistryGateway,
+    command_tools,
+    parse_command_tool,
+    render_catalog,
+)
 from ayris.nlu.matcher import Matcher, MatchResult
 from ayris.nlu.normalize import normalize
 from ayris.nlu.slot_types import SlotContext
@@ -93,6 +103,8 @@ from ayris.nlu.slots import SlotSet
 from ayris.utils.logger import get_logger, get_pipeline_logger
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from ayris.audio.stt.base import TranscriptResult
     from ayris.core.config import Settings
 
@@ -103,6 +115,7 @@ __all__ = [
     "CANCEL_REASON_SHUTDOWN",
     "CANCEL_REASON_TIMEOUT",
     "MAX_TRACES",
+    "MEMORY_RESET_MESSAGE",
     "NOTHING_SAID_MESSAGE",
     "NOT_HEARD_MESSAGE",
     "NOT_MATCHED_MESSAGE",
@@ -113,6 +126,7 @@ __all__ = [
     "ActionOutcome",
     "ActionRequest",
     "ActionRunner",
+    "CatalogProvider",
     "HistorySink",
     "NluMode",
     "PhraseSource",
@@ -128,6 +142,11 @@ __all__ = [
 ]
 
 _log = get_logger(__name__)
+
+#: Откуда LLM-режим NLU берёт компактный список команд профиля. Провайдер, а не
+#: готовый список: библиотека меняется на лету (правки команд, смена профиля), и
+#: собирать карточки надо в момент запроса, а не один раз при подключении.
+CatalogProvider = Callable[[], "Sequence[CommandCard]"]
 
 #: What Ayris says when recognition came back with nothing. Short on purpose: it
 #: is said after the user already waited, and «повторите, пожалуйста, я вас не
@@ -492,16 +511,23 @@ class Pipeline:
     __slots__ = (
         "_actions",
         "_bus",
+        "_catalog",
         "_clock",
         "_context",
         "_echo_guard",
+        "_fallback_chat",
+        "_gateway",
         "_history",
         "_llm",
+        "_llm_understanding",
         "_lock",
         "_matcher",
+        "_memory",
         "_mode",
         "_phrase_source",
         "_pipeline_log",
+        "_prompt_override_dir",
+        "_prompt_resources_dir",
         "_record_transcript",
         "_runner",
         "_session",
@@ -534,6 +560,11 @@ class Pipeline:
         scheduler: Scheduler | None = None,
         runner: Runner | None = None,
         clock: Callable[[], float] | None = None,
+        catalog: CatalogProvider | None = None,
+        gateway: RegistryGateway | None = None,
+        memory: DialogMemory | None = None,
+        prompt_resources_dir: Path | None = None,
+        prompt_override_dir: Path | None = None,
     ) -> None:
         self._bus = bus
         self._state = state
@@ -558,6 +589,13 @@ class Pipeline:
         self._record_transcript = True
         self._pipeline_log = False
         self._echo_guard = False
+        self._llm_understanding = False
+        self._fallback_chat = False
+        self._catalog = catalog
+        self._gateway = gateway
+        self._memory = memory
+        self._prompt_resources_dir = prompt_resources_dir
+        self._prompt_override_dir = prompt_override_dir
         if settings is not None:
             self._read_settings(settings)
         self._states = PipelineStateMachine(
@@ -582,6 +620,12 @@ class Pipeline:
         self._store_history = settings.privacy.store_history
         self._record_transcript = settings.privacy.record_transcript
         self._pipeline_log = settings.devtools.pipeline_log
+        # Гибрид расщепляется на два независимых поведения (задача 63): понимание
+        # фразы моделью в строгий JSON (llm_understanding) и свободный чат при
+        # промахе библиотеки (fallback_to_llm). Держим флаги врозь, чтобы _ask_llm
+        # выбирал ветку, а не угадывал по одному NluMode.HYBRID.
+        self._llm_understanding = settings.ai.llm_understanding
+        self._fallback_chat = settings.ai.fallback_to_llm
         # Whether the microphone is trusted while Ayris is speaking. On means an
         # activation during the answer is treated as the assistant's own voice
         # coming back through the speakers and is dropped; a hotkey or a typed
@@ -637,6 +681,18 @@ class Pipeline:
     def set_llm(self, llm: LlmClient | None) -> None:
         """Install a real model, or take it away. Task 63 calls this."""
         self._llm = llm if llm is not None else NullLlmClient()
+
+    def set_catalog(self, catalog: CatalogProvider | None) -> None:
+        """Задать поставщик карточек команд для описания их модели (задача 63)."""
+        self._catalog = catalog
+
+    def set_gateway(self, gateway: RegistryGateway | None) -> None:
+        """Задать дверь к реестру действий: мгновенные ответы и tool calling."""
+        self._gateway = gateway
+
+    def set_memory(self, memory: DialogMemory | None) -> None:
+        """Задать память диалога с моделью — окно, суммаризация, персистентность."""
+        self._memory = memory
 
     # ------------------------------------------------------------------
     # what the outside can ask
@@ -1168,20 +1224,138 @@ class Pipeline:
         return SlotContext()
 
     def _ask_llm(self, session: _Session) -> None:
-        """Hand the phrase to the model. Always raises :class:`_Stop`.
+        """Hand the phrase to the model. Returns only when a command must run.
 
-        The «гибрид» fallback and all of «только ИИ». With
-        :class:`~ayris.nlu.llm.base.NullLlmClient` this is where the «ИИ не
-        настроен» sentence comes from, which is what the task file asks both
-        model-using modes to say.
+        The one seam task 63 wires into task 18. Everything the model can decide
+        funnels through here in a fixed order: first «Айрис, забудь» clears the
+        dialog memory, then an instant answer (погода, время, курс — задача 25)
+        is claimed by an action *instead of* the model, then — only in гибрид с
+        пониманием — the model maps the phrase to a library command as strict
+        JSON, and failing all that the phrase becomes a free-chat turn.
+
+        The method returns (rather than raising :class:`_Stop`) in exactly one
+        case: the model chose one of the user's commands. Then the trace is
+        filled as if the matcher had chosen it and the command runs through the
+        same single path — the trigger dispatcher — so tasks 39/40 checks are not
+        duplicated. Every other outcome is spoken and closed here.
+        """
+        self._maybe_reset_memory(session)
+        self._instant_intercept(session)
+        if self._want_nlu(session):
+            decision = self._llm_understand(session)
+            if decision is not None and decision.resolved:
+                self._route_command(session, decision)
+                return
+            if not self._fallback_chat:
+                self._fail(session, NOT_MATCHED_MESSAGE, outcome=ExecutionResult.UNMATCHED)
+                raise _Stop(ExecutionResult.UNMATCHED)
+        self._llm_chat(session)
+
+    def _want_nlu(self, session: _Session) -> bool:
+        """Should the model parse this phrase into a command (JSON-NLU)?
+
+        Only in гибрид, only when the user turned «понимание смысла» on, only
+        with a command catalogue to choose from, and only with a model actually
+        configured — an unset model goes to chat, which says «ИИ не настроен».
+        """
+        return (
+            session.mode is NluMode.HYBRID
+            and self._llm_understanding
+            and self._catalog is not None
+            and self._llm.configured
+        )
+
+    def _maybe_reset_memory(self, session: _Session) -> None:
+        """«Айрис, забудь» wipes the dialog memory; a quiet session expires on its own."""
+        memory = self._memory
+        if memory is None:
+            return
+        memory.maybe_expire()
+        if session.dry_run or not is_reset(session.text):
+            return
+        memory.reset()
+        session.trace.intent = session.trace.intent or "memory:reset"
+        self._respond(session, MEMORY_RESET_MESSAGE)
+        self._done(session, ExecutionResult.OK)
+        raise _Stop(ExecutionResult.OK)
+
+    def _instant_intercept(self, session: _Session) -> None:
+        """Let an action answer погода/время/курс before the model ever sees it.
+
+        Routing lives in one place — the gateway's detector — so «сколько
+        времени» becomes a real reading, not something the model made up. A bare
+        question no provider claims falls through to the model untouched. Raises
+        :class:`_Stop` when an instant answer was spoken.
+        """
+        gateway = self._gateway
+        if gateway is None or session.dry_run:
+            return
+        spoken = gateway.instant_answer(session.text, request_id=session.session_id)
+        if not spoken:
+            return
+        trace = session.trace
+        trace.intent = trace.intent or "instant"
+        trace.match_source = _SOURCE_INSTANT
+        self._respond(session, spoken)
+        self._remember_answer(spoken)
+        self._done(session, ExecutionResult.OK)
+        raise _Stop(ExecutionResult.OK)
+
+    def _llm_understand(self, session: _Session) -> NluDecision | None:
+        """Ask the model to map the phrase onto a library command as strict JSON.
+
+        One clarifying retry when the answer cannot be read; after that an
+        unreadable answer is a miss, never a guessed command. Returns ``None``
+        only when there is no catalogue to choose from.
+        """
+        catalog = self._catalog
+        if catalog is None:
+            return None
+        cards = list(catalog())
+        client = self._llm
+        trace = session.trace
+        decision = NluDecision(resolved=False, reason="ответ не получен", invalid=True)
+        for attempt in range(_NLU_MAX_ATTEMPTS):
+            with trace.stage(Stage.LLM):
+                response = self._complete(
+                    session, client, kind="nlu", cards=cards, retry=attempt > 0
+                )
+            self._check(session)
+            decision = interpret(response.text, cards)
+            if not decision.invalid:
+                break
+            _log.info("NLU-ответ модели не разобран (попытка %d): %s", attempt + 1, decision.reason)
+        trace.intent = trace.intent or _SOURCE_LLM
+        trace.match_source = _SOURCE_LLM
+        return decision
+
+    def _llm_chat(self, session: _Session) -> None:
+        """Free-chat turn: the model talks, or acts via a tool. Always stops here.
+
+        With a tool-capable client the model may call one of the user's commands
+        (routed like a match, run once through the dispatcher) or a built-in
+        action (run through the registry, its reply spoken). Otherwise the answer
+        is words, and an empty answer is an honest «не поняла».
         """
         trace = session.trace
         client = self._llm
+        cards = list(self._catalog()) if self._catalog is not None else []
         with trace.stage(Stage.LLM):
-            response = self._complete(session, client)
+            response = self._complete(session, client, kind="chat", cards=cards)
         trace.intent = trace.intent or _SOURCE_LLM
         trace.match_source = _SOURCE_LLM
         self._check(session)
+        if response.has_tool_calls:
+            decision = self._command_tool(response, cards)
+            if decision is not None:
+                self._route_command(session, decision)
+                return
+            spoken = self._run_action_tools(session, response)
+            if spoken:
+                self._respond(session, spoken)
+                self._remember(session, spoken)
+                self._done(session, ExecutionResult.OK)
+                raise _Stop(ExecutionResult.OK)
         answer = response.text.strip()
         if not answer:
             self._fail(session, NOT_MATCHED_MESSAGE, outcome=ExecutionResult.UNMATCHED)
@@ -1190,16 +1364,102 @@ class Pipeline:
         if not client.configured:
             trace.error = trace.error or "llm not configured"
         self._respond(session, answer)
-        self._remember_answer(answer)
+        self._remember(session, answer)
         self._done(session, outcome)
         raise _Stop(outcome)
 
-    def _complete(self, session: _Session, client: LlmClient) -> LlmResponse:
+    def _route_command(self, session: _Session, decision: NluDecision) -> None:
+        """Wire a model-picked command into the trace like the matcher would.
+
+        The point of doing it here, identically to :meth:`_match`, is that the
+        command then leaves as one ``IntentMatched`` and runs through the single
+        path — the trigger dispatcher — where the permission and confirmation
+        checks of tasks 39/40 already live. The model gets no side door.
+        """
+        trace = session.trace
+        trace.command_id = decision.command_id
+        trace.match_source = _SOURCE_LLM
+        trace.match_score = decision.confidence
+        trace.intent = trace.intent or f"command:{decision.command_id}"
+        trace.slots = {name: _plain(value) for name, value in decision.params.items()}
+        if session.dry_run:
+            return
+        self._bus.publish(
+            IntentMatched(
+                intent=trace.intent,
+                command_id=decision.command_id,
+                confidence=decision.confidence,
+                source=_SOURCE_LLM,
+                slots=dict(trace.slots),
+                request_id=session.session_id,
+            )
+        )
+
+    def _command_tool(
+        self, response: LlmResponse, cards: Sequence[CommandCard]
+    ) -> NluDecision | None:
+        """First tool call that names one of the user's commands, as a decision."""
+        for call in response.tool_calls:
+            if parse_command_tool(call.name) is None:
+                continue
+            card = resolve_command(cards, call.name)
+            if card is None:
+                continue
+            allowed = {slot.name for slot in card.slots}
+            params = {
+                str(key): value for key, value in call.arguments.items() if str(key) in allowed
+            }
+            return NluDecision(
+                resolved=True,
+                command_id=card.command_id,
+                command_name=card.name,
+                params=params,
+                confidence=1.0,
+                reason="tool call",
+            )
+        return None
+
+    def _run_action_tools(self, session: _Session, response: LlmResponse) -> str:
+        """Run the built-in actions the model called; return what to say back.
+
+        Only through the gateway, so the same registry — with its rights and
+        dangerous-command confirmations — runs them. Command tools are skipped
+        here: those are the dispatcher's job via :meth:`_route_command`.
+        """
+        gateway = self._gateway
+        if gateway is None or session.dry_run:
+            return ""
+        parts: list[str] = []
+        for call in response.tool_calls:
+            if parse_command_tool(call.name) is not None:
+                continue
+            reply = gateway.run_action(call.name, call.arguments, request_id=session.session_id)
+            session.trace.action = session.trace.action or call.name
+            if reply.spoken:
+                parts.append(reply.spoken)
+        return " ".join(part for part in parts if part).strip()
+
+    def _remember(self, session: _Session, answer: str) -> None:
+        """Keep the answer both for «повтори» (context) and for the model (memory)."""
+        self._remember_answer(answer)
+        memory = self._memory
+        if memory is not None and answer:
+            memory.remember(session.text, answer)
+
+    def _complete(
+        self,
+        session: _Session,
+        client: LlmClient,
+        *,
+        kind: str = "chat",
+        cards: Sequence[CommandCard] = (),
+        retry: bool = False,
+    ) -> LlmResponse:
         settings = self._settings
         try:
             return client.complete(
-                self._prompt(session),
-                self._tools(),
+                self._prompt(session, kind=kind, cards=cards, retry=retry),
+                self._tools(kind=kind, cards=cards),
                 temperature=settings.ai.temperature if settings is not None else None,
                 max_tokens=settings.ai.max_tokens if settings is not None else None,
                 cancel=lambda: session.cancelled,
@@ -1209,32 +1469,83 @@ class Pipeline:
         except Exception as exc:
             raise LlmError(f"llm request failed: {exc!r}") from exc
 
-    def _prompt(self, session: _Session) -> Sequence[LlmMessage]:
+    def _prompt(
+        self,
+        session: _Session,
+        *,
+        kind: str = "chat",
+        cards: Sequence[CommandCard] = (),
+        retry: bool = False,
+    ) -> Sequence[LlmMessage]:
         settings = self._settings
         if settings is None:
             return [LlmMessage.user(session.text)]
-        prompt = (
-            settings.ai.chat_system_prompt
-            if session.mode is NluMode.AI
-            else settings.ai.nlu_system_prompt
+        if kind == "nlu":
+            return self._nlu_prompt(session, settings, cards, retry=retry)
+        return self._chat_prompt(session, settings)
+
+    def _nlu_prompt(
+        self,
+        session: _Session,
+        settings: Settings,
+        cards: Sequence[CommandCard],
+        *,
+        retry: bool,
+    ) -> list[LlmMessage]:
+        commands = render_catalog(cards, session.text)
+        system = build_nlu_prompt(
+            settings.ai.nlu_system_prompt,
+            commands,
+            resources_dir=self._prompt_resources_dir,
+            override_dir=self._prompt_override_dir,
         )
-        messages = [LlmMessage.system(prompt)] if prompt else []
-        context = self._context
-        if context is not None:
-            previous = context.snapshot().answer
-            if previous is not None:
-                messages.append(LlmMessage.assistant(previous.text))
+        messages = [LlmMessage.system(system)] if system else []
+        text = session.text
+        if retry:
+            # The first answer was unreadable. Nudge once, plainly: one JSON
+            # object, nothing around it. A second failure is an honest miss.
+            text = f"{text}\n\nОтветь строго одним JSON-объектом, без пояснений и без markdown."
+        messages.append(LlmMessage.user(text))
+        return messages
+
+    def _chat_prompt(self, session: _Session, settings: Settings) -> list[LlmMessage]:
+        system = build_chat_prompt(
+            settings.ai.chat_system_prompt,
+            resources_dir=self._prompt_resources_dir,
+            override_dir=self._prompt_override_dir,
+        )
+        memory = self._memory
+        if memory is not None and memory.summary:
+            # Fold the running summary into the single system message: Anthropic
+            # keeps ``system`` a separate field, so a second one would be dropped.
+            addon = f"Ранее в разговоре: {memory.summary}"
+            system = f"{system}\n\n{addon}" if system else addon
+        messages = [LlmMessage.system(system)] if system else []
+        if memory is not None:
+            messages.extend(memory.messages())
+        else:
+            context = self._context
+            if context is not None:
+                previous = context.snapshot().answer
+                if previous is not None:
+                    messages.append(LlmMessage.assistant(previous.text))
         messages.append(LlmMessage.user(session.text))
         return messages
 
-    def _tools(self) -> Sequence[LlmTool]:
-        """Commands offered to the model as callable tools.
+    def _tools(self, *, kind: str = "chat", cards: Sequence[CommandCard] = ()) -> Sequence[LlmTool]:
+        """What the model may call. Commands as ``cmd_<id>`` plus built-in actions.
 
-        Empty for now: turning the library into tool declarations needs the
-        parameter schemas the action registry brings in task 19, and a tool the
-        model cannot actually invoke would be worse than none.
+        Empty in NLU mode — there the contract is strict JSON, not tools — and
+        empty for a client that cannot tool-call, so the model never sees a tool
+        it has no way to invoke (that path uses «понимание» JSON instead).
         """
-        return ()
+        if kind == "nlu" or not self._llm.supports_tools:
+            return ()
+        tools: list[LlmTool] = list(command_tools(cards))
+        gateway = self._gateway
+        if gateway is not None:
+            tools.extend(gateway.action_tools())
+        return tools
 
     # -- stage: execution ----------------------------------------------
 
@@ -1480,6 +1791,9 @@ _REJECTED_REASON: Final = "too_short"
 #: What the history records for a question the user aborted.
 CANCELLED_MESSAGE: Final = "Отменено."
 
+#: Confirmation for «Айрис, забудь»: the dialog memory was cleared.
+MEMORY_RESET_MESSAGE: Final = "Хорошо, забыла разговор."
+
 _OWN_CANCEL_REASONS: Final[frozenset[str]] = frozenset(
     {CANCEL_REASON_BARGE_IN, CANCEL_REASON_TIMEOUT, CANCEL_REASON_SHUTDOWN}
 )
@@ -1501,6 +1815,13 @@ _PENDING_END_STATUSES: Final[frozenset[AnswerStatus]] = frozenset(
 _SOURCE_REPEAT: Final = "repeat"
 _SOURCE_PENDING: Final = "pending"
 _SOURCE_LLM: Final = "llm"
+
+#: ``trace.match_source`` for a phrase an instant-answer action claimed (task 25).
+_SOURCE_INSTANT: Final = "instant"
+
+#: The model's answer in NLU mode gets one clarifying retry; after that a phrase
+#: that still will not parse is an honest miss, never a guessed command.
+_NLU_MAX_ATTEMPTS: Final = 2
 
 #: …and the two of them together: an action reached this way is already confirmed.
 _PREFILLED_SOURCES: Final[frozenset[str]] = frozenset({_SOURCE_REPEAT, _SOURCE_PENDING})
