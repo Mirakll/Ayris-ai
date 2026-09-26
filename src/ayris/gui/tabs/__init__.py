@@ -3,6 +3,7 @@
 # Importing a page module runs its register_tab() call, swapping the placeholder
 # in SECTIONS for the real factory. It imports the registry from its submodule
 # directly, so the order relative to the re-exports below does not matter.
+from ayris.gui.tabs import ai as _ai  # noqa: F401
 from ayris.gui.tabs import commands as _commands  # noqa: F401
 from ayris.gui.tabs import devtools as _devtools  # noqa: F401
 from ayris.gui.tabs import general as _general  # noqa: F401
