@@ -314,6 +314,7 @@ def manager(bus: EventBus) -> Iterator[WorkerManager]:
 class TestPlatformHelpers:
     """``windows_dll``, ``apply_process_priority`` and ``parent_alive``."""
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="WinDLL только на Windows")
     def test_windows_dll_opens_and_reports_failure(self) -> None:
         """A real library opens; a missing one is swallowed into ``None``."""
         assert windows_dll("kernel32") is not None

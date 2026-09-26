@@ -10,12 +10,19 @@
 from __future__ import annotations
 
 import ctypes
+import sys
 
 import pytest
 
 from ayris.utils import monitors, winapi
 
-pytestmark = pytest.mark.unit
+# winapi/monitors — обёртки Windows API: ``ctypes.WINFUNCTYPE``/``GetLastError``/
+# ``set_last_error`` есть только в Windows, поэтому весь набор идёт под win32.
+# Покрытие меряется на windows-джобе py3.12, где эти тесты и выполняются.
+pytestmark = [
+    pytest.mark.unit,
+    pytest.mark.skipif(sys.platform != "win32", reason="обёртки Windows API"),
+]
 
 
 class FakeWinFn:

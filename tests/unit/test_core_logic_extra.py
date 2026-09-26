@@ -1106,6 +1106,7 @@ def test_guess_gender() -> None:
     assert ctx.guess_gender("Chrome") is ctx.Gender.MASCULINE
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="WinAPI только на Windows")
 def test_win_function_and_process_name() -> None:
     assert sys.platform == "win32"
     assert callable(ctx._win_function("user32", "GetForegroundWindow"))
