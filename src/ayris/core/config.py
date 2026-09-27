@@ -481,6 +481,22 @@ class TtsConfig(ConfigSection):
         le=100,
         description="Громкость озвучки в процентах",
     )
+    expressiveness: float = Field(
+        default=0.667,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Выразительность офлайн-голоса Piper: 0 — ровно и монотонно, "
+            "выше — живее интонация (noise_scale модели)"
+        ),
+        json_schema_extra=_restart(RestartScope.TTS),
+    )
+    sentence_pause: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="Пауза между фразами в секундах: 0 — без дополнительной паузы",
+    )
     output_device: str = Field(
         default="",
         description="Устройство вывода. Пусто — системное по умолчанию",

@@ -50,11 +50,14 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 import pytest
 
+from ayris.audio.tts import piper_engine
 from ayris.audio.tts.base import (
     DEFAULT_SAMPLE_RATE,
     ENGINE_ENTRYPOINTS,
+    MAX_NOISE_SCALE,
     MAX_PITCH,
     MAX_SPEED,
+    MIN_NOISE_SCALE,
     MIN_PITCH,
     MIN_SPEED,
     SAMPLE_WIDTH,
@@ -572,6 +575,25 @@ class TestTtsOptions:
         options = TtsOptions(speed=1.2, pitch=0.8, threads=3, gpu="cpu", sample_rate=48000)
         assert TtsOptions.from_params(options.to_params()) == options
 
+    def test_noise_scale_survives_the_round_trip(self):
+        """Expressiveness rides the same worker pipe as speed and pitch."""
+        options = TtsOptions(noise_scale=0.5)
+        assert TtsOptions.from_params(options.to_params()).noise_scale == pytest.approx(0.5)
+
+    def test_a_missing_noise_scale_means_the_voice_default(self):
+        """No key at all leaves Piper on the value baked into its config."""
+        assert TtsOptions.from_params({}).noise_scale is None
+        assert TtsOptions().noise_scale is None
+
+    def test_an_out_of_range_noise_scale_is_clamped(self):
+        assert TtsOptions.from_params({"noise_scale": 99.0}).noise_scale == MAX_NOISE_SCALE
+        assert TtsOptions.from_params({"noise_scale": -1.0}).noise_scale == MIN_NOISE_SCALE
+
+    def test_a_non_numeric_noise_scale_is_ignored_not_refused(self):
+        """A hand-edited config that fat-fingers the field must not crash synthesis."""
+        assert TtsOptions.from_params({"noise_scale": "громко"}).noise_scale is None
+        assert TtsOptions.from_params({"noise_scale": True}).noise_scale is None
+
 
 # ----------------------------------------------------------------------
 # the registry and the contract
@@ -806,6 +828,64 @@ class TestPiperEngine:
                 VoiceSpec(engine="piper", voice_id="нет", path=str(tmp_path / "нет.onnx")),
                 TtsOptions(),
             )
+
+    # ------------------------------------------------------- shaping the audio
+    #
+    # length_scale, the noise argument and the pitch resample are pure functions
+    # of their inputs, so they are checked here without a model - the one place
+    # «Тон» and «Выразительность» can be asserted without a 60 MB voice on disk.
+
+    def test_length_scale_inverts_the_speed_against_the_voice_base(self):
+        engine = piper_engine.PiperTtsEngine()
+        assert engine._length_scale(1.0) == pytest.approx(1.0)
+        assert engine._length_scale(2.0) == pytest.approx(0.5)
+        assert engine._length_scale(0.5) == pytest.approx(2.0)
+
+    def test_length_scale_multiplies_by_an_off_neutral_pitch(self):
+        """«Тон» pre-stretches so the later resample lands back on the tempo."""
+        engine = piper_engine.PiperTtsEngine()
+        assert engine._length_scale(1.0, pitch=1.5) == pytest.approx(1.5)
+        assert engine._length_scale(1.0, pitch=0.5) == pytest.approx(0.5)
+
+    def test_length_scale_ignores_a_pitch_within_the_epsilon(self):
+        """A 1% «Тон» nudge is inaudible; skipping it spares a resample pass."""
+        engine = piper_engine.PiperTtsEngine()
+        assert engine._length_scale(1.0, pitch=1.01) == pytest.approx(1.0)
+
+    def test_length_scale_stays_within_the_intelligible_range(self):
+        engine = piper_engine.PiperTtsEngine()
+        assert engine._length_scale(0.01) == pytest.approx(piper_engine._MAX_LENGTH_SCALE)
+        assert engine._length_scale(50.0) == pytest.approx(piper_engine._MIN_LENGTH_SCALE)
+
+    def test_synthesis_kwargs_omit_the_noise_until_it_is_set(self):
+        """A voice keeps its own noise_scale until the slider overrides it."""
+        engine = piper_engine.PiperTtsEngine()
+        assert engine._synthesis_kwargs(1.2) == {"length_scale": 1.2}
+
+    def test_synthesis_kwargs_carry_the_noise_when_set(self):
+        engine = piper_engine.PiperTtsEngine()
+        engine._options = TtsOptions(noise_scale=0.3)
+        assert engine._synthesis_kwargs(1.2) == {"length_scale": 1.2, "noise_scale": 0.3}
+
+    def test_resample_pitch_is_a_noop_at_neutral(self):
+        pcm = array("h", range(240)).tobytes()
+        assert piper_engine._resample_pitch(pcm, piper_engine.PIPER_SAMPLE_RATE, 1.0) is pcm
+
+    def test_resample_pitch_leaves_empty_audio_alone(self):
+        assert piper_engine._resample_pitch(b"", piper_engine.PIPER_SAMPLE_RATE, 1.5) == b""
+
+    def test_resample_pitch_up_shortens_the_pcm(self):
+        """Above 1.0: fewer samples, so it plays higher and shorter at the rate."""
+        pcm = array("h", range(240)).tobytes()
+        shifted = piper_engine._resample_pitch(pcm, piper_engine.PIPER_SAMPLE_RATE, 1.5)
+        assert 0 < len(shifted) < len(pcm)
+        assert len(shifted) % SAMPLE_WIDTH == 0
+
+    def test_resample_pitch_down_lengthens_the_pcm(self):
+        pcm = array("h", range(240)).tobytes()
+        shifted = piper_engine._resample_pitch(pcm, piper_engine.PIPER_SAMPLE_RATE, 0.5)
+        assert len(shifted) > len(pcm)
+        assert len(shifted) % SAMPLE_WIDTH == 0
 
     @pytest.mark.models
     def test_a_real_voice_speaks(self):  # pragma: no cover - needs a model
@@ -1609,6 +1689,7 @@ class TestRegistryWiring:
             "speed",
             "pitch",
             "volume",
+            "noise_scale",
             "output_device",
             "cache_size_mb",
             "model_idle_sec",

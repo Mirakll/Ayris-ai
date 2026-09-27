@@ -208,6 +208,43 @@ def test_engine_mode_and_sliders_reach_config(app: QApplication, manager: Config
     tab.close()
 
 
+def test_offline_piper_sliders_reach_config(app: QApplication, manager: ConfigManager) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+
+    tts._expressiveness.setValue(80)  # 0.80
+    tts._pause.setValue(250)  # 0.25 s
+
+    tab.flush_pending()
+    settings = manager.settings.voice.tts
+    assert settings.expressiveness == pytest.approx(0.80)
+    assert settings.sentence_pause == pytest.approx(0.25)
+    tab.dispose()
+    tab.close()
+
+
+def test_expressiveness_card_follows_the_engine(app: QApplication, manager: ConfigManager) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+
+    # Piper is the default engine and the only one that reads noise_scale.
+    assert not tts._expr_card.isHidden()
+
+    # Another offline engine (Silero) does not — the card goes away.
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("silero"))
+    assert tts._expr_card.isHidden()
+
+    # A cloud engine has no expressiveness knob either.
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("openai"))
+    assert tts._expr_card.isHidden()
+
+    # Back to Piper and it returns.
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("piper"))
+    assert not tts._expr_card.isHidden()
+    tab.dispose()
+    tab.close()
+
+
 def test_vad_slider_moves_the_meter_threshold(app: QApplication, manager: ConfigManager) -> None:
     tab = _make_tab(manager, ThemeManager(app))
     audio = tab._sections[3]

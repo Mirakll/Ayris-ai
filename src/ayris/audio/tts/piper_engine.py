@@ -24,12 +24,22 @@ base comes from the voice's own config rather than 1.0, because some voices ship
 tuned to a value other than one and overriding it would change how they sound as
 well as how fast.
 
-**Pitch is not supported and that is not an error.** VITS has no pitch parameter
-to set. Resampling to shift pitch would also shift duration and undo the speed
-setting; a proper implementation needs a phase vocoder, which is a NumPy
-dependency for a control most users leave at 1.0. The parameter is accepted,
-logged once when it is not neutral, and ignored - which is better than pretending
-by silently detuning the whole voice.
+**Pitch is done on the samples, not in the model.** VITS has no pitch parameter,
+so «Тон» is applied the way Silero does it: the voice is synthesized a touch
+longer (``length_scale`` multiplied by the pitch factor) and then resampled back
+by that same factor, which shifts the frequency while returning the phrase to the
+tempo the speed setting asked for. It reuses
+:class:`~ayris.audio.capture.Resampler` rather than a phase vocoder - one extra
+interpolation pass per phrase, and only when the control is off neutral - so it is
+cheap and introduces no new dependency. The trade-off is honest: this is plain
+resampling, not formant-preserving, so a large shift thins or thickens the timbre
+the way speeding a tape up does. Left at 1.0 it costs nothing and changes nothing.
+
+**Expressiveness is the model's ``noise_scale``.** VITS samples its prosody from
+noise; turning that scale down flattens the delivery, up livens it. It is a
+load-time option (:attr:`~ayris.audio.tts.base.TtsOptions.noise_scale`), so a
+change takes effect when the engine is next loaded - which is why the setting is
+``RestartScope.TTS``. ``None`` leaves the value the voice config shipped with.
 
 Every import of ``piper`` happens inside :meth:`load`. It pulls in ONNX Runtime
 and NumPy, neither of which a Silero user should pay for, and neither of which is
@@ -77,6 +87,11 @@ _MODEL_SUFFIX: Final = ".onnx"
 #: voice config with an odd base scale, not a user mistake.
 _MIN_LENGTH_SCALE: Final = 0.25
 _MAX_LENGTH_SCALE: Final = 4.0
+
+#: Pitch this close to 1.0 is treated as neutral: the resample pass costs real
+#: time on a long phrase and a 2% shift is inaudible. Mirrors Silero's own
+#: threshold so both engines round «Тон» the same way.
+_PITCH_EPSILON: Final = 0.02
 
 #: Where the ``piper`` package keeps the espeak-ng data it ships with.
 _ESPEAK_DATA_DIR_NAME: Final = "espeak-ng-data"
@@ -133,14 +148,13 @@ class PiperTtsEngine(TtsEngine):
     memory_factor: ClassVar[float] = 3.0
     native_sample_rate: ClassVar[int] = PIPER_SAMPLE_RATE
 
-    __slots__ = ("_base_length_scale", "_pitch_warned", "_use_cuda", "_voice_object")
+    __slots__ = ("_base_length_scale", "_use_cuda", "_voice_object")
 
     def __init__(self) -> None:
         super().__init__()
         self._voice_object: Any | None = None
         self._base_length_scale = 1.0
         self._use_cuda = False
-        self._pitch_warned = False
 
     @property
     def supported_languages(self) -> tuple[str, ...]:
@@ -237,7 +251,6 @@ class PiperTtsEngine(TtsEngine):
         self._voice_object = loaded
         self._use_cuda = use_cuda
         self._base_length_scale = _config_length_scale(config)
-        self._pitch_warned = False
         self._voice = VoiceSpec(
             engine=self.name,
             voice_id=voice.voice_id or model_path.stem,
@@ -308,11 +321,15 @@ class PiperTtsEngine(TtsEngine):
         if loaded is None:
             self._require_loaded()  # raises with the right message
             return
-        self._warn_about_pitch(pitch)
         rate = self.sample_rate
+        shift = abs(pitch - 1.0) > _PITCH_EPSILON
+        length_scale = self._length_scale(speed, pitch)
         try:
-            for pcm in self._vendor_stream(loaded, text, self._length_scale(speed)):
-                yield AudioChunk(pcm=pcm, sample_rate=rate, channels=1)
+            for pcm in self._vendor_stream(loaded, text, length_scale):
+                shaped = _resample_pitch(pcm, rate, pitch) if shift else pcm
+                yield AudioChunk(pcm=shaped, sample_rate=rate, channels=1)
+        except TtsError:
+            raise
         except Exception as exc:  # onnxruntime and piper-phonemize both raise
             raise TtsError(
                 f"piper: synthesis failed: {exc}",
@@ -328,6 +345,10 @@ class PiperTtsEngine(TtsEngine):
         speak both: the old one is what ships in Debian and in the frozen
         builds people already have, the new one is what ``pip install
         piper-tts`` gives today.
+
+        Expressiveness (``noise_scale``) rides only the new API - the legacy
+        stream took no such argument, so an old Piper simply keeps the voice's
+        own value there.
         """
         legacy = getattr(loaded, "synthesize_stream_raw", None)
         if legacy is not None:
@@ -344,24 +365,56 @@ class PiperTtsEngine(TtsEngine):
                     "Обновите пакет piper-tts или выберите другой движок в настройках."
                 ),
             )
-        for chunk in loaded.synthesize(text, syn_config=config_type(length_scale=length_scale)):
+        syn_config = config_type(**self._synthesis_kwargs(length_scale))
+        for chunk in loaded.synthesize(text, syn_config=syn_config):
             yield bytes(chunk.audio_int16_bytes)
 
-    def _length_scale(self, speed: float) -> float:
-        """Convert the speed multiplier to Piper's duration stretch."""
+    def _synthesis_kwargs(self, length_scale: float) -> dict[str, float]:
+        """Arguments for ``SynthesisConfig``: always the tempo, sometimes the noise.
+
+        ``noise_scale`` is passed only when the settings set it, so a voice keeps
+        the value baked into its own config until the user moves the slider.
+        """
+        kwargs: dict[str, float] = {"length_scale": length_scale}
+        noise_scale = self._options.noise_scale
+        if noise_scale is not None:
+            kwargs["noise_scale"] = noise_scale
+        return kwargs
+
+    def _length_scale(self, speed: float, pitch: float = 1.0) -> float:
+        """Convert the speed multiplier to Piper's duration stretch.
+
+        When «Тон» is off neutral the scale is multiplied by the pitch factor:
+        the phrase is synthesized proportionally longer so that resampling it by
+        that factor afterwards (which shifts pitch *and* time together) lands back
+        on the tempo the speed asked for. Clamped once, after that multiply, so an
+        extreme speed-and-pitch combination stays intelligible rather than doubling
+        past the limit.
+        """
         scale = self._base_length_scale / max(speed, 0.01)
+        if abs(pitch - 1.0) > _PITCH_EPSILON:
+            scale *= pitch
         return min(max(scale, _MIN_LENGTH_SCALE), _MAX_LENGTH_SCALE)
 
-    def _warn_about_pitch(self, pitch: float) -> None:
-        """Say once per load that pitch does nothing here."""
-        if self._pitch_warned or abs(pitch - 1.0) < 0.01:
-            return
-        self._pitch_warned = True
-        _log.info(
-            "piper: высота голоса (%.2f) не поддерживается моделью и игнорируется; "
-            "для изменения тона выберите движок Silero",
-            pitch,
-        )
+
+# ------------------------------------------------------------------- shaping
+
+
+def _resample_pitch(pcm: bytes, rate: int, factor: float) -> bytes:
+    """Shift pitch by ``factor`` by resampling and claiming the same rate.
+
+    ``factor`` above 1.0 yields fewer samples - higher and shorter when played at
+    ``rate`` - which is why :meth:`PiperTtsEngine._length_scale` lengthens the
+    synthesis by the same factor first, so the phrase comes out at its intended
+    tempo. Reuses :class:`~ayris.audio.capture.Resampler`, imported here rather
+    than at module load so a Piper user pays for it only when «Тон» is off neutral.
+    """
+    source = max(1, int(round(rate * factor)))
+    if source == rate or not pcm:
+        return pcm
+    from ayris.audio.capture import Resampler
+
+    return Resampler(source, rate).process(pcm)
 
 
 # --------------------------------------------------------------- espeak data

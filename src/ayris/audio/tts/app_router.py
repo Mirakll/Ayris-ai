@@ -25,9 +25,11 @@ goes in which slot follows from the settings:
   toggled live without a restart — the mode gates whether it is used.
 
 ``engine``/``voice``/``output_device`` are ``RestartScope.TTS``: a change to them
-takes effect on restart, so the slots are read once. Speed, pitch, volume and
-``cloud_fallback`` are live, so the ``ConfigChanged`` handler pushes them into the
-running router with ``set_params``/``set_mode``.
+takes effect on restart, so the slots are read once. ``expressiveness`` joins them
+there - it is a load-time engine option (Piper's ``noise_scale``), applied when the
+engine is next built. Speed, pitch, volume, ``sentence_pause`` and ``cloud_fallback``
+are live, so the ``ConfigChanged`` handler pushes them into the running router with
+``set_params``/``set_mode``.
 
 :func:`set_active_tts_router` / :func:`active_tts_router` are the shared handle,
 the same shape as
@@ -93,7 +95,12 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
     """
     cfg = app.settings.voice.tts
     built_engine = cfg.engine
-    params = VoiceParams(speed=cfg.speed, pitch=cfg.pitch, volume=cfg.volume)
+    params = VoiceParams(
+        speed=cfg.speed,
+        pitch=cfg.pitch,
+        volume=cfg.volume,
+        sentence_pause=cfg.sentence_pause,
+    )
     mode = mode_from_config(built_engine, cloud_fallback=cfg.cloud_fallback)
 
     cloud, local = _providers(cfg)
@@ -116,7 +123,14 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
         # actually built, so ticking cloud_fallback flips the fallback direction
         # without pretending a not-yet-loaded new engine is already in the slot.
         live = app.settings.voice.tts
-        router.set_params(VoiceParams(speed=live.speed, pitch=live.pitch, volume=live.volume))
+        router.set_params(
+            VoiceParams(
+                speed=live.speed,
+                pitch=live.pitch,
+                volume=live.volume,
+                sentence_pause=live.sentence_pause,
+            )
+        )
         router.set_mode(mode_from_config(built_engine, cloud_fallback=live.cloud_fallback))
 
     unsub_config = app.bus.subscribe(ConfigChanged, on_config, weak=False)
@@ -147,9 +161,11 @@ def _providers(cfg: TtsConfig) -> tuple[EngineProvider | None, EngineProvider | 
         cloud: EngineProvider | None = _cloud_provider(
             cfg.engine, cfg.voice, cfg.credential_ref, endpoint=cfg.endpoint, model=cfg.model
         )
-        local = _local_provider(_DEFAULT_LOCAL_ENGINE, _DEFAULT_LOCAL_VOICE)
+        local = _local_provider(
+            _DEFAULT_LOCAL_ENGINE, _DEFAULT_LOCAL_VOICE, noise_scale=cfg.expressiveness
+        )
         return cloud, local
-    local = _local_provider(cfg.engine, cfg.voice)
+    local = _local_provider(cfg.engine, cfg.voice, noise_scale=cfg.expressiveness)
     cloud = (
         _cloud_provider(
             cfg.credential_ref, "", cfg.credential_ref, endpoint=cfg.endpoint, model=cfg.model
@@ -160,12 +176,20 @@ def _providers(cfg: TtsConfig) -> tuple[EngineProvider | None, EngineProvider | 
     return cloud, local
 
 
-def _local_provider(engine_name: str, voice_id: str) -> EngineProvider:
-    """A provider that constructs and loads a local engine on first use."""
+def _local_provider(
+    engine_name: str, voice_id: str, *, noise_scale: float | None = None
+) -> EngineProvider:
+    """A provider that constructs and loads a local engine on first use.
+
+    ``noise_scale`` is the expressiveness setting; only Piper reads it, but it is
+    threaded in for every local engine so the provider does not have to special-case
+    which one it is building. ``None`` leaves the voice on its own default.
+    """
 
     def provide() -> TtsEngine:
         engine = create_engine(engine_name)
-        engine.load(_resolve_local_voice(engine_name, voice_id), TtsOptions())
+        voice = _resolve_local_voice(engine_name, voice_id)
+        engine.load(voice, TtsOptions(noise_scale=noise_scale))
         return engine
 
     return provide

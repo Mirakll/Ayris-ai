@@ -381,6 +381,7 @@ def _tts_spec(settings: Settings) -> WorkerSpec:
             "speed": tts.speed,
             "pitch": tts.pitch,
             "volume": tts.volume,
+            "noise_scale": tts.expressiveness,
             "output_device": tts.output_device,
             "cloud_fallback": tts.cloud_fallback,
             "credential_ref": tts.credential_ref,
