@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Final
 
 from PySide6.QtCore import Qt, Signal
@@ -43,6 +44,17 @@ _SCALE: Final = 100.0
 
 #: Пункты комбобокса частоты кадров: подпись → значение (Авто = потолок le=144).
 _FPS_OPTIONS: Final[tuple[tuple[str, int], ...]] = (("30", 30), ("60", 60), ("Авто", 144))
+
+#: Пункты комбобокса варианта эффекта стыковки шапок: подпись → номер (1..7).
+_DOCK_VARIANTS: Final[tuple[tuple[str, int], ...]] = (
+    ("1 — кольца", 1),
+    ("2 — искры", 2),
+    ("3 — кольца и искры", 3),
+    ("4 — волны от шва", 4),
+    ("5 — кольца и волны", 5),
+    ("6 — искры и волны", 6),
+    ("7 — всё вместе", 7),
+)
 
 #: Пресеты «экономии»: каждый выставляет связанный набор полей сферы разом. Ключи —
 #: короткие имена внутри секции ``overlay`` (без префикса), значения — числа/флаги.
@@ -257,11 +269,33 @@ class OverlayTab(SettingsTab):
         )
 
     def _build_sphere(self) -> None:
-        self._add_header("Сфера")
+        self._add_header("Аватар")
         self.preview = SpherePreview(self._theme)
         self._content.addWidget(self.preview)
         self._add_caption("Предпросмотр отражает правки сразу — переключите состояние кнопками.")
 
+        self._avatar_combo = ThemedComboBox()
+        self._avatar_combo.addItem("Сфера", "sphere")
+        self._avatar_combo.addItem("Икосаэдр", "icosa")
+        self.bind_combo(self._avatar_combo, "overlay.avatar", "Аватар")
+        self._content.addWidget(
+            SettingCard(
+                "Аватар",
+                "Что показывать в панели — нейросферу или икосаэдр. Ниже — настройки фигуры.",
+                self._avatar_combo,
+                self._theme,
+            )
+        )
+
+        # Две взаимоисключающие группы: показываем настройки выбранной фигуры.
+        self._sphere_group = self._section_group(self._build_sphere_controls)
+        self._content.addWidget(self._sphere_group)
+        self._icosa_group = self._section_group(self._build_icosa_controls)
+        self._content.addWidget(self._icosa_group)
+        self._sync_avatar_groups()
+
+    def _build_sphere_controls(self) -> None:
+        """Форма и движение нейросферы (видно при avatar == «sphere»)."""
         points = SliderField(
             self._theme,
             minimum=100,
@@ -281,7 +315,6 @@ class OverlayTab(SettingsTab):
                 self._theme,
             )
         )
-
         self._scaled_card(
             "Скорость вращения",
             "Как быстро сфера вращается вокруг оси.",
@@ -299,6 +332,81 @@ class OverlayTab(SettingsTab):
             "Интенсивность волн по поверхности во время ответа.",
             "overlay.wave_intensity",
             "Волны в «Говорю»",
+        )
+
+    def _build_icosa_controls(self) -> None:
+        """Настройки икосаэдра (видно при avatar == «icosa»). Дефолты — как в прототипе."""
+        self._percent_card(
+            "Непрозрачность фигуры",
+            "Насколько плотный икосаэдр. Меньше — прозрачнее и воздушнее.",
+            "overlay.icosa_opacity",
+            "Непрозрачность фигуры",
+        )
+        self._scaled_card(
+            "Прокрутка в «Спокойствии»",
+            "Скорость медленного вращения фигуры в покое.",
+            "overlay.icosa_calm_spin",
+            "Прокрутка в «Спокойствии»",
+        )
+        self._scaled_card(
+            "«Слушает»: повороты по горизонтали",
+            "Частота переворотов всей фигуры вокруг вертикальной оси, пока слушает.",
+            "overlay.icosa_listen_rot_h",
+            "«Слушает»: повороты по горизонтали",
+        )
+        self._scaled_card(
+            "«Слушает»: повороты по вертикали",
+            "Частота переворотов всей фигуры вокруг горизонтальной оси, пока слушает.",
+            "overlay.icosa_listen_rot_v",
+            "«Слушает»: повороты по вертикали",
+        )
+        self._scaled_card(
+            "«Думает»: повороты по горизонтали",
+            "Частота переворотов всей фигуры вокруг вертикальной оси, пока думает.",
+            "overlay.icosa_think_rot_h",
+            "«Думает»: повороты по горизонтали",
+        )
+        self._scaled_card(
+            "«Думает»: повороты по вертикали",
+            "Частота переворотов всей фигуры вокруг горизонтальной оси, пока думает.",
+            "overlay.icosa_think_rot_v",
+            "«Думает»: повороты по вертикали",
+        )
+        self._scaled_card(
+            "«Спокойствие»: проворот граней",
+            "Скорость проворота граней-«шапок» в покое (0 — выключено).",
+            "overlay.icosa_calm_twist",
+            "«Спокойствие»: проворот граней",
+        )
+        self._scaled_card(
+            "«Слушает»: проворот граней",
+            "Скорость проворота граней-«шапок», пока слушает (0 — выключено).",
+            "overlay.icosa_listen_twist",
+            "«Слушает»: проворот граней",
+        )
+        self._scaled_card(
+            "«Думает»: проворот граней",
+            "Скорость проворота граней-«шапок», пока думает.",
+            "overlay.icosa_think_twist",
+            "«Думает»: проворот граней",
+        )
+        self._scaled_card(
+            "«Говорит»: проворот граней",
+            "Скорость проворота граней-«шапок» во время ответа.",
+            "overlay.icosa_speak_twist",
+            "«Говорит»: проворот граней",
+        )
+        self._icosa_dock_combo = ThemedComboBox()
+        for label, value in _DOCK_VARIANTS:
+            self._icosa_dock_combo.addItem(label, value)
+        self.bind_combo(self._icosa_dock_combo, "overlay.icosa_dock_variant", "Эффект стыковки")
+        self._content.addWidget(
+            SettingCard(
+                "Эффект стыковки граней",
+                "Как «шапки» встают на место: кольца, искры, волны или их сочетания.",
+                self._icosa_dock_combo,
+                self._theme,
+            )
         )
 
     def _build_economy(self) -> None:
@@ -479,6 +587,42 @@ class OverlayTab(SettingsTab):
         self._bind(field, path, label, getter, setter, field.value_changed)
         self._content.addWidget(SettingCard(title, desc, field, self._theme))
 
+    def _percent_card(self, title: str, desc: str, path: str, label: str) -> None:
+        """Слайдер 10..100 % поверх float-поля 0.1..1.0 (делим/умножаем на _SCALE)."""
+        field = SliderField(self._theme, minimum=10, maximum=100, value=55, unit=" %", label=label)
+        field.slider.setSingleStep(5)
+        field.slider.setPageStep(10)
+
+        def getter() -> float:
+            return field.value() / _SCALE
+
+        def setter(value: Any) -> None:
+            field.setValue(round(float(value) * _SCALE))
+
+        self._bind(field, path, label, getter, setter, field.value_changed)
+        self._content.addWidget(SettingCard(title, desc, field, self._theme))
+
+    def _section_group(self, build: Callable[[], None]) -> QWidget:
+        """Собрать карточки в отдельный контейнер — чтобы прятать по выбору аватара."""
+        group = QWidget()
+        group.setProperty("transparent", True)
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(self._theme.metric("spacing_md"))
+        saved = self._content
+        self._content = layout
+        try:
+            build()
+        finally:
+            self._content = saved
+        return group
+
+    def _sync_avatar_groups(self) -> None:
+        """Показать группу настроек выбранной фигуры, спрятать другую."""
+        is_icosa = self._effective_overlay().avatar == "icosa"
+        self._sphere_group.setVisible(not is_icosa)
+        self._icosa_group.setVisible(is_icosa)
+
     # -- live application ---------------------------------------------------
 
     def _pending_changed(self) -> None:
@@ -486,6 +630,8 @@ class OverlayTab(SettingsTab):
         preview = getattr(self, "preview", None)
         if preview is not None:
             preview.apply_overlay(self._effective_overlay())
+        if getattr(self, "_sphere_group", None) is not None:
+            self._sync_avatar_groups()
 
     def _effective_overlay(self) -> OverlayConfig:
         """Секция ``overlay`` с наложенными «ожидающими» правками — без валидации.

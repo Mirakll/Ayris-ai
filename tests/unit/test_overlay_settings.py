@@ -18,10 +18,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from PySide6.QtWidgets import QApplication, QWidget
 
 from ayris.core.config import ConfigManager, OverlayConfig
 from ayris.gui.dashboard.dialog_view import DialogView
+from ayris.gui.dashboard.sphere_host import apply_overlay_appearance
 from ayris.gui.overlay.dialog_log import DialogKind
 from ayris.gui.tabs import tab_spec
 from ayris.gui.tabs.overlay_settings import OVERLAY_PRESETS, OverlayTab
@@ -362,3 +364,187 @@ def test_dialog_view_applies_log_line_cap(app: QApplication, theme: ThemeManager
         assert view._center.currentWidget() is view.log
     finally:
         view.close()
+
+
+# --- аватар и настройки икосаэдра (задача редизайна) -----------------------
+
+
+def test_icosa_field_defaults_match_prototype() -> None:
+    overlay = OverlayConfig()
+    assert overlay.avatar == "sphere"
+    assert overlay.icosa_opacity == pytest.approx(0.55)
+    assert overlay.icosa_calm_spin == pytest.approx(1.0)
+    assert overlay.icosa_listen_rot_h == pytest.approx(1.0)
+    assert overlay.icosa_listen_rot_v == pytest.approx(1.0)
+    assert overlay.icosa_think_rot_h == pytest.approx(1.0)
+    assert overlay.icosa_think_rot_v == pytest.approx(1.0)
+    # Проворот шапок точ-в-точ выключен в покое и «Слушает», включён иначе.
+    assert overlay.icosa_calm_twist == pytest.approx(0.0)
+    assert overlay.icosa_listen_twist == pytest.approx(0.0)
+    assert overlay.icosa_think_twist == pytest.approx(1.0)
+    assert overlay.icosa_speak_twist == pytest.approx(1.0)
+    assert overlay.icosa_dock_variant == 1
+
+
+def test_avatar_validator_normalises_and_rejects() -> None:
+    assert OverlayConfig(avatar="sphere").avatar == "sphere"
+    assert OverlayConfig(avatar="icosa").avatar == "icosa"
+    assert OverlayConfig(avatar="  ICOSA  ").avatar == "icosa"
+    with pytest.raises(ValidationError):
+        OverlayConfig(avatar="cube")
+
+
+def test_old_config_without_icosa_fields_gets_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(_OLD_TOML, encoding="utf-8")
+    manager = ConfigManager(path)
+    manager.load()
+    overlay = manager.settings.overlay
+    # Старый файл не знает про фигуру — поля берут дефолты, ошибок нет.
+    assert overlay.avatar == "sphere"
+    assert overlay.icosa_dock_variant == 1
+    assert overlay.icosa_think_twist == pytest.approx(1.0)
+
+
+class _RecordingSphere:
+    """Фейковый :class:`SphereLike`: только пишет, что ему велели."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+
+    @property
+    def state(self) -> SphereState:
+        return SphereState.IDLE
+
+    def set_state(self, state: object) -> None:
+        self.calls.append(("set_state", state))
+
+    def set_level(self, level: float) -> None:
+        self.calls.append(("set_level", level))
+
+    def set_point_count(self, count: int) -> None:
+        self.calls.append(("set_point_count", count))
+
+    def set_target_fps(self, target_fps: int) -> None:
+        self.calls.append(("set_target_fps", target_fps))
+
+    def set_animations_enabled(self, enabled: bool) -> None:
+        self.calls.append(("set_animations_enabled", enabled))
+
+    def set_stop_when_hidden(self, stop: bool) -> None:
+        self.calls.append(("set_stop_when_hidden", stop))
+
+    def set_profile(self, profile: object) -> None:
+        self.calls.append(("set_profile", profile))
+
+    def set_accent(self, colour: object) -> None:
+        self.calls.append(("set_accent", colour))
+
+    def set_avatar(self, kind: str) -> None:
+        self.calls.append(("set_avatar", kind))
+
+    def set_icosa_config(self, cfg: dict[str, object]) -> None:
+        self.calls.append(("set_icosa_config", cfg))
+
+
+def test_apply_overlay_sets_sphere_avatar_and_skips_icosa_config() -> None:
+    sphere = _RecordingSphere()
+    apply_overlay_appearance(sphere, OverlayConfig())
+    names = [name for name, _ in sphere.calls]
+    assert names[0] == "set_avatar"
+    assert ("set_avatar", "sphere") in sphere.calls
+    assert "set_icosa_config" not in names
+
+
+def test_apply_overlay_pushes_icosa_config_when_icosa() -> None:
+    sphere = _RecordingSphere()
+    overlay = OverlayConfig(
+        avatar="icosa",
+        icosa_opacity=0.5,
+        icosa_calm_spin=2.0,
+        icosa_listen_rot_h=1.5,
+        icosa_listen_rot_v=0.5,
+        icosa_think_rot_h=1.25,
+        icosa_think_rot_v=0.75,
+        icosa_calm_twist=0.3,
+        icosa_listen_twist=0.6,
+        icosa_think_twist=1.2,
+        icosa_speak_twist=1.4,
+        icosa_dock_variant=5,
+    )
+    apply_overlay_appearance(sphere, overlay)
+    assert sphere.calls[0] == ("set_avatar", "icosa")
+    cfg = next(payload for name, payload in sphere.calls if name == "set_icosa_config")
+    assert cfg == {
+        "opacity": 0.5,
+        "calmSpin": 2.0,
+        "flip": {
+            "listen": {"h": 1.5, "v": 0.5},
+            "think": {"h": 1.25, "v": 0.75},
+        },
+        "twist": {"calm": 0.3, "listen": 0.6, "think": 1.2, "speak": 1.4},
+        "dockVariant": 5,
+    }
+
+
+def test_avatar_selector_toggles_setting_groups(
+    app: QApplication, manager: ConfigManager, theme: ThemeManager
+) -> None:
+    tab = _tab(manager, theme)
+    try:
+        # По умолчанию — сфера: её группа видна, группа икосаэдра спрятана.
+        assert tab._sphere_group.isVisibleTo(tab) is True
+        assert tab._icosa_group.isVisibleTo(tab) is False
+
+        combo = tab._bindings["overlay.avatar"].widget
+        combo.setCurrentIndex(combo.findData("icosa"))
+        assert tab._sphere_group.isVisibleTo(tab) is False
+        assert tab._icosa_group.isVisibleTo(tab) is True
+
+        combo.setCurrentIndex(combo.findData("sphere"))
+        assert tab._sphere_group.isVisibleTo(tab) is True
+        assert tab._icosa_group.isVisibleTo(tab) is False
+    finally:
+        tab.dispose()
+        tab.close()
+
+
+def test_avatar_and_icosa_fields_round_trip(
+    app: QApplication, manager: ConfigManager, theme: ThemeManager
+) -> None:
+    tab = _tab(manager, theme)
+    try:
+        combo = tab._bindings["overlay.avatar"].widget
+        combo.setCurrentIndex(combo.findData("icosa"))
+        tab._bindings["overlay.icosa_calm_spin"].widget.setValue(200)  # → 2.0
+        tab._bindings["overlay.icosa_opacity"].widget.setValue(80)  # → 0.8
+        dock = tab._bindings["overlay.icosa_dock_variant"].widget
+        dock.setCurrentIndex(dock.findData(5))
+        tab.flush_pending()
+
+        overlay = manager.settings.overlay
+        assert overlay.avatar == "icosa"
+        assert overlay.icosa_calm_spin == pytest.approx(2.0)
+        assert overlay.icosa_opacity == pytest.approx(0.8)
+        assert overlay.icosa_dock_variant == 5
+    finally:
+        tab.dispose()
+        tab.close()
+
+
+def test_effective_overlay_reflects_pending_avatar_and_icosa(
+    app: QApplication, manager: ConfigManager, theme: ThemeManager
+) -> None:
+    tab = _tab(manager, theme)
+    try:
+        combo = tab._bindings["overlay.avatar"].widget
+        combo.setCurrentIndex(combo.findData("icosa"))
+        tab._bindings["overlay.icosa_speak_twist"].widget.setValue(250)  # → 2.5
+        # Ещё не сохранено, но «действующий» облик уже отражает правку.
+        assert manager.settings.overlay.avatar == "sphere"
+        eff = tab._effective_overlay()
+        assert eff.avatar == "icosa"
+        assert eff.icosa_speak_twist == pytest.approx(2.5)
+    finally:
+        tab.dispose()
+        tab.close()

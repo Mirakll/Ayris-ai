@@ -48,14 +48,22 @@ class SphereLike(Protocol):
 
     def set_accent(self, colour: str | None) -> None: ...
 
+    # Avatar switch + icosahedron-only knobs («Панель / Сфера», режим icosa).
+    def set_avatar(self, kind: str) -> None: ...
+
+    def set_icosa_config(self, cfg: dict[str, object]) -> None: ...
+
 
 def apply_overlay_appearance(sphere: SphereLike, overlay: OverlayConfig) -> None:
     """Push every live appearance/economy setting from ``overlay`` onto a sphere.
 
     Used by the dashboard's showcase sphere and by the settings preview so a
-    single mapping keeps them identical. Order is deliberate: shape/economy
-    first, then the motion profile, so a paused sphere still repaints once.
+    single mapping keeps them identical. Order is deliberate: the avatar is
+    switched first, then shape/economy, then the motion profile, so a paused
+    figure still repaints once; icosahedron-only knobs go last and only when the
+    icosahedron is the active avatar.
     """
+    sphere.set_avatar(overlay.avatar)
     sphere.set_point_count(overlay.sphere_points)
     sphere.set_target_fps(overlay.target_fps)
     sphere.set_stop_when_hidden(overlay.stop_when_hidden)
@@ -72,6 +80,24 @@ def apply_overlay_appearance(sphere: SphereLike, overlay: OverlayConfig) -> None
             error_flash=overlay.error_flash,
         )
     )
+    if overlay.avatar == "icosa":
+        sphere.set_icosa_config(
+            {
+                "opacity": overlay.icosa_opacity,
+                "calmSpin": overlay.icosa_calm_spin,
+                "flip": {
+                    "listen": {"h": overlay.icosa_listen_rot_h, "v": overlay.icosa_listen_rot_v},
+                    "think": {"h": overlay.icosa_think_rot_h, "v": overlay.icosa_think_rot_v},
+                },
+                "twist": {
+                    "calm": overlay.icosa_calm_twist,
+                    "listen": overlay.icosa_listen_twist,
+                    "think": overlay.icosa_think_twist,
+                    "speak": overlay.icosa_speak_twist,
+                },
+                "dockVariant": overlay.icosa_dock_variant,
+            }
+        )
 
 
 def make_sphere(theme: ThemeManager, parent: QWidget | None = None) -> QWidget:

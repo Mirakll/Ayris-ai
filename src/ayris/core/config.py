@@ -1670,6 +1670,11 @@ class OverlayConfig(ConfigSection):
 
     # -- запуск ------------------------------------------------------------
     enabled: bool = Field(default=True, description="Показывать окно при запуске")
+    # -- выбор аватара ------------------------------------------------------
+    avatar: str = Field(
+        default="sphere",
+        description="Аватар Айрис: «sphere» — нейросфера, «icosa» — икосаэдр",
+    )
     # -- форма и движение сферы -------------------------------------------
     sphere_points: int = Field(
         default=600,
@@ -1694,6 +1699,73 @@ class OverlayConfig(ConfigSection):
         ge=0.0,
         le=3.0,
         description="Интенсивность волн в режиме «Говорю» (1.0 — обычная)",
+    )
+    # -- фигура-икосаэдр (действуют, когда avatar == "icosa") --------------
+    icosa_opacity: float = Field(
+        default=0.55,
+        ge=0.1,
+        le=1.0,
+        description="Непрозрачность икосаэдра (0.55 — как в прототипе)",
+    )
+    icosa_calm_spin: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="Скорость прокрутки икосаэдра в «Спокойствии» (0 — стоп)",
+    )
+    icosa_listen_rot_h: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="«Слушает»: частота поворотов тела по горизонтали (ось Y)",
+    )
+    icosa_listen_rot_v: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="«Слушает»: частота поворотов тела по вертикали (ось X)",
+    )
+    icosa_think_rot_h: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="«Думает»: частота поворотов тела по горизонтали (ось Y)",
+    )
+    icosa_think_rot_v: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="«Думает»: частота поворотов тела по вертикали (ось X)",
+    )
+    icosa_calm_twist: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=3.0,
+        description="«Спокойствие»: скорость проворота граней-шапок (0 — выкл.)",
+    )
+    icosa_listen_twist: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=3.0,
+        description="«Слушает»: скорость проворота граней-шапок (0 — выкл.)",
+    )
+    icosa_think_twist: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="«Думает»: скорость проворота граней-шапок",
+    )
+    icosa_speak_twist: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=3.0,
+        description="«Говорит»: скорость проворота граней-шапок",
+    )
+    icosa_dock_variant: int = Field(
+        default=1,
+        ge=1,
+        le=7,
+        description="Вариант эффекта стыковки шапок (1..7)",
     )
     # -- экономия анимаций -------------------------------------------------
     animations: bool = Field(default=True, description="Анимации сферы (общий тумблер)")
@@ -1752,6 +1824,15 @@ class OverlayConfig(ConfigSection):
         hexed = text[1:]
         if text[0] != "#" or len(hexed) != 6 or any(c not in "0123456789abcdef" for c in hexed):
             raise ValueError("цвет должен быть в формате #RRGGBB")
+        return text
+
+    @field_validator("avatar")
+    @classmethod
+    def _check_avatar(cls, value: str) -> str:
+        """Аватар — только «sphere» или «icosa»."""
+        text = value.strip().lower()
+        if text not in ("sphere", "icosa"):
+            raise ValueError("avatar должен быть «sphere» или «icosa»")
         return text
 
 

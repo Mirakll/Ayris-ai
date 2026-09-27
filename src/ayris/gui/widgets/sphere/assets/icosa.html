@@ -1,0 +1,1219 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Ayris — Icosahedron avatar (prototype)</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: transparent; }
+  body { font-family: "Segoe UI", system-ui, sans-serif; color: #cdbce8; }
+  /* прозрачный фон под панель приложения; лёгкое фиолетовое свечение по углам */
+  #scene {
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(120% 120% at 18% 12%, rgba(58,17,96,0.30) 0%, rgba(58,17,96,0) 45%),
+      radial-gradient(120% 120% at 82% 88%, rgba(40,20,80,0.30) 0%, rgba(40,20,80,0) 48%);
+  }
+  canvas { display: block; }
+  #panel {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
+    display: none; gap: 8px; align-items: center; padding: 8px 10px;   /* скрыта по умолчанию (паритет со sphere.html); setPanel включает */
+    border-radius: 16px; background: rgba(20, 10, 36, 0.55);
+    backdrop-filter: blur(14px); border: 1px solid rgba(140, 110, 210, 0.18);
+    box-shadow: 0 8px 40px rgba(0,0,0,0.45); z-index: 10;
+  }
+  #panel button {
+    appearance: none; border: 1px solid rgba(150, 120, 220, 0.22);
+    background: rgba(40, 22, 70, 0.5); color: #b9a6df; font-size: 13px;
+    letter-spacing: 0.02em; padding: 9px 15px; border-radius: 11px; cursor: pointer;
+    transition: all 0.2s ease;
+  }
+  #panel button:hover { color: #eae2ff; border-color: rgba(150,120,220,0.5); }
+  #panel button.active {
+    background: linear-gradient(135deg, rgba(130,70,230,0.85), rgba(150,110,255,0.75));
+    color: #fff; border-color: rgba(190,170,255,0.7);
+    box-shadow: 0 4px 20px rgba(120,80,240,0.45);
+  }
+  #panel .lvl { display: flex; align-items: center; gap: 6px; color: rgba(190,170,235,0.7); font-size: 12px; }
+  #panel input[type=range] { width: 110px; accent-color: #9a6bff; }
+</style>
+</head>
+<body>
+  <div id="scene"></div>
+  <div id="panel">
+    <button data-mode="calm" class="active">Спокойствие</button>
+    <button data-mode="listening">Слушает</button>
+    <button data-mode="thinking">Думает</button>
+    <button data-mode="speaking">Говорит</button>
+    <button data-mode="error">Ошибка</button>
+    <span class="lvl">голос <input id="level" type="range" min="0" max="100" value="0" /></span>
+    <span class="lvl">стык <button data-dock="1">вар.1 волна</button><button data-dock="2">вар.2 искры</button><button data-dock="3">вар.3 вместе</button><button data-dock="4">вар.4 волны от шва</button><button data-dock="5">вар.5 волна+шов</button><button data-dock="6">вар.6 искры+шов</button><button data-dock="7">вар.7 все три</button></span>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.js",
+      "three/addons/": "./vendor/jsm/"
+    }
+  }
+  </script>
+
+  <script type="module">
+  import * as THREE from 'three';
+  import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+  import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+  import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Константы фигуры
+  const R = 1.5;                 // радиус описанной сферы икосаэдра
+  const FIT_R = 2.35;            // с запасом на разлёт граней в «Ошибке»
+  const FOV = 35;
+  const TWO_PI = Math.PI * 2;
+  const T120 = TWO_PI / 3;       // ±120° — грань симметрична сама себе
+  const Z_AXIS = new THREE.Vector3(0, 0, 1);
+  const Y_AXIS = new THREE.Vector3(0, 1, 0);
+  const X_AXIS = new THREE.Vector3(1, 0, 0);
+  const DOWN   = new THREE.Vector3(0, -1, 0);   // «вниз» — куда смотрит опорная вершина
+
+  // модульные temp-объекты — ноль аллокаций в tick()
+  const tmpV = new THREE.Vector3();
+  const tmpV2 = new THREE.Vector3();
+  const tmpQ = new THREE.Quaternion();
+  const tmpQ2 = new THREE.Quaternion();
+  const camDir = new THREE.Vector3();
+  const supAxis = new THREE.Vector3();   // опорная ось «Спокойствия» (со знаком полюса)
+  const tmpV3 = new THREE.Vector3();     // доп. temp (искры/дуги стыковки)
+  const WHITE = new THREE.Color(0xffffff);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Палитра по режимам (violet). colorA — низ градиента, colorB — верх, edge — рёбра.
+  const MODES = {
+    calm:      { a: 0x5236a6, b: 0x8f6bff, e: 0xcbb8ff, bloom: 0.50 },
+    listening: { a: 0x5236a6, b: 0x9a72ff, e: 0xd0bcff, bloom: 0.62 },
+    thinking:  { a: 0x7a2bd0, b: 0x8f6bff, e: 0xd7c4ff, bloom: 0.60 },
+    speaking:  { a: 0x5a3ad0, b: 0x7c5cff, e: 0xe6ddff, bloom: 0.58 },
+    error:     { a: 0xc01f4a, b: 0xff7a3c, e: 0xffd0a0, bloom: 0.80 },
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Сцена / камера / рендерер
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(FOV, 1, 0.1, 100);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setClearColor(0x000000, 0);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  document.getElementById('scene').appendChild(renderer.domElement);
+
+  const bodyGroup = new THREE.Group();
+  scene.add(bodyGroup);
+  // без наклона — фигура стоит ровно (верхняя грань горизонтальна)
+  const qBase = new THREE.Quaternion();
+  bodyGroup.quaternion.copy(qBase);
+
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), MODES.calm.bloom, 0.5, 0.12);
+  composer.addPass(bloom);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Материалы (общие для всех 20 граней)
+  const uColorA = { value: new THREE.Color(MODES.calm.a) };
+  const uColorB = { value: new THREE.Color(MODES.calm.b) };
+  const uEdge   = { value: new THREE.Color(MODES.calm.e) };
+  const uCamPos = { value: new THREE.Vector3() };
+
+  const fillMat = new THREE.ShaderMaterial({
+    uniforms: { uColorA, uColorB, uEdge, uCamPos, uOpacity: { value: 0.44 }, uR: { value: R } },
+    vertexShader: `
+      varying vec3 vWorld; varying vec3 vNormalW;
+      void main(){
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWorld = wp.xyz;
+        vNormalW = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: `
+      uniform vec3 uColorA; uniform vec3 uColorB; uniform vec3 uEdge; uniform vec3 uCamPos;
+      uniform float uOpacity; uniform float uR;
+      varying vec3 vWorld; varying vec3 vNormalW;
+      void main(){
+        float g = clamp(vWorld.y / uR * 0.5 + 0.5, 0.0, 1.0);
+        vec3 base = mix(uColorA, uColorB, g);
+        vec3 V = normalize(uCamPos - vWorld);
+        float fres = pow(1.0 - abs(dot(normalize(vNormalW), V)), 2.0);
+        vec3 col = mix(base, uEdge, fres * 0.5) + fres * 0.15;
+        float a = clamp(uOpacity * (0.55 + 0.9 * fres), 0.0, 0.8);
+        gl_FragColor = vec4(col, a);
+      }`,
+    transparent: true, blending: THREE.AdditiveBlending,
+    depthWrite: false, depthTest: true, side: THREE.DoubleSide,
+  });
+
+  const lineMat = new THREE.LineBasicMaterial({
+    color: new THREE.Color(MODES.calm.e), transparent: true, opacity: 0.85,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true,
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Построение 20 независимых граней из IcosahedronGeometry (r160 = non-indexed:
+  // 60 вершин = 20 подряд идущих троек = по грани каждая, с верной CCW-намоткой).
+  const faces = [];
+  {
+    const base = new THREE.IcosahedronGeometry(R, 0);
+    const pos = base.attributes.position.array;
+    const A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3();
+    for (let f = 0; f < 20; f++) {
+      const o = f * 9;
+      A.set(pos[o],   pos[o+1], pos[o+2]);
+      B.set(pos[o+3], pos[o+4], pos[o+5]);
+      C.set(pos[o+6], pos[o+7], pos[o+8]);
+      const centroid = new THREE.Vector3().addVectors(A, B).add(C).multiplyScalar(1/3);
+      const normal = new THREE.Vector3()
+        .subVectors(B, A).cross(new THREE.Vector3().subVectors(C, A)).normalize();
+      if (normal.dot(centroid) < 0) normal.negate();     // наружу
+      const q0 = new THREE.Quaternion().setFromUnitVectors(Z_AXIS, normal);
+      const qInv = q0.clone().invert();
+      // локальные вершины: центрированы в 0, лежат в плоскости z≈0
+      const aL = A.clone().sub(centroid).applyQuaternion(qInv);
+      const bL = B.clone().sub(centroid).applyQuaternion(qInv);
+      const cL = C.clone().sub(centroid).applyQuaternion(qInv);
+
+      const triGeo = new THREE.BufferGeometry();
+      triGeo.setAttribute('position', new THREE.Float32BufferAttribute(
+        [aL.x,aL.y,aL.z, bL.x,bL.y,bL.z, cL.x,cL.y,cL.z], 3));
+      triGeo.setAttribute('normal', new THREE.Float32BufferAttribute(
+        [0,0,1, 0,0,1, 0,0,1], 3));
+      const edgeGeo = new THREE.BufferGeometry();
+      edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(
+        [aL.x,aL.y,aL.z, bL.x,bL.y,bL.z,
+         bL.x,bL.y,bL.z, cL.x,cL.y,cL.z,
+         cL.x,cL.y,cL.z, aL.x,aL.y,aL.z], 3));
+
+      const pivot = new THREE.Group();
+      pivot.position.copy(centroid);
+      pivot.quaternion.copy(q0);
+      pivot.add(new THREE.Mesh(triGeo, fillMat));
+      pivot.add(new THREE.LineSegments(edgeGeo, lineMat));
+      // накладной «свет» грани (для ударной волны по поверхности и переходов режимов)
+      const glowMat = new THREE.MeshBasicMaterial({
+        color: 0xffffff, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+        side: THREE.DoubleSide,
+      });
+      const glow = new THREE.Mesh(triGeo, glowMat);
+      pivot.add(glow);
+      bodyGroup.add(pivot);
+
+      // детерминированный псевдослучай (без Math.random — стабильно при рестарте)
+      const h = Math.abs(Math.sin(f * 127.1) * 43758.5453);
+      faces.push({
+        pivot, centroid, normal, q0,
+        cdir: centroid.clone().normalize(),   // направление грани от центра (для волны)
+        glow, glowMat,
+        dir: (h - Math.floor(h)) < 0.5 ? 1 : -1,
+        phase: (f * 0.61803398875) % 1,
+        accum: 0,          // накопленный угол (кратен ±120°), радианы
+        active: false, p: 0, cycle: 0.85, lift: 0,
+      });
+    }
+    base.dispose();
+  }
+
+  // Невидимый окклюдер: сплошной икосаэдр пишет ТОЛЬКО глубину (colorWrite:false),
+  // чтобы эффекты стыковки с ДАЛЬНЕЙ стороны фигуры перекрывались корпусом —
+  // физически «за фигурой» их не видно. polygonOffset даёт запас, чтобы эффекты
+  // ровно на передней поверхности не мерцали z-fight'ом с гранью. Сам корпус-стекло
+  // (fillMat/lineMat) остаётся depthTest:false → сквозной вид не меняется.
+  {
+    const occMat = new THREE.MeshBasicMaterial({ colorWrite: false });
+    occMat.polygonOffset = true;
+    occMat.polygonOffsetFactor = 1.0;
+    occMat.polygonOffsetUnits = 1.0;
+    const occluder = new THREE.Mesh(new THREE.IcosahedronGeometry(R, 0), occMat);
+    occluder.renderOrder = -1;                 // глубину пишем прежде всех прозрачных эффектов
+    bodyGroup.add(occluder);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // «Шапка» = 5 граней вокруг одной вершины. Это и есть одна «грань» в терминах
+  // пользователя. Вершин 12 → шапок тоже 12 («их много»). Поворот шапки на 72°
+  // вокруг её оси-вершины — симметрия икосаэдра, поэтому шов садится бесшовно.
+  const T72 = TWO_PI / 5;
+  const caps = [];   // { axis:Vector3, group:[idx×5] }
+  {
+    const g = new THREE.IcosahedronGeometry(R, 0);
+    const p = g.attributes.position.array;
+    const verts = [];
+    for (let i = 0; i < p.length; i += 3) {
+      const v = new THREE.Vector3(p[i], p[i+1], p[i+2]);
+      if (!verts.some((q) => q.distanceToSquared(v) < 1e-8)) verts.push(v);
+    }
+    const corner = new THREE.Vector3();
+    for (const v of verts) {
+      const group = [];
+      const neigh = [];
+      for (let f = 0; f < 20; f++) {
+        const o = f * 9;
+        let hasV = false;
+        for (let k = 0; k < 3; k++) {
+          corner.set(p[o + k*3], p[o + k*3 + 1], p[o + k*3 + 2]);
+          if (corner.distanceToSquared(v) < 1e-8) hasV = true;
+        }
+        if (!hasV) continue;
+        group.push(f);
+        for (let k = 0; k < 3; k++) {              // соседи вершины = вершины шва
+          corner.set(p[o + k*3], p[o + k*3 + 1], p[o + k*3 + 2]);
+          if (corner.distanceToSquared(v) >= 1e-8 &&
+              !neigh.some((q) => q.distanceToSquared(corner) < 1e-8))
+            neigh.push(corner.clone());
+        }
+      }
+      const axis = v.clone().normalize();
+      // упорядочить соседей по азимуту вокруг оси (для контура шва / лучей)
+      const ref = neigh[0].clone().sub(axis.clone().multiplyScalar(neigh[0].dot(axis))).normalize();
+      const bi = new THREE.Vector3().crossVectors(axis, ref);
+      neigh.sort((a, b) => Math.atan2(a.dot(bi), a.dot(ref)) - Math.atan2(b.dot(bi), b.dot(ref)));
+      caps.push({ axis, vertex: v.clone(), ring: neigh, group });
+    }
+    // для каждой шапки — список шапок с непересекающимся набором граней
+    // (несмежные вершины): только такие можно проворачивать одновременно
+    for (let i = 0; i < caps.length; i++) {
+      const gi = new Set(caps[i].group);
+      caps[i].disjoint = [];
+      for (let j = 0; j < caps.length; j++) {
+        if (j !== i && !caps[j].group.some((f) => gi.has(f))) caps[i].disjoint.push(j);
+      }
+    }
+    g.dispose();
+  }
+
+  // Пер-шапочные объекты для эффекта стыковки (создаём раз, держим скрытыми):
+  //   контур ШВА (пятиугольник соседних вершин) = сама линия стыковки. Подсвечивается
+  //   в варианте 2 (пока прыскают искры); искры/дуги строятся от него же на лету.
+  for (const c of caps) {
+    c.seamMat = new THREE.LineBasicMaterial({
+      transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+      depthWrite: false, depthTest: true,
+    });
+    c.seamLoop = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(c.ring), c.seamMat);
+    c.seamLoop.visible = false;
+    bodyGroup.add(c.seamLoop);
+
+    c.fx = { active: false, t: 0 };   // состояние подсветки шва (вариант 2)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // «Помеченная» ОСЬ = две противоположные вершины (верх/низ) + 5 граней вокруг
+  // одной из них = идентичность аватара.
+  //   • «Спокойствие» — фигура стоит на помеченной вершине; встаёт на ту из двух
+  //     (верх/низ), что сейчас ближе к низу (меньший доворот);
+  //   • «Говорит» — фигура один раз доворачивается к нам одной из этих 5 граней
+  //     (ближайшей к камере) и держит её лицом к нам весь режим; тело неподвижно,
+  //     крутятся только шапки.
+  // Маркеры (точки) видны в прототипе для наглядности; в приложении гасятся
+  // через window.setMarks(false).
+  const MARK = caps[0];
+  const markGroup = new THREE.Group();
+  {
+    const dotMat = new THREE.MeshBasicMaterial({
+      color: 0x8fe4ff, transparent: true, opacity: 0.95,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+    });
+    const vGeo = new THREE.SphereGeometry(0.06 * R, 14, 14);
+    const vDot = new THREE.Mesh(vGeo, dotMat);
+    vDot.position.copy(MARK.vertex);
+    markGroup.add(vDot);
+    const vDot2 = new THREE.Mesh(vGeo, dotMat);        // противоположная вершина
+    vDot2.position.copy(MARK.vertex).multiplyScalar(-1);
+    markGroup.add(vDot2);
+    const fGeo = new THREE.SphereGeometry(0.038 * R, 10, 10);
+    for (const idx of MARK.group) {
+      const d = new THREE.Mesh(fGeo, dotMat);
+      d.position.copy(faces[idx].centroid);
+      markGroup.add(d);
+    }
+  }
+  bodyGroup.add(markGroup);
+  markGroup.visible = false;        // маркеры вершин/граней по умолчанию скрыты (синие точки)
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Остаточное ядро + провода + звезда Давида — только для режима «Ошибка»
+  const core = new THREE.LineSegments(
+    new THREE.WireframeGeometry(new THREE.IcosahedronGeometry(R * 0.55, 0)),
+    new THREE.LineBasicMaterial({
+      color: 0x7a0f28, transparent: true, opacity: 0.35,
+      blending: THREE.AdditiveBlending, depthWrite: false,
+    }));
+  core.visible = false;
+  bodyGroup.add(core);
+
+  // провода: 20 отрезков (ядро → центр грани), в системе bodyGroup
+  const wireGeo = new THREE.BufferGeometry();
+  const wirePos = new Float32Array(20 * 2 * 3);
+  const wireCol = new Float32Array(20 * 2 * 3);
+  {
+    const cInner = new THREE.Color(0xff4d6d), cOuter = new THREE.Color(0xff7a3c);
+    for (let f = 0; f < 20; f++) {
+      const o = f * 6;
+      cInner.toArray(wireCol, o); cOuter.toArray(wireCol, o + 3);
+    }
+  }
+  wireGeo.setAttribute('position', new THREE.BufferAttribute(wirePos, 3));
+  wireGeo.setAttribute('color', new THREE.BufferAttribute(wireCol, 3));
+  const wires = new THREE.LineSegments(wireGeo, new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0.55,
+    blending: THREE.AdditiveBlending, depthWrite: false,
+  }));
+  wires.visible = false;
+  bodyGroup.add(wires);
+
+  // звезда Давида — билборд к камере (два треугольника, повёрнутых на 180°)
+  const star = new THREE.Group();
+  {
+    const rr = 0.7 * R;
+    const mk = (off) => {
+      const pts = [];
+      for (let k = 0; k < 3; k++) {
+        const ang = off + k * (TWO_PI / 3);
+        pts.push(new THREE.Vector3(Math.cos(ang) * rr, Math.sin(ang) * rr, 0));
+      }
+      const g = new THREE.BufferGeometry().setFromPoints(pts);
+      return new THREE.LineLoop(g, new THREE.LineBasicMaterial({
+        color: 0xff5a5a, transparent: true, opacity: 0.55,
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
+      }));
+    };
+    star.add(mk(Math.PI / 2));           // вершиной вверх
+    star.add(mk(Math.PI / 2 + Math.PI)); // вершиной вниз
+  }
+  star.visible = false;
+  scene.add(star);
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Состояние аниматора
+  let mode = 'calm';
+  let level = 0, levelSmooth = 0;      // громкость голоса 0..1 (сглаженная)
+  let calmDownSign = 1;                // на какой полюс помеч. оси встать (Спокойствие)
+  let speakFace = MARK.group[0];       // помеченная грань, обращаемая к нам в «Говорит»
+  let anchor = 0;                      // индекс неподвижной (лицевой) грани
+  let anchorScore = -2;
+  let spawnAcc = 0;                    // аккумулятор планировщика проворотов
+  let errEnv = 0;                      // 0..1 огибающая «разлёта» в ошибке
+  const cur = { a: new THREE.Color(MODES.calm.a), b: new THREE.Color(MODES.calm.b),
+                e: new THREE.Color(MODES.calm.e), bloom: MODES.calm.bloom };
+  const tgt = { a: new THREE.Color(MODES.calm.a), b: new THREE.Color(MODES.calm.b),
+                e: new THREE.Color(MODES.calm.e), bloom: MODES.calm.bloom };
+  const RED = MODES.error;
+
+  // профиль движения (множители/флаги из приложения)
+  const profile = {
+    rotationSpeed: 1, pulseAmplitude: 1, waveIntensity: 1,
+    rotation: true, pulsation: true, waves: true, errorFlash: true,
+  };
+  let accent = null;
+
+  // ── Настройки фигуры из приложения (setIcosaConfig). Дефолты воспроизводят
+  // прототип точ-в-точ: спин «Спокойствия» ×1; флипы тела есть в «Слушает»/«Думает»;
+  // проворот шапок — только в «Думает»/«Говорит» (calm/listen = 0 → выключен).
+  let calmSpinMult = 1;                       // множитель скорости спина в «Спокойствии»
+  const flipFreq = {                          // частота флипов тела по осям, 0..3 (0 — ось молчит)
+    listening: { h: 1, v: 1 },
+    thinking:  { h: 1, v: 1 },
+  };
+  const twistSpeed = {                        // скорость проворота шапок по режимам, 0..3 (0 — выключен)
+    calm: 0, listening: 0, thinking: 1, speaking: 1,
+  };
+
+  // Два НЕЗАВИСИМЫХ таймера переворотов тела: горизонталь (ось Y) и вертикаль (ось X).
+  // Одновременно анимируется не более одного флипа (чистый slerp), второй ждёт очереди.
+  // Интервал оси = FLIP_BASE / freq; freq=0 → ось не флипает.
+  const flip = { active: false, t: 0, from: new THREE.Quaternion(),
+                 to: new THREE.Quaternion() };
+  const FLIP_DUR = 0.60;                      // длительность одного переворота (как в прототипе)
+  const FLIP_BASE = 2.8;                      // период оси при частоте 1.0 (тот же ритм, что в исходнике)
+  const flipTimer = { h: FLIP_BASE, v: FLIP_BASE * 1.5 };   // разный старт → оси не в фазе
+
+  // easing
+  const smoother = (x) => x*x*x*(x*(x*6 - 15) + 10);
+  const easeInOutCubic = (x) => x < 0.5 ? 4*x*x*x : 1 - Math.pow(-2*x + 2, 3)/2;
+  const easeOutCubic = (x) => 1 - Math.pow(1 - x, 3);
+  const lift01 = (p) => (1 - Math.cos(TWO_PI * p)) * 0.5;   // sin²(πp): нулевая скорость на концах
+  const lerp = (a, b, t) => a + (b - a) * t;
+
+  function applyMode(m) {
+    const c = MODES[m] || MODES.calm;
+    tgt.a.set(accent !== null ? accent : c.a);
+    tgt.b.set(c.b);
+    tgt.e.set(c.e);
+    tgt.bloom = c.bloom;
+  }
+
+  function enterFlips() {
+    flip.active = false; flip.t = 0;
+    flipTimer.h = FLIP_BASE; flipTimer.v = FLIP_BASE * 1.5;
+  }
+
+  window.setMode = function (m) {
+    if (m === mode) return;
+    const next = (m in MODES) ? m : 'calm';
+    mode = next;
+    applyMode(mode);
+    if (mode === 'listening' || mode === 'thinking') enterFlips();
+    if (mode === 'calm') chooseCalmPole();      // встать на ближний полюс
+    if (mode === 'speaking') pickSpeakFace();   // один раз выбрать грань лицом к нам
+    // при выходе из ошибки провода/ядро/звезда гаснут через errEnv в tick()
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Движение всей фигуры (кватернионы). rs — множитель скорости из профиля.
+  function updateBody(dt) {
+    const rs = profile.rotation ? profile.rotationSpeed : 0;
+    if (mode === 'calm') {
+      // стоит на помеченной вершине: опорный полюс помеч. оси смотрит вниз (−Y),
+      // а фигура медленно крутится вокруг мировой вертикали — опора на месте.
+      tmpQ.setFromAxisAngle(Y_AXIS, -0.10 * calmSpinMult * rs * dt);
+      bodyGroup.quaternion.premultiply(tmpQ);                 // спин вокруг мировой Y
+      supAxis.copy(MARK.axis).multiplyScalar(calmDownSign);   // ближний полюс (верх/низ)
+      settleToward(supAxis, DOWN, 1 - Math.pow(0.04, dt));    // довернуть его вниз
+    } else if (mode === 'error') {
+      // медленный поворот вокруг собственной вертикали
+      tmpQ.setFromAxisAngle(Y_AXIS, -0.10 * rs * dt);
+      bodyGroup.quaternion.multiply(tmpQ);
+    } else if (mode === 'speaking') {
+      // один раз доворачиваемся выбранной помеченной гранью к камере и держим её так:
+      // тело неподвижно, между гранями не перебираем — крутятся только шапки (updateTwist).
+      camDir.copy(camera.position).normalize();
+      settleToward(faces[speakFace].normal, camDir, 1 - Math.pow(0.03, dt));
+    } else if (mode === 'listening' || mode === 'thinking') {
+      // остановка плавного вращения и дискретные перевороты на 90° (по очереди Y/X).
+      // в «Думает» те же перевороты тела, а проворот шапок накладывается поверх.
+      stepFlips(dt, rs);
+    }
+    // держим кватернион нормированным
+    bodyGroup.quaternion.normalize();
+  }
+
+  // Довернуть тело так, чтобы мировое направление локальной оси localAxis
+  // совпало с targetWorld; за кадр применяем долю alpha (мягкая доводка).
+  function settleToward(localAxis, targetWorld, alpha) {
+    tmpV.copy(localAxis).applyQuaternion(bodyGroup.quaternion).normalize();
+    tmpQ2.setFromUnitVectors(tmpV, targetWorld);      // мировая коррекция
+    tmpQ.identity().slerp(tmpQ2, Math.max(0, Math.min(1, alpha)));
+    bodyGroup.quaternion.premultiply(tmpQ);
+  }
+
+  // «Спокойствие»/«Говорит»: выбрать полюс помеченной оси (верх/низ), что сейчас
+  // ближе к низу, — чтобы фигура вставала на него меньшим доворотом.
+  function chooseCalmPole() {
+    tmpV.copy(MARK.axis).applyQuaternion(bodyGroup.quaternion);
+    calmDownSign = (tmpV.y > 0) ? -1 : 1;
+  }
+
+  // «Говорит»: один раз выбрать из 5 помеченных граней ту, что сейчас ближе к камере
+  // (наименьший доворот), — и держать её лицом к нам весь режим (без перебора граней).
+  function pickSpeakFace() {
+    camDir.copy(camera.position).normalize();
+    let best = -2, bi = MARK.group[0];
+    for (const idx of MARK.group) {
+      tmpV.copy(faces[idx].normal).applyQuaternion(bodyGroup.quaternion);
+      const s = tmpV.dot(camDir);
+      if (s > best) { best = s; bi = idx; }
+    }
+    speakFace = bi;
+  }
+
+  // Один переворот тела на 90° вокруг мировой оси; знак (по/против) — случайный.
+  function startFlip(axis) {
+    const sg = (Math.random() < 0.5) ? 1 : -1;
+    tmpQ.setFromAxisAngle(axis, sg * Math.PI / 2);            // мировой поворот 90°
+    flip.from.copy(bodyGroup.quaternion);
+    flip.to.copy(tmpQ).multiply(flip.from);
+    flip.active = true; flip.t = 0;
+  }
+
+  // Два независимых таймера (гориз. Y и верт. X) с частотами текущего режима.
+  // rs — множитель скорости/тумблер вращения из профиля (rs≤0 → тело замирает).
+  function stepFlips(dt, rs) {
+    if (flip.active) {                                        // доигрываем текущий переворот
+      flip.t += dt * (rs || 1) / FLIP_DUR;
+      if (flip.t >= 1) { flip.t = 1; flip.active = false; bodyGroup.quaternion.copy(flip.to); }
+      else { bodyGroup.quaternion.copy(flip.from).slerp(flip.to, easeInOutCubic(flip.t)); }
+      return;                                                 // таймеры стоят во время анимации
+    }
+    if (rs <= 0) return;                                      // вращение выключено — тело неподвижно
+    const fr = flipFreq[mode] || flipFreq.listening;          // частоты осей текущего режима
+    let fire = null;                                          // какую ось перевернуть в этом кадре
+    if (fr.h > 0) { flipTimer.h -= dt * rs; if (flipTimer.h <= 0) fire = 'h'; }
+    if (fr.v > 0) { flipTimer.v -= dt * rs; if (flipTimer.v <= 0 && (fire === null || flipTimer.v < flipTimer.h)) fire = 'v'; }
+    if (fire === 'h') { flipTimer.h = FLIP_BASE / fr.h; startFlip(Y_AXIS); }        // горизонталь
+    else if (fire === 'v') { flipTimer.v = FLIP_BASE / fr.v; startFlip(X_AXIS); }   // вертикаль
+  }
+
+  // Лицевая (неподвижная) грань — максимум dot(мировая нормаль, направление на камеру)
+  function updateAnchor() {
+    camDir.copy(camera.position).normalize();
+    let best = -2, bi = anchor;
+    for (let i = 0; i < faces.length; i++) {
+      tmpV.copy(faces[i].normal).applyQuaternion(bodyGroup.quaternion);
+      const s = tmpV.dot(camDir);
+      if (s > best) { best = s; bi = i; }
+    }
+    if (bi !== anchor && best > anchorScore + 0.03) { anchor = bi; anchorScore = best; }
+    else if (bi === anchor) { anchorScore = best; }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Проворот «ШАПКИ»: 5 граней вокруг одной вершины = одна «грань». Шапка
+  // целиком отходит вдоль оси-вершины, проворачивается на 72° по часовой
+  // (симметрия C5 → шов садится бесшовно) и возвращается. Каждый раз — другая
+  // из 12 вершин.
+  const twist = {
+    active: false, p: 0, cycle: 0.9, wait: 0, n: 0,
+    slots: [ { cap: null, spin: 0, lift: 0 }, { cap: null, spin: 0, lift: 0 } ],
+  };
+  const qCap = new THREE.Quaternion();
+  // потолок вылета грани при провороте: в норме ≤ ~1.0R, ставим щедрые 1.8R как
+  // предохранитель от «улетевшего каркаса» (см. applyTwist). Храним квадрат — сравнение без sqrt.
+  const MAX_TWIST_R2 = (1.8 * R) * (1.8 * R);
+  let twistCount = 0;
+  let lastCapIdx = -1;
+
+  function fillTwistSlot(slot, cap, baseLift) {
+    slot.cap = cap;
+    slot.spin = (Math.random() < 0.5 ? -1 : 1) * T72;      // по часовой ИЛИ против
+    slot.lift = baseLift * (0.82 + Math.random() * 0.36);  // немного рандома в подъёме
+  }
+
+  // ── Эффект стыковки: исходит ИЗ места стыковки (пятиугольного ШВА шапки — линии,
+  //   по которой отошедший кусок снова садится на тело). Три варианта:
+  //   1 — компактная волна-«ударник»: кольцо рождается в вершине и коротко
+  //       расходится по поверхности рядом с местом стыковки (недалеко);
+  //   2 — «искры»: с линии стыковки (шва) прыскают настоящие искры — разлетаются
+  //       наружу, мерцают и гаснут; сам контур шва при этом подсвечивается;
+  //   3 — «вместе»: волна и искры одновременно (вариант 1 + вариант 2);
+  //   4 — «лучи»: от самих линий стыковки (рёбер шва) наружу выходят линии-лучи.
+  // Плюс общая короткая затухающая вибрация севшей шапки вдоль её оси.
+  let dockVariant = 1;
+  const DOCK_DUR  = 0.5;      // вибрация шапки
+  const RING_DUR  = 0.5;      // жизнь кольца (вариант 1)
+  const RINGS_PER = 3;        // колец на стыковку (вариант 1)
+  const THETA_MAX = 0.66;     // докуда доходит волна по сфере (рад, ~38°) — недалеко
+  const WELD_DUR  = 0.5;      // подсветка контура шва при разлёте искр (вариант 2)
+
+  const dockVibe = [ { cap: null, t: 0, active: false },
+                     { cap: null, t: 0, active: false } ];
+
+  // пул колец (вариант 1)
+  const dockRings = [];
+  {
+    const seg = 48, pts = [];
+    for (let i = 0; i < seg; i++) {
+      const a = (i / seg) * TWO_PI;
+      pts.push(new THREE.Vector3(Math.cos(a), Math.sin(a), 0));
+    }
+    const ringGeo = new THREE.BufferGeometry().setFromPoints(pts);
+    for (let i = 0; i < 10; i++) {
+      const m = new THREE.LineBasicMaterial({
+        transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+        depthWrite: false, depthTest: true,
+      });
+      const ring = new THREE.LineLoop(ringGeo, m);
+      ring.visible = false;
+      bodyGroup.add(ring);
+      dockRings.push({ mesh: ring, mat: m, active: false, t: 0, delay: 0, axis: null });
+    }
+  }
+
+  // вариант 2: НАСТОЯЩИЕ искры — вылетают с линии стыковки (пятиугольного шва, где
+  // отошедшая шапка снова садится на тело), разлетаются наружу, мерцают и гаснут.
+  // Не по спицам/рёбрам самой грани, а именно с контура-шва. Каждая искра — короткая
+  // ЛИНИЯ-штрих (хвост по направлению движения), а не шарик: голова ярко, хвост тускло.
+  const SPARK_MAX = 60;
+  const sparkPos = new Float32Array(SPARK_MAX * 2 * 3);   // 2 верш. на искру: голова+хвост
+  const sparkCol = new Float32Array(SPARK_MAX * 2 * 3);   // цвет (яркость = альфа, аддитивно)
+  const sparkGeo = new THREE.BufferGeometry();
+  sparkGeo.setAttribute('position', new THREE.BufferAttribute(sparkPos, 3));
+  sparkGeo.setAttribute('color', new THREE.BufferAttribute(sparkCol, 3));
+  const sparkMat = new THREE.LineBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 1,
+    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true,
+  });
+  const sparkLines = new THREE.LineSegments(sparkGeo, sparkMat);
+  sparkLines.frustumCulled = false;
+  sparkLines.visible = false;
+  bodyGroup.add(sparkLines);
+  const sparkHot = new THREE.Color();
+  const sparks = [];
+  for (let i = 0; i < SPARK_MAX; i++)
+    sparks.push({ pos: new THREE.Vector3(), vel: new THREE.Vector3(),
+                  life: 0, maxLife: 1, active: false, seed: 0 });
+
+  function spawnSeamSparks(cap) {
+    sparkHot.copy(lineMat.color).lerp(WHITE, 0.5);   // добела — «горячо»
+    const perEdge = 4;   // немного крупных искр на ребро (меньше числом, длиннее штрих)
+    for (let e = 0; e < 5; e++) {
+      const a = cap.ring[e], b = cap.ring[(e + 1) % 5];
+      tmpV3.copy(b).sub(a).normalize();                 // вдоль ребра-шва
+      for (let j = 0; j < perEdge; j++) {
+        const s = sparks.find((x) => !x.active);
+        if (!s) return;
+        s.pos.copy(a).lerp(b, Math.random());           // точка на линии стыковки
+        tmpV.copy(s.pos).normalize();                   // наружу от поверхности
+        tmpV2.crossVectors(tmpV, tmpV3).normalize();    // касательная в поверхности
+        s.vel.copy(tmpV).multiplyScalar((0.9 + Math.random() * 1.3) * R)   // прочь от шва
+             .addScaledVector(tmpV3, (Math.random() - 0.5) * 0.9 * R)
+             .addScaledVector(tmpV2, (Math.random() - 0.5) * 0.9 * R);
+        s.maxLife = 0.26 + Math.random() * 0.34;
+        s.life = s.maxLife;
+        s.active = true;
+        s.seed = Math.random() * 6.283;
+      }
+    }
+  }
+
+  // вариант 4: «волны от шва» — замкнутый контур пятиугольного шва повторяется
+  // эхо-копиями, которые РАСХОДЯТСЯ В СТОРОНЫ от шва в его же плоскости (прочь от
+  // центра шва) и гаснут. Рост строго в плоскости шва (перпендикулярно оси шапки),
+  // поэтому контур отъезжает вбок и всплывает над корпусом, а не ныряет внутрь и не
+  // улетает вперёд по оси. Несколько копий со сдвигом во времени → рябь.
+  const WAVE_DUR = 0.6;
+  const WAVES_PER = 4;         // сколько эхо-контуров подряд (рябь)
+  const WAVE_MAX = 8;          // пул контуров
+  const WAVE_GROW = R * 0.21;  // насколько эхо расширяется в стороны от шва
+  const waveSegs = [];
+  for (let i = 0; i < WAVE_MAX; i++) {
+    const pos = new Float32Array(5 * 3);           // 5 вершин замкнутого контура-шва
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    const mat = new THREE.LineBasicMaterial({
+      transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+      depthWrite: false, depthTest: true,
+    });
+    const seg = new THREE.LineLoop(geo, mat);      // замкнутый контур: линии соединены
+    seg.frustumCulled = false; seg.visible = false;
+    bodyGroup.add(seg);
+    waveSegs.push({
+      seg, mat, geo, pos,
+      base: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(),
+             new THREE.Vector3(), new THREE.Vector3()],   // вершины шва
+      dir: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(),
+            new THREE.Vector3(), new THREE.Vector3()],     // наружу от центра шва (в плоскости)
+      active: false, t: 0, delay: 0,
+    });
+  }
+
+  function spawnSeamWaves(cap) {
+    // центр шва (на оси шапки) и направления «наружу» в плоскости шва
+    tmpV3.set(0, 0, 0);
+    for (let e = 0; e < 5; e++) tmpV3.add(cap.ring[e]);
+    tmpV3.multiplyScalar(1 / 5);                    // C = центр пятиугольного шва
+    for (let k = 0; k < WAVES_PER; k++) {
+      const w = waveSegs.find((x) => !x.active);
+      if (!w) return;
+      w.active = true; w.t = 0; w.delay = k * 0.1;   // сдвиг во времени → рябь эхом
+      for (let e = 0; e < 5; e++) {
+        w.base[e].copy(cap.ring[e]);
+        w.dir[e].copy(cap.ring[e]).sub(tmpV3).normalize();  // в плоскости шва, прочь от центра
+      }
+      w.mat.color.copy(lineMat.color).lerp(WHITE, 0.45);
+      w.seg.visible = false;
+    }
+  }
+
+  const dockQuat = new THREE.Quaternion();
+
+  // вариант 1: кольца-«ударники» рождаются в вершине и коротко расходятся по поверхности
+  function startWave(cap) {
+    dockQuat.setFromUnitVectors(Z_AXIS, cap.axis);
+    for (let k = 0; k < RINGS_PER; k++) {
+      const r = dockRings.find((x) => !x.active);
+      if (!r) break;
+      r.active = true; r.t = 0; r.delay = k * 0.09; r.axis = cap.axis;
+      r.mesh.quaternion.copy(dockQuat);
+      r.mesh.visible = false;
+      r.mat.color.copy(lineMat.color);
+    }
+  }
+
+  // вариант 2: настоящие частицы прыскают с линии стыковки; сам контур шва при этом
+  // коротко подсвечивается (место сварки).
+  function startSparks(cap) {
+    cap.fx.active = true; cap.fx.t = 0;
+    cap.seamLoop.visible = true;
+    cap.seamMat.color.copy(lineMat.color);
+    spawnSeamSparks(cap);
+  }
+
+  // вариант 4: контур шва подсвечивается и от него расходятся волны той же формы.
+  function startWaves(cap) {
+    cap.fx.active = true; cap.fx.t = 0;
+    cap.seamLoop.visible = true;
+    cap.seamMat.color.copy(lineMat.color);
+    spawnSeamWaves(cap);
+  }
+
+  function startDock(cap) {
+    // общая вибрация шапки
+    const v = dockVibe.find((x) => !x.active) || dockVibe[0];
+    v.cap = cap; v.t = 0; v.active = true;
+
+    // три базовых эффекта; варианты 5–7 — их сочетания
+    //   1 волна · 2 искры · 3 волна+искры · 4 волны-от-шва
+    //   5 волна+шов · 6 искры+шов · 7 все три
+    const useRing  = dockVariant === 1 || dockVariant === 3 || dockVariant === 5 || dockVariant === 7;
+    const useSpark = dockVariant === 2 || dockVariant === 3 || dockVariant === 6 || dockVariant === 7;
+    const useWave  = dockVariant === 4 || dockVariant === 5 || dockVariant === 6 || dockVariant === 7;
+    if (useRing) startWave(cap);      // «волна»: расходящиеся кольца
+    if (useSpark) startSparks(cap);   // «искры»: частицы с контура шва
+    if (useWave) startWaves(cap);     // «волны от шва»: расширяющиеся эхо-контуры
+  }
+
+  function updateTwist(dt) {
+    // проворот шапок доступен в любом режиме, где его скорость > 0 (по умолчанию
+    // только «Думает»/«Говорит»); скорость масштабирует и длину цикла, и паузу.
+    const ts = twistSpeed[mode] || 0;
+    const go = profile.waves && ts > 0;
+    if (!go) { twist.active = false; twist.n = 0; twist.wait = 0; return; }
+    if (twist.active) {
+      twist.p += dt / twist.cycle;
+      if (twist.p >= 1) {
+        twist.active = false;
+        for (let n = 0; n < twist.n; n++) startDock(twist.slots[n].cap);   // стыковка
+        const wv = Math.max(0.15, profile.waveIntensity);
+        const base = (mode === 'speaking') ? lerp(0.55, 0.05, levelSmooth) / wv
+                                           : 0.3 / wv;
+        twist.wait = base * (0.7 + Math.random() * 0.6) / ts;   // рваная пауза; короче при большей скорости
+      }
+      return;
+    }
+    twist.wait -= dt;
+    if (twist.wait > 0) return;
+
+    // первая шапка: в «Говорит» — по очереди все 12 вершин, иначе — случайная
+    // (не та же, что провернули только что)
+    let ci;
+    if (mode === 'speaking') {
+      ci = twistCount % caps.length;
+    } else {
+      do { ci = Math.floor(Math.random() * caps.length); }
+      while (caps.length > 1 && ci === lastCapIdx);
+    }
+    lastCapIdx = ci;
+    twistCount++;
+
+    // базовый подъём/длительность по режиму; cycle делится на скорость → быстрее проворот
+    let baseLift;
+    if (mode === 'speaking') {
+      twist.cycle = lerp(0.85, 0.5, levelSmooth) / ts;
+      baseLift = lerp(0.06 * R, 0.16 * R, levelSmooth) * profile.pulseAmplitude;
+    } else {
+      twist.cycle = 0.9 / ts;
+      baseLift = 0.14 * R * profile.pulseAmplitude;
+    }
+    twist.cycle = Math.max(1e-3, twist.cycle);       // страховка от деления на ~0
+    // «Пульсация» лишь мягко подкручивает подъём: жёсткий потолок, чтобы на 300 %
+    // шапка «всплывала», а не улетала от корпуса рваным каркасом (дефолт ×1 не трогаем).
+    baseLift = Math.min(baseLift, 0.2 * R);
+
+    fillTwistSlot(twist.slots[0], caps[ci], baseLift);
+    twist.n = 1;
+    // иногда — вторая шапка с непересекающимися гранями; крутится в ПРОТИВОположную
+    // сторону от первой
+    const dj = caps[ci].disjoint;
+    if (dj.length && Math.random() < 0.35) {
+      const cj = dj[Math.floor(Math.random() * dj.length)];
+      fillTwistSlot(twist.slots[1], caps[cj], baseLift);
+      twist.slots[1].spin = -twist.slots[0].spin;   // две шапки — всегда в разные стороны
+      twist.n = 2;
+    }
+    twist.p = 0; twist.active = true;
+  }
+
+  // Раскладка: шапка жёстко поворачивается вокруг оси и приподнимается вдоль неё.
+  function applyTwist() {
+    // всё в покой…
+    for (let i = 0; i < faces.length; i++) {
+      faces[i].pivot.position.copy(faces[i].centroid);
+      faces[i].pivot.quaternion.copy(faces[i].q0);
+    }
+    if (!twist.active) return;
+    const pc = Math.min(1, Math.max(0, twist.p));   // страховка: огибающая строго в [0,1]
+    const s = smoother(pc);
+    const lp = lift01(pc);
+    // …и двигаем каждую активную шапку как отдельное жёсткое тело
+    for (let n = 0; n < twist.n; n++) {
+      const slot = twist.slots[n];
+      const cap = slot.cap;
+      qCap.setFromAxisAngle(cap.axis, slot.spin * s);
+      qCap.normalize();                                      // страховка: строго единичный кватернион (без масштаба)
+      tmpV2.copy(cap.axis).multiplyScalar(slot.lift * lp);   // подъём строго вдоль оси-вершины
+      for (const idx of cap.group) {
+        const f = faces[idx];
+        tmpV.copy(f.centroid).applyQuaternion(qCap).add(tmpV2);
+        // сеть безопасности: в норме грань не отходит дальше ~1.0R; если из-за
+        // сбоя (NaN, дикий кадр, кривой вход) позиция улетела за 1.8R — не рисуем
+        // «рваный каркас вдали», а оставляем грань в покое до следующего кадра.
+        if (!(tmpV.lengthSq() <= MAX_TWIST_R2)) {
+          f.pivot.position.copy(f.centroid);
+          f.pivot.quaternion.copy(f.q0);
+          continue;
+        }
+        f.pivot.position.copy(tmpV);
+        f.pivot.quaternion.copy(qCap).multiply(f.q0);
+      }
+    }
+  }
+
+  // грань прямо сейчас в активном провороте?
+  function inActiveTwist(idx) {
+    if (!twist.active) return false;
+    for (let n = 0; n < twist.n; n++)
+      if (twist.slots[n].cap && twist.slots[n].cap.group.indexOf(idx) !== -1) return true;
+    return false;
+  }
+
+  // Апдейт эффекта стыковки: вызывать ПОСЛЕ applyTwist (грани уже в покое/провороте).
+  function updateDock(dt) {
+    // общая затухающая вибрация шапки вдоль её оси-вершины
+    for (const v of dockVibe) {
+      if (!v.active) continue;
+      v.t += dt;
+      const p = v.t / DOCK_DUR;
+      if (p >= 1) { v.active = false; continue; }
+      const amp = 0.03 * R * (1 - p) * (1 - p);         // огибающая затухания
+      const off = amp * Math.sin(p * TWO_PI * 6);       // несколько колебаний
+      tmpV2.copy(v.cap.axis).multiplyScalar(off);
+      for (const idx of v.cap.group) {
+        if (inActiveTwist(idx)) continue;               // не дёргаем активную грань
+        faces[idx].pivot.position.add(tmpV2);
+      }
+    }
+
+    // вариант 1: компактное кольцо-«ударник» рядом с местом стыковки
+    for (const r of dockRings) {
+      if (!r.active) continue;
+      if (r.delay > 0) { r.delay -= dt; continue; }
+      r.t += dt;
+      const p = r.t / RING_DUR;
+      if (p >= 1) { r.active = false; r.mesh.visible = false; continue; }
+      const th = THETA_MAX * easeOutCubic(p);            // полярный угол от вершины (мал)
+      r.mesh.visible = true;
+      r.mesh.position.copy(r.axis).multiplyScalar(R * Math.cos(th));  // центр кольца вдоль оси
+      r.mesh.scale.setScalar(Math.max(1e-3, R * Math.sin(th)));       // радиус по сфере
+      r.mat.opacity = 0.9 * (1 - p) * (1 - p);
+    }
+
+    // вариант 2: подсветка контура самого шва (линии стыковки), пока прыскают искры.
+    for (const c of caps) {
+      if (!c.fx.active) continue;
+      c.fx.t += dt;
+      const p = c.fx.t / WELD_DUR;
+      if (p >= 1) {
+        c.fx.active = false;
+        c.seamLoop.visible = false; c.seamMat.opacity = 0;
+        continue;
+      }
+      c.seamMat.opacity = 0.9 * (1 - p) * (1 - p);        // ярко в момент стыковки, быстро гаснет
+    }
+
+    // искры варианта 2: летят прочь от линии стыковки, тормозят, мерцают и гаснут.
+    // Рисуем штрихами: голова в s.pos, хвост тянется назад по вектору скорости.
+    // Яркость запекаем в цвет (аддитивно: 0 = невидимо), голова ярко → хвост тускло.
+    {
+      let alive = false;
+      for (let i = 0; i < SPARK_MAX; i++) {
+        const s = sparks[i];
+        const h = i * 6;                                           // голова, xyz
+        const q = i * 6 + 3;                                       // хвост, xyz
+        if (!s.active) { sparkCol[h] = sparkCol[h+1] = sparkCol[h+2] = 0;
+                         sparkCol[q] = sparkCol[q+1] = sparkCol[q+2] = 0; continue; }
+        s.life -= dt;
+        if (s.life <= 0) { s.active = false;
+          sparkCol[h] = sparkCol[h+1] = sparkCol[h+2] = 0;
+          sparkCol[q] = sparkCol[q+1] = sparkCol[q+2] = 0; continue; }
+        s.vel.multiplyScalar(Math.max(0, 1 - dt * 2.4));           // трение
+        s.pos.addScaledVector(s.vel, dt);
+        const lf = s.life / s.maxLife;                             // 1→0
+        const tw = 0.55 + 0.45 * Math.sin((s.maxLife - s.life) * 55 + s.seed);  // мерцание
+        const bright = Math.min(1, lf * 1.5) * tw;                 // держит яркость, резкий обрыв в конце
+        const spd = s.vel.length();
+        const streak = Math.max(0.11 * R, Math.min(0.44 * R, spd * 0.15)); // длина штриха от скорости
+        tmpV.copy(s.vel).multiplyScalar(spd > 1e-4 ? -streak / spd : 0);    // назад по движению
+        // голова — ярко
+        sparkPos[h] = s.pos.x; sparkPos[h+1] = s.pos.y; sparkPos[h+2] = s.pos.z;
+        sparkCol[h] = sparkHot.r * bright; sparkCol[h+1] = sparkHot.g * bright; sparkCol[h+2] = sparkHot.b * bright;
+        // хвост — тускло (градиент вдоль штриха)
+        sparkPos[q]   = s.pos.x + tmpV.x; sparkPos[q+1] = s.pos.y + tmpV.y; sparkPos[q+2] = s.pos.z + tmpV.z;
+        sparkCol[q] = sparkHot.r * bright * 0.12; sparkCol[q+1] = sparkHot.g * bright * 0.12; sparkCol[q+2] = sparkHot.b * bright * 0.12;
+        alive = true;
+      }
+      if (alive || sparkLines.visible) {                           // и когда только что погасли — обнулить цвет
+        sparkGeo.attributes.position.needsUpdate = true;
+        sparkGeo.attributes.color.needsUpdate = true;
+      }
+      sparkLines.visible = alive;
+    }
+
+    // волны варианта 4: замкнутый контур шва эхо-копиями РАСХОДИТСЯ В СТОРОНЫ
+    // (в плоскости шва, прочь от центра), всплывая над корпусом и затухая — рябь от шва.
+    for (const w of waveSegs) {
+      if (!w.active) continue;
+      if (w.delay > 0) { w.delay -= dt; continue; }
+      w.t += dt;
+      const p = w.t / WAVE_DUR;
+      if (p >= 1) { w.active = false; w.seg.visible = false; w.mat.opacity = 0; continue; }
+      const g = WAVE_GROW * easeOutCubic(p);          // насколько контур ушёл в стороны
+      for (let e = 0; e < 5; e++) {
+        const o = e * 3;
+        w.pos[o]     = w.base[e].x + w.dir[e].x * g;
+        w.pos[o + 1] = w.base[e].y + w.dir[e].y * g;
+        w.pos[o + 2] = w.base[e].z + w.dir[e].z * g;
+      }
+      w.geo.attributes.position.needsUpdate = true;
+      w.seg.visible = true;
+      w.mat.opacity = 0.95 * (1 - p);                 // ярко у шва, ровно тает в стороны
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Ошибка: все 20 граней отходят от остаточного ядра, вибрируют, провода + звезда.
+  function updateError(dt, t) {
+    const targetEnv = (mode === 'error') ? 1 : 0;
+    const rate = dt / 0.5;
+    errEnv += Math.max(-rate, Math.min(rate, targetEnv - errEnv));
+    const on = errEnv > 0.001;
+    core.visible = on; wires.visible = on;
+    star.visible = on && profile.errorFlash;
+    if (!on) return;
+
+    const env = easeOutCubic(errEnv);
+    const eLift = 0.35 * R * env;
+    const flash = profile.errorFlash;
+    const rInner = 0.55 * R;
+    for (let i = 0; i < faces.length; i++) {
+      const f = faces[i];
+      let lift = eLift, rot = 0;
+      if (flash) {
+        lift += 0.010 * R * env * Math.sin(t * TWO_PI * 14 + f.phase * TWO_PI);
+        rot  += 0.024 * env * Math.sin(t * TWO_PI * 12 + f.phase * 10.0);
+      }
+      tmpV.copy(f.normal).multiplyScalar(lift).add(f.centroid);
+      f.pivot.position.copy(tmpV);
+      tmpQ.setFromAxisAngle(Z_AXIS, rot);
+      f.pivot.quaternion.copy(f.q0).multiply(tmpQ);
+      // провод: от поверхности ядра к центру грани (в системе bodyGroup)
+      const o = i * 6;
+      wirePos[o]   = f.normal.x * rInner; wirePos[o+1] = f.normal.y * rInner; wirePos[o+2] = f.normal.z * rInner;
+      wirePos[o+3] = tmpV.x;              wirePos[o+4] = tmpV.y;              wirePos[o+5] = tmpV.z;
+    }
+    wireGeo.attributes.position.needsUpdate = true;
+    core.material.opacity = 0.35 * env;
+    if (star.visible) {
+      star.lookAt(camera.position);
+      const pulse = 0.4 + 0.25 * (0.5 + 0.5 * Math.sin(t * TWO_PI * 2.5));
+      star.children[0].material.opacity = pulse * env;
+      star.children[1].material.opacity = pulse * env;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Главный кадр
+  const tmpCol = new THREE.Color();
+  const SHIMMER = new THREE.Color(0xb45cff);
+  let clockT = 0;
+
+  function tick(dt) {
+    clockT += dt;
+    levelSmooth += (level - levelSmooth) * (1 - Math.exp(-dt / 0.12));
+    updateBody(dt);
+    updateTwist(dt);
+    applyTwist();
+    updateDock(dt);
+    updateError(dt, clockT);
+
+    // плавный переход цвета/bloom
+    const k = 1 - Math.pow(0.002, dt);
+    cur.a.lerp(tgt.a, k); cur.b.lerp(tgt.b, k); cur.e.lerp(tgt.e, k);
+    const bloomTgt = tgt.bloom + (mode === 'speaking' ? 0.24 * levelSmooth : 0);
+    cur.bloom += (bloomTgt - cur.bloom) * k;
+
+    uColorA.value.copy(cur.a); uColorB.value.copy(cur.b);
+    tmpCol.copy(cur.e);
+    if (mode === 'listening') {                       // лёгкое мерцание рёбер
+      const s = 0.5 + 0.5 * Math.sin(clockT * TWO_PI * 0.30);
+      tmpCol.lerp(SHIMMER, 0.35 * s);
+    }
+    uEdge.value.copy(tmpCol);
+    lineMat.color.copy(tmpCol);
+    bloom.strength = cur.bloom;
+    uCamPos.value.copy(camera.position);
+
+    composer.render();
+  }
+
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Камера / ресайз
+  function fitCamera() {
+    const dist = FIT_R / Math.tan((FOV * Math.PI / 180) / 2);
+    camera.position.set(0, 0, dist);
+    camera.lookAt(0, 0, 0);
+  }
+  function resize() {
+    // окно/виджет на миг может отдать нулевой размер (перекладка панели, смена DPI,
+    // показ/скрытие) → aspect=∞/деление на 0 → каркас «взрывается». Держим ≥1 px.
+    const w = Math.max(1, window.innerWidth | 0), h = Math.max(1, window.innerHeight | 0);
+    camera.aspect = w / h; camera.updateProjectionMatrix();
+    renderer.setSize(w, h); composer.setSize(w, h);
+    bloom.setSize(w, h);
+    fitCamera();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Цикл с ограничением FPS + заморозка
+  let last = performance.now();
+  let rafId = null;
+  let targetFps = 0;      // 0 = без ограничения
+  let animations = true;
+
+  function frame(now) {
+    rafId = requestAnimationFrame(frame);
+    const dt = (now - last) / 1000;
+    const minDt = targetFps > 0 ? 1 / targetFps : 0;
+    if (dt < minDt) return;
+    last = now;
+    tick(Math.min(dt, 0.1));
+  }
+  function startLoop() { if (!rafId) { last = performance.now(); rafId = requestAnimationFrame(frame); } }
+  function stopLoop() { if (rafId) { cancelAnimationFrame(rafId); rafId = null; } }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Контракт window.* (тот же, что у сферы) — приложение драйвит через него
+  window.setLevel = function (v) { level = Math.max(0, Math.min(1, +v || 0)); };
+  window.setProfile = function (p) {
+    if (!p) return;
+    for (const k of ['rotationSpeed','pulseAmplitude','waveIntensity'])
+      if (typeof p[k] === 'number') profile[k] = p[k];
+    for (const k of ['rotation','pulsation','waves','errorFlash'])
+      if (typeof p[k] === 'boolean') profile[k] = p[k];
+  };
+  window.setAccent = function (hex) {
+    accent = hex ? new THREE.Color(hex).getHex() : null;
+    applyMode(mode);
+  };
+  window.setFps = function (n) { targetFps = Math.max(0, Math.min(144, n | 0)); };
+  window.setAnimations = function (on) {
+    animations = !!on;
+    if (animations) startLoop();
+    else { stopLoop(); tick(0); }     // один статичный кадр
+  };
+  window.setPointCount = function () { /* топология фиксирована: 20 граней */ };
+  window.setBackground = function (color) {
+    // EffectComposer+bloom дают непрозрачный кадр → пустые места канваса чернеют.
+    // Красим фон СЦЕНЫ в цвет панели-хоста (как в sphere.html), чтобы «коробки» не было.
+    // Пусто/null — прозрачный клир (для standalone-демо со свечением из CSS).
+    if (!color) { scene.background = null; renderer.setClearColor(0x000000, 0); return; }
+    const c = new THREE.Color(color);
+    scene.background = c;
+    renderer.setClearColor(c, 1);
+  };
+  window.setPanel = function (v) {
+    document.getElementById('panel').style.display = v ? 'flex' : 'none';
+  };
+  // маркеры помеченной вершины/граней (в приложении обычно выключены)
+  window.setMarks = function (on) { markGroup.visible = !!on; };
+  // выбор варианта эффекта стыковки (1..7)
+  window.setDockVariant = function (n) { dockVariant = (n >= 2 && n <= 7) ? n : 1; };
+
+  // Непрозрачность фигуры: frac 0.1..1. Прототип по умолчанию 0.55 → uOpacity 0.44.
+  window.setFigureOpacity = function (frac) {
+    const f = Math.max(0.05, Math.min(1, +frac || 0));
+    fillMat.uniforms.uOpacity.value = 0.8 * f;               // 0.55 → 0.44 (кадр в кадр)
+    lineMat.opacity = Math.min(1, 1.5454 * f);               // рёбра пропорционально (0.55 → 0.85)
+    if (!animations) tick(0);                                // фигура заморожена — освежаем кадр
+  };
+
+  // Единая точка входа настроек фигуры из приложения (OverlayConfig):
+  //   { opacity, calmSpin, flip:{listen:{h,v},think:{h,v}},
+  //     twist:{calm,listen,think,speak}, dockVariant }
+  window.setIcosaConfig = function (cfg) {
+    if (!cfg) return;
+    if (typeof cfg.opacity === 'number') window.setFigureOpacity(cfg.opacity);
+    if (typeof cfg.calmSpin === 'number') calmSpinMult = Math.max(0, cfg.calmSpin);
+    if (cfg.flip) {
+      if (cfg.flip.listen) {
+        if (typeof cfg.flip.listen.h === 'number') flipFreq.listening.h = Math.max(0, cfg.flip.listen.h);
+        if (typeof cfg.flip.listen.v === 'number') flipFreq.listening.v = Math.max(0, cfg.flip.listen.v);
+      }
+      if (cfg.flip.think) {
+        if (typeof cfg.flip.think.h === 'number') flipFreq.thinking.h = Math.max(0, cfg.flip.think.h);
+        if (typeof cfg.flip.think.v === 'number') flipFreq.thinking.v = Math.max(0, cfg.flip.think.v);
+      }
+    }
+    if (cfg.twist) {
+      if (typeof cfg.twist.calm === 'number')   twistSpeed.calm = Math.max(0, cfg.twist.calm);
+      if (typeof cfg.twist.listen === 'number') twistSpeed.listening = Math.max(0, cfg.twist.listen);
+      if (typeof cfg.twist.think === 'number')  twistSpeed.thinking = Math.max(0, cfg.twist.think);
+      if (typeof cfg.twist.speak === 'number')  twistSpeed.speaking = Math.max(0, cfg.twist.speak);
+    }
+    if (typeof cfg.dockVariant === 'number') window.setDockVariant(cfg.dockVariant);
+    if (!animations) tick(0);                                // освежаем статичный кадр
+  };
+  // вершина-шапка, обращённая к камере
+  function frontCap() {
+    let best = -2, bc = caps[0];
+    for (const c of caps) {
+      tmpV.copy(c.axis).applyQuaternion(bodyGroup.quaternion);
+      if (tmpV.z > best) { best = tmpV.z; bc = c; }
+    }
+    return bc;
+  }
+  // запустить один эффект стыковки вживую (для демонстрации)
+  window.triggerDock = function () { startDock(frontCap()); };
+  // демонстрация выбранного варианта вживую (искры/дуги — стохастика, статичный
+  // кадр им не нужен; поэтому просто запускаем эффект, НЕ замораживая цикл).
+  window.dockShoot = function (variant) {
+    dockVariant = (variant >= 2 && variant <= 7) ? variant : 1;
+    for (const r of dockRings) { r.active = false; r.mesh.visible = false; }
+    for (const c of caps) { c.fx.active = false; c.seamLoop.visible = false; }
+    for (const s of sparks) s.active = false;
+    for (const w of waveSegs) { w.active = false; w.seg.visible = false; }
+    for (const v of dockVibe) v.active = false;
+    startLoop();
+    startDock(frontCap());
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Обвязка панели прототипа (в приложении панель скрыта)
+  const buttons = Array.from(document.querySelectorAll('#panel button[data-mode]'));
+  for (const btn of buttons) {
+    btn.addEventListener('click', () => {
+      startLoop();                                  // оживить, если кадр был заморожен
+      buttons.forEach((b) => b.classList.toggle('active', b === btn));
+      window.setMode(btn.dataset.mode);
+    });
+  }
+  const dockBtns = Array.from(document.querySelectorAll('#panel button[data-dock]'));
+  for (const btn of dockBtns) {
+    btn.addEventListener('click', () => {
+      startLoop();                                  // оживить, если кадр был заморожен
+      dockBtns.forEach((b) => b.classList.toggle('active', b === btn));
+      window.setDockVariant(+btn.dataset.dock);   // выбранный вариант — и для thinking/speaking
+      window.triggerDock();                        // одна демонстрация сразу
+    });
+  }
+  document.getElementById('level').addEventListener('input', (e) => {
+    window.setLevel((+e.target.value) / 100);
+  });
+
+  applyMode('calm');
+  cur.a.copy(tgt.a); cur.b.copy(tgt.b); cur.e.copy(tgt.e); cur.bloom = tgt.bloom;
+  startLoop();
+</script>
+</body>
+</html>

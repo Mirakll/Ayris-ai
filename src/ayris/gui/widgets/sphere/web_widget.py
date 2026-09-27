@@ -101,12 +101,13 @@ class SphereWidget(QWebEngineView):
         self._stop_when_hidden = True
         self._accent: str | None = None
         self._profile: AnimationProfile | None = None
+        self._avatar = "sphere"
+        self._icosa_cfg: dict[str, object] | None = None
         self.setPage(_LoggingPage(self))
         self.page().setBackgroundColor(Qt.GlobalColor.transparent)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.loadFinished.connect(self._on_loaded)
-        port = _ensure_server()
-        self.load(QUrl(f"http://127.0.0.1:{port}/sphere.html"))
+        self.load(self._url_for(self._avatar))
 
     @property
     def state(self) -> SphereState:
@@ -169,6 +170,36 @@ class SphereWidget(QWebEngineView):
         self._background = color
         self._run(f"window.setBackground({json.dumps(color)})")
 
+    def _url_for(self, avatar: str) -> QUrl:
+        """Loopback URL of the avatar's page (``sphere.html`` / ``icosa.html``)."""
+        page = "icosa.html" if avatar == "icosa" else "sphere.html"
+        return QUrl(f"http://127.0.0.1:{_ensure_server()}/{page}")
+
+    def set_avatar(self, kind: str) -> None:
+        """Switch between the neural sphere and the icosahedron (reloads the page).
+
+        Reload is deliberate: each avatar is a separate WebGL page, and
+        :meth:`_on_loaded` re-pushes the full state (mode/level/profile/…) so the
+        new figure comes up in the current voice state without extra plumbing.
+        """
+        avatar = "icosa" if str(kind).lower() == "icosa" else "sphere"
+        if avatar == self._avatar:
+            return
+        self._avatar = avatar
+        self._ready = False
+        self.load(self._url_for(avatar))
+
+    def set_icosa_config(self, cfg: dict[str, object]) -> None:
+        """Apply icosahedron-only knobs (opacity/spin/flips/twist/dock variant).
+
+        A no-op on the sphere page — ``window.setIcosaConfig`` exists only on
+        ``icosa.html`` — so the JS call is guarded; the value is remembered and
+        re-applied whenever the icosa page (re)loads.
+        """
+        self._icosa_cfg = dict(cfg)
+        payload = json.dumps(self._icosa_cfg)
+        self._run(f"if(window.setIcosaConfig){{window.setIcosaConfig({payload});}}")
+
     def _on_loaded(self, ok: bool) -> None:
         self._ready = bool(ok)
         if not self._ready:
@@ -187,6 +218,8 @@ class SphereWidget(QWebEngineView):
             self.set_profile(self._profile)
         self.set_state(self._state)
         self.set_level(self._level)
+        if self._avatar == "icosa" and self._icosa_cfg is not None:
+            self.set_icosa_config(self._icosa_cfg)
 
     def _run(self, js: str) -> None:
         if self._ready:
