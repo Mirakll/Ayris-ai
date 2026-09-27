@@ -326,7 +326,9 @@ class _CatalogRow(QFrame):
 
     download_requested = Signal(object)
 
-    def __init__(self, spec: LlmModelSpec, theme: ThemeManager, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, spec: LlmModelSpec, theme: ThemeManager, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._spec = spec
         self.setProperty("transparent", True)
@@ -616,9 +618,7 @@ class AiTab(SettingsTab):
             entry_layout.setSpacing(self._theme.metric("spacing_xs"))
             radio = QRadioButton(info.label_ru)
             radio.setAccessibleName(f"Режим: {info.label_ru}")
-            radio.toggled.connect(
-                lambda checked, m=mode: self._on_mode_toggled(m, checked)
-            )
+            radio.toggled.connect(lambda checked, m=mode: self._on_mode_toggled(m, checked))
             self._mode_group.addButton(radio)
             self._mode_buttons[mode] = radio
             entry_layout.addWidget(radio)
@@ -1109,4 +1109,3 @@ class AiTab(SettingsTab):
 
 
 register_tab("ai", AiTab)
-
