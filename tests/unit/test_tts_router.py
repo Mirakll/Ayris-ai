@@ -44,7 +44,7 @@ import pytest
 from ayris.audio.devices import PlaybackRequest, RawDevice
 from ayris.audio.tts.base import AudioChunk, TtsEngine, TtsOptions, VoiceSpec
 from ayris.audio.tts.elevenlabs_engine import ElevenLabsTtsEngine
-from ayris.audio.tts.player import PlaybackReason, TtsPlayer
+from ayris.audio.tts.player import PlaybackReason, SpeechRequest, TtsPlayer
 from ayris.audio.tts.router import (
     SpeechHandle,
     SpokenPhrase,
@@ -868,6 +868,56 @@ class TestVoiceSettings:
         handle.wait(TIMEOUT_S)
         assert handle.reason == PlaybackReason.COMPLETED
         router.close()
+
+
+# ----------------------------------------------------------------------
+# sentence pause
+# ----------------------------------------------------------------------
+
+
+class TestSentencePause:
+    """The gap between sentences: inserted, sized, and never at the edges.
+
+    Driven through :meth:`TtsRouter._speech` directly rather than through the
+    player, because the pause is a property of the *stream of chunks* the router
+    hands the player, and asserting on that stream is exact - no timing, no
+    threads, just the chunks and whether each one is silent.
+    """
+
+    TWO = "Первое предложение. Второе предложение."
+
+    @staticmethod
+    def _kinds(chunks: list[AudioChunk]) -> list[str]:
+        """Each chunk as ``"silence"`` (all zero bytes) or ``"voice"``."""
+        return ["silence" if chunk.pcm and set(chunk.pcm) == {0} else "voice" for chunk in chunks]
+
+    def _speech(self, pause: float) -> list[AudioChunk]:
+        pair = EnginePair()
+        router = pair.make_router(mode=TtsMode.OFFLINE, cloud=None)
+        request = SpeechRequest(text=self.TWO)
+        handle = SpeechHandle(request.request_id, request.text)
+        try:
+            return list(router._speech(request, handle, VoiceParams(sentence_pause=pause)))
+        finally:
+            router.close()
+
+    def test_a_pause_is_slipped_in_between_two_sentences(self) -> None:
+        assert self._kinds(self._speech(0.3)) == ["voice", "silence", "voice"]
+
+    def test_no_pause_leaves_the_sentences_adjacent(self) -> None:
+        assert self._kinds(self._speech(0.0)) == ["voice", "voice"]
+
+    def test_the_pause_is_never_leading_or_trailing(self) -> None:
+        kinds = self._kinds(self._speech(1.0))
+        assert kinds[0] == "voice"
+        assert kinds[-1] == "voice"
+        assert kinds.count("silence") == 1
+
+    def test_the_silence_is_as_long_as_asked_at_the_voice_rate(self) -> None:
+        chunks = self._speech(0.25)
+        silence = next(c for c in chunks if c.pcm and set(c.pcm) == {0})
+        assert silence.sample_rate == FakeEngine.native_sample_rate
+        assert silence.frames == round(0.25 * FakeEngine.native_sample_rate)
 
 
 # ----------------------------------------------------------------------

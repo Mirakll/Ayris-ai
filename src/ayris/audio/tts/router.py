@@ -48,6 +48,8 @@ from uuid import uuid4
 from ayris.audio.tts.base import (
     DEFAULT_PITCH,
     DEFAULT_SPEED,
+    SAMPLE_WIDTH,
+    AudioChunk,
     clamp_pitch,
     clamp_speed,
     concat_chunks,
@@ -64,7 +66,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
     from datetime import datetime
 
-    from ayris.audio.tts.base import AudioChunk, TtsEngine, VoiceSpec
+    from ayris.audio.tts.base import TtsEngine, VoiceSpec
     from ayris.audio.tts.player import TtsPlayer
     from ayris.core.connectivity import ConnectivityMonitor
     from ayris.core.events import EventBus, Unsubscribe
@@ -100,6 +102,11 @@ _HISTORY_LIMIT: Final = 50
 #: Seconds a background preload may hold the lock before it is considered stuck.
 #: Only used for the log line - nothing is killed.
 _PRELOAD_WARN_SEC: Final = 30.0
+
+#: Longest extra gap the settings allow between sentences. Matches the config
+#: field's ``le`` so a hand-edited ``config.toml`` cannot ask for a minute of
+#: dead air between two lines.
+_MAX_SENTENCE_PAUSE: Final = 1.0
 
 
 class TtsMode(StrEnum):
@@ -158,6 +165,20 @@ def mode_from_config(engine: str, *, cloud_fallback: bool = False) -> TtsMode:
     return TtsMode.LOCAL_FIRST if cloud_fallback else TtsMode.OFFLINE
 
 
+def _silence(seconds: float, sample_rate: int, channels: int) -> AudioChunk:
+    """A chunk of quiet in the same format as the speech around it.
+
+    Rounded to whole frames; a rate of zero (nothing has played yet) yields an
+    empty chunk, which the player skips - the caller only asks for silence once
+    a real chunk has told it the rate, so this is belt-and-braces.
+    """
+    frames = int(round(seconds * sample_rate))
+    if frames <= 0:
+        return AudioChunk(b"", max(sample_rate, 0), max(channels, 1))
+    pcm = bytes(frames * SAMPLE_WIDTH * max(channels, 1))
+    return AudioChunk(pcm, sample_rate, max(channels, 1))
+
+
 @dataclass(frozen=True, slots=True)
 class VoiceParams:
     """Voice settings in Ayris's units, valid by construction.
@@ -176,18 +197,27 @@ class VoiceParams:
             it; the settings window does not have to know which those are.
         volume: 0–100, applied by the player. Not the system mixer: changing
             that would follow the user into their next application.
+        sentence_pause: Extra silence inserted between spoken sentences, in
+            seconds. ``0.0`` keeps the engine's own pacing; a positive value
+            slows the delivery down without touching the speed of the words
+            themselves. Engine-agnostic: :meth:`TtsRouter._speech` inserts it
+            between sentences whatever voice is speaking them.
     """
 
     voice: VoiceSpec | None = None
     speed: float = DEFAULT_SPEED
     pitch: float = DEFAULT_PITCH
     volume: int = 80
+    sentence_pause: float = 0.0
 
     def __post_init__(self) -> None:
         """Clamp every field into range. Frozen, so written the long way."""
         object.__setattr__(self, "speed", clamp_speed(self.speed))
         object.__setattr__(self, "pitch", clamp_pitch(self.pitch))
         object.__setattr__(self, "volume", max(0, min(100, int(self.volume))))
+        object.__setattr__(
+            self, "sentence_pause", max(0.0, min(_MAX_SENTENCE_PAUSE, float(self.sentence_pause)))
+        )
 
     @property
     def gain(self) -> float:
@@ -774,9 +804,23 @@ class TtsRouter:
         Consumed by the player's writer thread, one chunk at a time. Everything
         below this line therefore runs *while the previous chunk is sounding*,
         which is what makes a fallback cheap enough to do mid-answer.
+
+        When ``sentence_pause`` is set, a chunk of silence is slipped in ahead of
+        each sentence after the first audible one. It is emitted lazily - on the
+        next sentence's first real chunk, at that chunk's own rate - so an empty
+        sentence never earns a gap and the answer never ends on trailing silence.
         """
+        pause = params.sentence_pause
+        audible_before = False
         for sentence in split_sentences(request.text):
-            yield from self._sentence(request, handle, sentence, params)
+            first_of_sentence = True
+            for chunk in self._sentence(request, handle, sentence, params):
+                if not chunk.empty and first_of_sentence:
+                    if audible_before and pause > 0.0:
+                        yield _silence(pause, chunk.sample_rate, chunk.channels)
+                    first_of_sentence = False
+                    audible_before = True
+                yield chunk
 
     def _sentence(
         self,

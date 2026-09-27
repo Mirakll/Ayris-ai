@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from ayris.audio.tts.app_router import active_tts_router
+from ayris.audio.tts.base import VoiceSpec, engine_class
 from ayris.audio.tts.cloud_base import is_cloud_engine
 from ayris.core.config import RestartScope, TtsConfig
 from ayris.core.paths import get_paths
@@ -118,6 +119,32 @@ class TtsSection:
         )
         tab.bind_int_slider(self._volume, "voice.tts.volume", "Громкость озвучки")
         tab.add_card("Громкость", "Громкость озвучки помощника.", self._volume)
+
+        self._expressiveness = SliderField(
+            tab.theme, minimum=0, maximum=100, value=67, unit="%", label="Выразительность"
+        )
+        tab.bind_scaled_slider(
+            self._expressiveness, "voice.tts.expressiveness", "Выразительность голоса", factor=100
+        )
+        self._expr_card = tab.add_card(
+            "Выразительность",
+            "Живость интонации офлайн-голоса Piper: ниже — ровнее "
+            "и спокойнее, выше — эмоциональнее. "
+            "Применяется после перезапуска синтеза.",
+            self._expressiveness,
+        )
+
+        self._pause = SliderField(
+            tab.theme, minimum=0, maximum=1000, value=0, unit="мс", label="Пауза между фразами"
+        )
+        tab.bind_scaled_slider(
+            self._pause, "voice.tts.sentence_pause", "Пауза между фразами", factor=1000
+        )
+        tab.add_card(
+            "Пауза между фразами",
+            "Дополнительная тишина между предложениями ответа. 0 — говорить без пауз.",
+            self._pause,
+        )
 
         self._build_listen_card()
         self._build_custom_model_card()
@@ -254,7 +281,14 @@ class TtsSection:
         self._update_cloud_visibility()
 
     def _reload_local_voices(self, engine: str, current: str) -> None:
-        """The installed voices of a local engine, chosen from a fixed list."""
+        """The installed voices of a local engine, chosen from a fixed list.
+
+        Three sources, in order: the download catalog, model files already sitting
+        in the profile, and the engine's own built-in set. The last is what puts
+        Silero's speakers (Бая, Ксения…) in the box — they live inside one package,
+        so no catalog entry and no separate file names them. De-duped so a Piper
+        voice that a file already lists is not repeated by its stem.
+        """
         self._set_voice_editable(False)
         catalog = self._tab.model_catalog()
         entries = catalog.for_engine("tts", engine)
@@ -268,11 +302,31 @@ class TtsSection:
                 if name not in seen:
                     self._voice_combo.addItem(name, name)
                     seen.add(name)
+            seen_stems = {Path(name).stem for name in seen}
+            for spec in self._builtin_voices(engine):
+                if spec.voice_id in seen or spec.voice_id in seen_stems:
+                    continue
+                self._voice_combo.addItem(spec.label, spec.voice_id)
+                seen.add(spec.voice_id)
             if current and current not in seen:
                 self._voice_combo.addItem(current, current)
             index = self._voice_combo.findData(current)
             if index >= 0:
                 self._voice_combo.setCurrentIndex(index)
+
+    def _builtin_voices(self, engine: str) -> tuple[VoiceSpec, ...]:
+        """The engine's built-in voices, or empty when it has none or cannot load.
+
+        Silero returns its five speakers here whatever is on disk; Piper and XTTS
+        return what they find, which the caller de-dupes against the catalog and
+        the file list. Never raises — a broken optional engine must not empty the
+        voice box.
+        """
+        try:
+            return engine_class(engine).voices()
+        except Exception:
+            _log.debug("встроенные голоса движка %s недоступны", engine, exc_info=True)
+            return ()
 
     def _reload_cloud_voices(self, engine: str, current: str) -> None:
         """Seed a cloud engine's suggested voices, keep the box editable.
@@ -346,7 +400,8 @@ class TtsSection:
 
         Endpoint and model are the generic OpenAI-compatible engine's own settings, so
         they appear only for it; the key is wanted by any cloud engine and by the cloud
-        fallback, so it appears whenever either does.
+        fallback, so it appears whenever either does. Expressiveness is Piper's own
+        ``noise_scale`` — no other engine reads it — so its card follows the engine too.
         """
         settings = self._tab.manager.settings.voice.tts
         engine = str(self._engine_combo.currentData() or settings.engine)
@@ -355,6 +410,7 @@ class TtsSection:
         self._endpoint_card.setVisible(is_openai)
         self._model_card.setVisible(is_openai)
         self._cloud_card.setVisible(want_key)
+        self._expr_card.setVisible(engine == "piper")
         if want_key:
             self._secret.refresh()
 

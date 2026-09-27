@@ -58,12 +58,15 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = [
+    "DEFAULT_EXPRESSIVENESS",
     "DEFAULT_PITCH",
     "DEFAULT_SAMPLE_RATE",
     "DEFAULT_SPEED",
     "ENGINE_ENTRYPOINTS",
+    "MAX_NOISE_SCALE",
     "MAX_PITCH",
     "MAX_SPEED",
+    "MIN_NOISE_SCALE",
     "MIN_PITCH",
     "MIN_SPEED",
     "SAMPLE_WIDTH",
@@ -101,6 +104,17 @@ MIN_SPEED: Final = 0.5
 MAX_SPEED: Final = 2.0
 MIN_PITCH: Final = 0.5
 MAX_PITCH: Final = 2.0
+
+#: Default for Piper's ``noise_scale`` when the settings expose it as a slider.
+#: Matches the value the medium Russian voices ship with, so a user who never
+#: touches the control hears the voice exactly as before.
+DEFAULT_EXPRESSIVENESS: Final = 0.667
+
+#: Range the expressiveness setting allows. 0 is flat and monotone; above 1 the
+#: voice turns breathy, so the settings cap it at 1 even though the model would
+#: take more.
+MIN_NOISE_SCALE: Final = 0.0
+MAX_NOISE_SCALE: Final = 1.0
 
 #: Engine name to ``module:Class`` entrypoint. A mapping proxy so code that
 #: wants another engine has to say so through the registry rather than by
@@ -241,9 +255,9 @@ class TtsOptions:
 
     Attributes:
         speed: Speech rate multiplier. 1.0 is normal, 2.0 is double speed.
-        pitch: Pitch multiplier. 1.0 is unchanged. Piper has no pitch control
-            and ignores it; the field is still here so the settings window does
-            not have to know that.
+        pitch: Pitch multiplier. 1.0 is unchanged. Piper and Silero shift it on
+            the samples; a cloud engine that has no pitch control ignores it, so
+            the settings window does not have to know which is which.
         threads: CPU threads the engine may use.
         gpu: ``auto``, ``cuda`` or ``cpu``.
         sample_rate: Rate to deliver. ``0`` - the default - means "whatever the
@@ -251,6 +265,12 @@ class TtsOptions:
             speech to 48 kHz in Python costs more than the player's own
             conversion, which happens once per device rather than once per
             sentence.
+        noise_scale: How much variation Piper's VITS model adds to the voice -
+            its ``noise_scale``. ``None``, the default, keeps the value baked
+            into the voice's own config; a number overrides it, lower being
+            flatter and higher livelier. Only Piper reads it; the field is here
+            rather than in :attr:`extra` because it is a first-class voice knob
+            the settings expose, not a per-provider detail.
         extra: Anything specific to one engine and to no other: a region name,
             an endpoint override, a credential reference, the HTTP transport a
             test wants used. Kept as a bag rather than as fields so that adding
@@ -264,6 +284,7 @@ class TtsOptions:
     threads: int = 2
     gpu: str = "auto"
     sample_rate: int = 0
+    noise_scale: float | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
     def option(self, name: str, fallback: str = "") -> str:
@@ -279,6 +300,7 @@ class TtsOptions:
             "threads": self.threads,
             "gpu": self.gpu,
             "sample_rate": self.sample_rate,
+            "noise_scale": self.noise_scale,
         }
 
     @classmethod
@@ -291,6 +313,7 @@ class TtsOptions:
             threads=max(1, _as_int(params.get("threads"), 2)),
             gpu=str(params.get("gpu", "auto")) or "auto",
             sample_rate=max(0, _as_int(params.get("sample_rate"), 0)),
+            noise_scale=_as_optional_noise_scale(params.get("noise_scale")),
             extra=dict(raw_extra) if isinstance(raw_extra, Mapping) else {},
         )
 
@@ -686,6 +709,17 @@ def _as_float(value: object, fallback: float) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return fallback
     return float(value)
+
+
+def _as_optional_noise_scale(value: object) -> float | None:
+    """A validated ``noise_scale`` override, or ``None`` to keep the voice's own.
+
+    ``None`` and anything non-numeric both mean "do not override", so a params
+    dict without the key leaves Piper on the value baked into the voice config.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return min(max(float(value), MIN_NOISE_SCALE), MAX_NOISE_SCALE)
 
 
 def _as_int(value: object, fallback: int) -> int:
