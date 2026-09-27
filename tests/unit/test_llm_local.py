@@ -42,7 +42,7 @@ from ayris.nlu.llm.base import (
     LlmTextDelta,
     LlmTool,
 )
-from ayris.nlu.llm.cloud import OpenAiCompatibleClient
+from ayris.nlu.llm.cloud import CloudLlmClient, OpenAiCompatibleClient
 from ayris.nlu.llm.factory import create_llm_client, is_local_provider
 from ayris.nlu.llm.llamacpp_client import (
     DEFAULT_TEMPERATURE,
@@ -108,7 +108,9 @@ class OllamaRecorder:
     Routes ``/api/version`` (reachability), ``/api/tags`` (model list), ``/api/chat``
     (the NDJSON answer stream) and ``/api/pull`` (download progress), each answered
     from bytes handed in at construction. With ``raise_on_version`` the reachability
-    ping fails like a refused connection — that is how «Ollama не запущена» is proven.
+    ping fails like a refused connection — that is how «Ollama не запущена» is proven;
+    with ``version_status`` it answers non-2xx, standing in for a proxy or a wrong
+    service on the port, which must read as «down» too rather than an internet error.
     """
 
     def __init__(
@@ -118,12 +120,14 @@ class OllamaRecorder:
         chat: bytes = b"",
         pull: bytes = b"",
         raise_on_version: bool = False,
+        version_status: int = 200,
     ) -> None:
         self.requests: list[httpx.Request] = []
         self._tags = tags if tags is not None else {"models": [{"name": "llama3.2:1b"}]}
         self._chat = chat
         self._pull = pull
         self._raise_on_version = raise_on_version
+        self._version_status = version_status
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -131,6 +135,8 @@ class OllamaRecorder:
         if path.endswith("/api/version"):
             if self._raise_on_version:
                 raise httpx.ConnectError("connection refused", request=request)
+            if not (200 <= self._version_status < 300):
+                return httpx.Response(self._version_status, json={"error": "down"})
             return httpx.Response(200, json={"version": "0.4.7"})
         if path.endswith("/api/tags"):
             return httpx.Response(200, json=self._tags)
@@ -312,6 +318,17 @@ class TestOllama:
         assert "ollama serve" in message
         client.close()
 
+    def test_non_2xx_version_reads_as_down_not_as_internet(self) -> None:
+        # A proxy that intercepts the loopback address answers 503 for it; that is
+        # «down», and must never surface as the branded «проверьте интернет».
+        client = ollama_client(OllamaRecorder(version_status=503))
+        with pytest.raises(LlmError) as excinfo:
+            client.list_models()
+        message = excinfo.value.user_message
+        assert "не запущена" in message
+        assert "интернет" not in message
+        client.close()
+
     def test_list_models_reads_the_tags(self) -> None:
         recorder = OllamaRecorder(
             tags={"models": [{"name": "llama3.2:1b"}, {"name": "qwen2.5:7b"}]}
@@ -421,6 +438,39 @@ class TestLmStudio:
         assert client.list_models() == ("local-a", "local-b")
         assert recorder.last.url.path.endswith("/v1/models")
         client.close()
+
+
+class TestLocalDirectConnection:
+    """Local servers must not route their loopback traffic through a proxy.
+
+    An outbound proxy in ``HTTP(S)_PROXY`` (Happ, Xray, a corporate gateway)
+    intercepts ``127.0.0.1`` and answers for a server it cannot reach, so a
+    stopped Ollama reads as a 5xx that the retry path spells «проверьте
+    интернет» — the exact sentence the local clients are meant to avoid. The
+    guard is ``trust_env=False`` on the built client, so the fix is to pin that
+    flag: False for the local servers, True for the cloud whose traffic really
+    does leave the machine.
+    """
+
+    def _trust_env_of(self, client: LlmClient) -> bool:
+        assert isinstance(client, CloudLlmClient)
+        http = client._require_client()  # the flag under test lives on the built client
+        try:
+            return bool(http.trust_env)
+        finally:
+            client.close()
+
+    def test_ollama_ignores_environment_proxies(self) -> None:
+        client = create_llm_client("ollama", base_url="http://127.0.0.1:11434")
+        assert self._trust_env_of(client) is False
+
+    def test_lmstudio_ignores_environment_proxies(self) -> None:
+        client = create_llm_client("lmstudio", base_url="http://127.0.0.1:1234/v1")
+        assert self._trust_env_of(client) is False
+
+    def test_cloud_provider_still_honours_environment_proxies(self) -> None:
+        client = create_llm_client("openai", api_key="k")
+        assert self._trust_env_of(client) is True
 
 
 class TestCatalogue:
