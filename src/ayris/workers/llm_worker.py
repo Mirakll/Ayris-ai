@@ -55,7 +55,7 @@ from ayris.nlu.llm.base import (
     NullLlmClient,
 )
 from ayris.nlu.llm.cloud import READ_TIMEOUT_SEC, _decode_tool_call
-from ayris.nlu.llm.factory import CUSTOM_PROVIDER, create_llm_client
+from ayris.nlu.llm.factory import HOST_PROVIDERS, create_llm_client
 from ayris.nlu.llm.stream import SentenceAssembler
 from ayris.nlu.llm.usage import UsageMeter, resolve_usage
 from ayris.utils.logger import get_pipeline_logger
@@ -347,10 +347,10 @@ class LlmWorker(Worker):
         """Construct the provider's client, degrading to «не настроено» on failure.
 
         A key that is absent is not a failure here — the client comes back
-        ``configured=False`` and :meth:`chat` answers with the hint sentence. A
-        provider that is not a cloud one (a local runtime, an unknown name)
-        raises :class:`~ayris.core.errors.LlmError`, which becomes a
-        :class:`~ayris.nlu.llm.base.NullLlmClient` for the same graceful answer.
+        ``configured=False`` and :meth:`chat` answers with the hint sentence. An
+        unknown provider name raises :class:`~ayris.core.errors.LlmError`, which
+        becomes a :class:`~ayris.nlu.llm.base.NullLlmClient` for the same graceful
+        answer.
         """
         provider = self._provider()
         try:
@@ -450,14 +450,15 @@ class LlmWorker(Worker):
         return str(self.params.get("credential_ref", ""))
 
     def _base_url(self) -> str:
-        """Endpoint for the ``custom`` provider, taken from ``ai.host``; empty else.
+        """Endpoint taken from ``ai.host`` for the host-bearing providers; empty else.
 
-        Only the custom provider has no host of its own, so only it reads
-        ``host`` as a base URL. Handing a branded provider the local-server
-        ``host`` would point its traffic at the wrong place, so it gets nothing
-        and keeps its pinned default.
+        Only the providers in :data:`~ayris.nlu.llm.factory.HOST_PROVIDERS` — the
+        fill-in ``custom`` provider and the local Ollama and LM Studio servers —
+        have no host of their own, so only they read ``host`` as a base URL.
+        Handing a branded provider the local-server ``host`` would point its
+        traffic at the wrong place, so it gets nothing and keeps its pinned default.
         """
-        if self._provider() == CUSTOM_PROVIDER:
+        if self._provider() in HOST_PROVIDERS:
             return str(self.params.get("host", "")).strip()
         return ""
 
