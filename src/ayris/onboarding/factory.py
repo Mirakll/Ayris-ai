@@ -18,7 +18,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
+from ayris.audio.worker_source import WorkerAudioSource
 from ayris.core.config import ConfigManager
+from ayris.core.errors import AudioError
 from ayris.core.events import EventBus
 from ayris.gui.theme import ThemeManager
 from ayris.onboarding.services import WizardServices
@@ -41,6 +43,7 @@ if TYPE_CHECKING:
     from ayris.core.database import Database
     from ayris.gui.widgets.command_tree_model import CommandTreeStore
     from ayris.gui.widgets.model_manager import ModelManagerBackend
+    from ayris.workers.manager import WorkerManager
 
 __all__ = [
     "build_default_steps",
@@ -140,13 +143,15 @@ class _AppProfileImporter:
 class _AppAudioProbe:
     """Пробник железа поверх PortAudio (контракт ``AudioProbe``).
 
-    Перечисляет устройства записи для выбора в шаге «Микрофон». Калибровку в
-    мастере не запускаем: на первом запуске микрофоном уже владеет аудио-воркер,
-    и открывать устройство вторым владельцем ради калибровки небезопасно. Поэтому
-    :meth:`can_calibrate` возвращает ``False`` — шаг честно вырождает калибровку в
-    «недоступно», оставляя выбор устройства, усиление и живой уровень. Полная
-    калибровка остаётся на вкладке «Голос», где источник звука уже её собственный.
+    Перечисляет устройства записи для выбора в шаге «Микрофон» и запускает настоящую
+    калибровку. Микрофоном на первом запуске уже владеет аудио-воркер, поэтому вместо
+    второго открытия устройства калибровка идёт через :class:`WorkerAudioSource` —
+    тот же кольцевой буфер воркера. :meth:`can_calibrate` дешёвая и неблокирующая
+    (``is_ready`` без IPC): калибровка доступна, только когда аудио-воркер поднят.
     """
+
+    def __init__(self, worker: WorkerManager | None = None) -> None:
+        self._worker = worker
 
     def input_devices(self) -> list[tuple[str, str]]:
         from ayris.audio.devices import DeviceDirection, SoundDeviceBackend, list_devices
@@ -155,11 +160,23 @@ class _AppAudioProbe:
         return [(device.id, device.label) for device in devices]
 
     def can_calibrate(self) -> bool:
-        return False
+        return self._worker is not None and self._worker.is_ready("audio")
 
-    def calibrate(self, *, base_gain: float) -> CalibrationReport:
-        del base_gain  # часть сигнатуры протокола; здесь калибровки нет
-        raise RuntimeError("калибровка в мастере первого запуска недоступна")
+    def calibrate(
+        self,
+        *,
+        base_gain: float,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> CalibrationReport:
+        from ayris.audio.calibration import run_calibration
+
+        if self._worker is None:
+            raise AudioError(
+                "audio worker is not available for calibration",
+                user_message="Захват звука ещё не запущен.",
+            )
+        source = WorkerAudioSource(self._worker, on_phase=on_phase)
+        return run_calibration(source, base_gain=base_gain)
 
 
 def _build_backend(bus: EventBus | None) -> ModelManagerBackend:
@@ -205,15 +222,21 @@ def build_services(
     bus: EventBus | None,
     *,
     submit_text: Callable[[str], None] | None = None,
+    worker: WorkerManager | None = None,
 ) -> WizardServices:
-    """Собрать зависимости мастера из живых сервисов приложения."""
+    """Собрать зависимости мастера из живых сервисов приложения.
+
+    ``worker`` — супервизор воркеров: через него шаг «Микрофон» калибрует звук,
+    не открывая устройство вторым владельцем. Без него калибровка деградирует до
+    «недоступно», а остальной мастер поднимается как обычно.
+    """
     return WizardServices(
         theme=theme,
         config=config,
         bus=bus,
         backend=_build_backend(bus),
         importer=_build_importer(),
-        audio_probe=_AppAudioProbe(),
+        audio_probe=_AppAudioProbe(worker),
         submit_text=submit_text,
     )
 

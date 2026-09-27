@@ -14,15 +14,24 @@ from PySide6.QtWidgets import (
 )
 
 from ayris.audio.devices import DeviceDirection, list_devices
+from ayris.audio.worker_source import worker_calibration_source
 from ayris.core.config import AudioInputConfig, RestartScope
 from ayris.core.errors import AudioError
 from ayris.core.events import AudioLevelChanged
 from ayris.gui.tabs.voice import AsyncRunner, combo_options
-from ayris.gui.widgets import ConfirmDialog, LevelMeter, SliderField, ThemedComboBox
+from ayris.gui.widgets import (
+    ConfirmDialog,
+    LevelMeter,
+    SliderField,
+    ThemedComboBox,
+    active_worker_control,
+)
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from ayris.audio.calibration import CalibrationReport, Recommendation
+    from collections.abc import Callable
+
+    from ayris.audio.calibration import AudioSource, CalibrationReport, Recommendation
     from ayris.audio.devices import AudioDevice, DeviceEnumerator
     from ayris.gui.tabs.voice import VoiceTab
 
@@ -244,8 +253,22 @@ class AudioInputSection:
 
     # -- calibration --------------------------------------------------------
 
+    def _calibration_factory(self) -> Callable[[], AudioSource] | None:
+        """The source «Калибровать» records from, or ``None`` if none is live yet.
+
+        Prefers a source injected through :class:`~ayris.gui.tabs.voice.VoiceServices`
+        (tests do this), otherwise falls back to the running audio worker's ring
+        buffer. In the app nobody injects it — the tab is built by the plain
+        ``register_tab`` factory — so calibration goes through the worker that
+        already owns the microphone instead of opening the device a second time.
+        """
+        injected = self._tab.services.audio_source
+        if injected is not None:
+            return injected
+        return worker_calibration_source(active_worker_control())
+
     def _calibrate(self) -> None:
-        factory = self._tab.services.audio_source
+        factory = self._calibration_factory()
         if factory is None:
             return
         self._calibrate_button.setEnabled(False)
@@ -262,7 +285,7 @@ class AudioInputSection:
         self._runner.run(work)
 
     def _on_calibrated(self, result: object) -> None:
-        self._calibrate_button.setEnabled(self._tab.services.audio_source is not None)
+        self._calibrate_button.setEnabled(self._calibration_factory() is not None)
         from ayris.audio.calibration import CalibrationReport
 
         if not isinstance(result, CalibrationReport):
@@ -279,7 +302,7 @@ class AudioInputSection:
             self.apply_recommendation(result.recommended)
 
     def _on_calibration_failed(self, message: str) -> None:
-        self._calibrate_button.setEnabled(self._tab.services.audio_source is not None)
+        self._calibrate_button.setEnabled(self._calibration_factory() is not None)
         self._calibrate_status.setText(f"Калибровка не удалась: {message}")
 
     def apply_recommendation(self, recommendation: Recommendation) -> None:
@@ -299,7 +322,7 @@ class AudioInputSection:
     def refresh(self) -> None:
         self._populate_devices()
         self._meter.set_threshold(self._tab.manager.settings.voice.audio_input.vad_threshold)
-        can_calibrate = self._tab.services.audio_source is not None
+        can_calibrate = self._calibration_factory() is not None
         self._calibrate_button.setEnabled(can_calibrate)
         self._calibrate_button.setToolTip(
             "" if can_calibrate else "Калибровка станет доступна после запуска захвата звука"

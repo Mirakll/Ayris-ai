@@ -557,8 +557,13 @@ class GeneralTab(SettingsTab):
             _log.exception("не удалось сбросить состояние мастера первого запуска")
             return
         from ayris.onboarding import build_services, run_onboarding
+        from ayris.workers.manager import WorkerManager
 
-        services = build_services(self._theme, self._manager, self._bus)
+        # Приложение уже поднято, поэтому калибровку в мастере можно провести через
+        # живой аудио-воркер — тот же супервизор, что и у кнопок перезапуска.
+        control = active_worker_control()
+        worker = control if isinstance(control, WorkerManager) else None
+        services = build_services(self._theme, self._manager, self._bus, worker=worker)
         try:
             run_onboarding(services, parent=self.window())
         except Exception:

@@ -458,7 +458,13 @@ def _run_application(options: CliOptions) -> int:
         if should_run_onboarding(ayris.config):
             try:
                 run_onboarding(
-                    build_services(theme, ayris.config, ayris.bus, submit_text=submit_text),
+                    build_services(
+                        theme,
+                        ayris.config,
+                        ayris.bus,
+                        submit_text=submit_text,
+                        worker=worker_manager,
+                    ),
                     parent=window,
                 )
             except Exception:  # сбой мастера не должен блокировать запуск

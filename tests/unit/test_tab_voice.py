@@ -272,6 +272,54 @@ def test_test_buttons_enabled_when_services_provided(
     tab.close()
 
 
+def test_calibrate_enabled_by_the_live_worker(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # In the running app nobody injects audio_source; «Калибровать» then lights from
+    # the live audio worker and records through its ring buffer, not by opening the
+    # microphone a second time behind the worker that already owns it.
+    monkeypatch.setattr("ayris.audio.worker_source.time.sleep", lambda *_a, **_k: None)
+
+    class _AudioControl:
+        def __init__(self) -> None:
+            self.reads: list[float] = []
+
+        def status(self) -> tuple[WorkerSummary, ...]:
+            return ()
+
+        def restart_scope(self, scope: RestartScope, settings_reason: str = "") -> int:
+            return 0
+
+        def is_ready(self, name: str) -> bool:
+            return name == "audio"
+
+        def call_sync(
+            self, worker: str, method: str, params: dict[str, float] | None = None
+        ) -> object:
+            if method == "status":
+                return {"sample_rate": 16000}
+            self.reads.append((params or {})["ms"])
+            return {"pcm": b"\x00\x00" * 1600, "sample_rate": 16000}
+
+    control = _AudioControl()
+    set_active_worker_control(control)
+
+    tab = _make_tab(manager, ThemeManager(app))  # no audio_source injected
+    audio = tab._sections[3]
+    assert audio._calibrate_button.isEnabled()
+
+    factory = audio._calibration_factory()
+    assert factory is not None
+    from ayris.audio.calibration import CalibrationReport, run_calibration
+
+    report = run_calibration(factory(), base_gain=1.0)
+    assert isinstance(report, CalibrationReport)
+    # Тишина ~3000 мс, затем фраза ~5000 мс — два окна из буфера воркера.
+    assert [round(ms) for ms in control.reads] == [3000, 5000]
+    tab.dispose()
+    tab.close()
+
+
 def test_listen_falls_back_to_the_runtime_router(
     app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:

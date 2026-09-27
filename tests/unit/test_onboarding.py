@@ -102,13 +102,20 @@ def registry() -> ActionRegistry:
 
 
 class FakeAudioProbe:
-    """Пробник без звуковой карты: перечисляет устройства, калибровку не даёт."""
+    """Пробник без звуковой карты: перечисляет устройства и, если задан отчёт, калибрует."""
 
     def __init__(
-        self, devices: tuple[tuple[str, str], ...] = (), *, can_calibrate: bool = False
+        self,
+        devices: tuple[tuple[str, str], ...] = (),
+        *,
+        can_calibrate: bool = False,
+        report: CalibrationReport | None = None,
     ) -> None:
         self._devices = list(devices)
         self._can = can_calibrate
+        self._report = report
+        self.phases: list[str] = []
+        self.base_gain: float | None = None
 
     def input_devices(self) -> list[tuple[str, str]]:
         return list(self._devices)
@@ -116,8 +123,47 @@ class FakeAudioProbe:
     def can_calibrate(self) -> bool:
         return self._can
 
-    def calibrate(self, *, base_gain: float) -> CalibrationReport:  # pragma: no cover
-        raise RuntimeError("калибровка в тестах недоступна")
+    def calibrate(
+        self,
+        *,
+        base_gain: float,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> CalibrationReport:
+        self.base_gain = base_gain
+        if on_phase is not None:
+            on_phase("silence")
+            on_phase("phrase")
+            self.phases = ["silence", "phrase"]
+        if self._report is None:  # pragma: no cover - защита от неверного использования
+            raise RuntimeError("калибровка в тестах недоступна")
+        return self._report
+
+
+class _FakeWorker:
+    """Мини-супервизор воркеров для проверки ``_AppAudioProbe`` без звуковой карты.
+
+    Отдаёт готовность, частоту дискретизации и заранее записанный PCM так же, как
+    настоящий ``WorkerManager`` через ``is_ready``/``call_sync``.
+    """
+
+    def __init__(self, *, ready: bool = True, sample_rate: int = 16000, pcm: bytes = b"") -> None:
+        self._ready = ready
+        self._sample_rate = sample_rate
+        self._pcm = pcm
+        self.reads: list[float] = []
+
+    def is_ready(self, name: str) -> bool:
+        return self._ready
+
+    def call_sync(
+        self, worker: str, method: str, params: dict[str, object] | None = None
+    ) -> dict[str, object]:
+        if method == "status":
+            return {"sample_rate": self._sample_rate}
+        if method == "read":
+            self.reads.append(float((params or {}).get("ms", 0.0)))  # type: ignore[arg-type]
+            return {"pcm": self._pcm}
+        raise AssertionError(f"неожиданный вызов воркера: {method}")
 
 
 class FakeImporter:
@@ -413,6 +459,95 @@ def test_audio_step_lists_devices_with_calibration_disabled(
     assert not step._calibrate_button.isEnabled()
     step.teardown()
     step.close()
+
+
+def test_audio_step_calibration_enables_on_live_audio(
+    theme: ThemeManager, manager: ConfigManager
+) -> None:
+    # Воркер поднят, но кнопка ждёт реального звука — как и обещает подпись под
+    # полосой уровня. Первый живой отсчёт оживляет и полосу, и кнопку разом.
+    probe = FakeAudioProbe(devices=(("dev-1", "Микрофон 1"),), can_calibrate=True)
+    step = AudioStep(theme, manager, probe, None)
+    step.activate()
+    assert not step._calibrate_button.isEnabled()
+    assert "Ждём звук" in step._device_notice.text()
+    step._on_level(0.05)
+    assert step._calibrate_button.isEnabled()
+    assert step._device_notice.text() == ""
+    step.teardown()
+    step.close()
+
+
+def test_audio_step_calibration_applies_recommendation(
+    theme: ThemeManager, manager: ConfigManager
+) -> None:
+    from ayris.audio.calibration import CalibrationReport, Recommendation, Verdict
+    from ayris.audio.denoise import DenoiseMode
+
+    report = CalibrationReport(
+        verdict=Verdict.GOOD,
+        recommended=Recommendation(
+            gain=2.5,
+            vad_threshold=0.31,
+            noise_floor_db=-48.0,
+            silence_ms=900,
+            denoise=DenoiseMode.RNNOISE,
+            gate_db=-39.0,
+        ),
+    )
+    step = AudioStep(theme, manager, None, None)
+    step._on_calibrated(report)
+    audio_in = manager.settings.voice.audio_input
+    assert audio_in.gain == pytest.approx(2.5)
+    assert audio_in.vad_threshold == pytest.approx(0.31)
+    assert audio_in.noise_floor_db == pytest.approx(-48.0)
+    assert audio_in.silence_ms == 900
+    assert audio_in.denoise == "rnnoise"
+    assert step._gain.value() == 250  # усиление 2.5 × _GAIN_FACTOR
+    assert step._calibrate_status.text() == report.summary
+    step.teardown()
+    step.close()
+
+
+def test_audio_step_phase_prompt_updates_status(
+    theme: ThemeManager, manager: ConfigManager
+) -> None:
+    step = AudioStep(theme, manager, None, None)
+    step._on_phase_changed("silence")
+    assert "помолчите" in step._calibrate_status.text().lower()
+    step._on_phase_changed("phrase")
+    assert "айрис открой браузер" in step._calibrate_status.text()
+    step.teardown()
+    step.close()
+
+
+def test_app_audio_probe_calibrates_through_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Калибровка на первом запуске идёт через аудио-воркер (владельца микрофона),
+    # а не открывает устройство второй раз. Ждать реальные 8 секунд записи в тесте
+    # незачем — глушим сон, оставляя настоящий разбор PCM.
+    from ayris.audio.calibration import CalibrationReport
+    from ayris.onboarding.factory import _AppAudioProbe
+
+    monkeypatch.setattr("ayris.audio.worker_source.time.sleep", lambda *_a, **_k: None)
+    quiet = b"\x00\x00" * 1600  # непустая «тишина», иначе калибровка честно откажет
+    worker = _FakeWorker(sample_rate=16000, pcm=quiet)
+    probe = _AppAudioProbe(worker)  # type: ignore[arg-type]
+
+    assert probe.can_calibrate() is True
+    phases: list[str] = []
+    report = probe.calibrate(base_gain=1.5, on_phase=phases.append)
+
+    assert isinstance(report, CalibrationReport)
+    assert phases == ["silence", "phrase"]
+    # Два замера: тишина ~3000 мс и фраза ~5000 мс.
+    assert [round(ms) for ms in worker.reads] == [3000, 5000]
+
+
+def test_app_audio_probe_cannot_calibrate_without_ready_worker() -> None:
+    from ayris.onboarding.factory import _AppAudioProbe
+
+    assert _AppAudioProbe(None).can_calibrate() is False
+    assert _AppAudioProbe(_FakeWorker(ready=False)).can_calibrate() is False  # type: ignore[arg-type]
 
 
 def test_models_step_downloads_full_minimal_set(
