@@ -37,9 +37,18 @@ from ayris.nlu.llm.base import (
     LlmUsage,
     LlmUsageDelta,
 )
+from ayris.nlu.llm.catalog import RECOMMENDED, LlmModelSpec
 from ayris.nlu.llm.ollama_client import OllamaPullProgress
 
 pytestmark = pytest.mark.unit
+
+
+def _gguf_spec() -> LlmModelSpec:
+    """Первая рекомендованная модель со встроенным GGUF для llama.cpp."""
+    for spec in RECOMMENDED:
+        if spec.gguf_catalog_id and spec.runs_on("llamacpp"):
+            return spec
+    raise AssertionError("в каталоге нет модели с GGUF для llama.cpp")
 
 
 class _FakeKeyring:
@@ -193,7 +202,7 @@ def test_content_fits_without_a_horizontal_scrollbar(
 
 def test_tab_assembles_and_loads_defaults(app: QApplication, manager: ConfigManager) -> None:
     tab = _make_tab(manager, ThemeManager(app))
-    assert tab._provider_combo.currentData() == "ollama"
+    assert tab._provider_combo.currentData() == "llamacpp"
     assert tab._model_edit.text() == "qwen2.5:7b-instruct"
     assert mode_from_config(manager.settings) is NluMode.HYBRID
     assert tab._mode_buttons[NluMode.HYBRID].isChecked()
@@ -255,9 +264,18 @@ def test_provider_switch_toggles_cloud_and_local_blocks(
     tab = _make_tab(manager, ThemeManager(app))
     combo = tab._provider_combo
 
-    # Default Ollama: local host and catalogue, no cloud key.
+    # Default llama.cpp (in-process): catalogue and the .gguf picker, no host or key.
+    assert not tab._catalog_block.isHidden()
+    assert not tab._gguf_pick_button.isHidden()
+    assert tab._host_card.isHidden()
+    assert tab._key_block.isHidden()
+    assert tab._probe_block.isHidden()
+
+    # Ollama: local host and catalogue, no cloud key, and no .gguf picker.
+    combo.setCurrentIndex(combo.findData("ollama"))
     assert not tab._host_card.isHidden()
     assert not tab._catalog_block.isHidden()
+    assert tab._gguf_pick_button.isHidden()
     assert tab._key_block.isHidden()
     assert tab._probe_button.text() == "Проверить соединение"
 
@@ -396,3 +414,45 @@ def test_clear_history_button_enabled_only_with_a_service(
     assert with_service._clear_button.isEnabled()
     with_service.dispose()
     with_service.close()
+
+
+def test_llamacpp_download_finish_writes_model_path_and_model(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    from ayris.core.events import ModelDownloadFinished
+
+    tab = _make_tab(manager, ThemeManager(app))  # provider llamacpp по умолчанию
+    spec = _gguf_spec()
+    tab._pulling_spec = spec
+    tab._pulling_catalog_id = spec.gguf_catalog_id
+    tab._on_gguf_finished(
+        ModelDownloadFinished(model_id=spec.gguf_catalog_id, kind="llm", path="C:/models/x.gguf")
+    )
+    ai = manager.settings.ai
+    assert ai.model_path == "C:/models/x.gguf"
+    assert ai.model == spec.name
+    assert tab._pulling_catalog_id == ""
+    assert f"«{spec.name}»" in tab._catalog_status.text()
+    tab.dispose()
+    tab.close()
+
+
+def test_pick_local_gguf_writes_model_path(app: QApplication, manager: ConfigManager) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    tab._set_local_model("C:/weights/custom.gguf")
+    assert manager.settings.ai.model_path == str(Path("C:/weights/custom.gguf"))
+    assert "custom.gguf" in tab._model_path_label.text()
+    tab.dispose()
+    tab.close()
+
+
+def test_gguf_download_without_backend_reports_unavailable(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    tab._backend_tried = True  # менеджер моделей недоступен и уже пробовали
+    tab._start_gguf_download(_gguf_spec())
+    assert "Менеджер моделей недоступен" in tab._catalog_status.text()
+    assert tab._pulling_catalog_id == ""
+    tab.dispose()
+    tab.close()

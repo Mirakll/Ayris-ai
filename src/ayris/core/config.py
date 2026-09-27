@@ -743,13 +743,35 @@ class AiConfig(ConfigSection):
         "yandex",
         "custom",
     ] = Field(
-        default="ollama",
+        default="llamacpp",
         description="Поставщик языковой модели",
         json_schema_extra=_restart(RestartScope.LLM),
     )
     model: str = Field(
         default="qwen2.5:7b-instruct",
         description="Название модели у выбранного поставщика",
+        json_schema_extra=_restart(RestartScope.LLM),
+    )
+    model_path: str = Field(
+        default="",
+        description=(
+            "Путь к файлу .gguf для встроенного движка llama.cpp. Пусто — модель "
+            "ещё не выбрана; скачайте её в разделе «ИИ» или укажите свой файл"
+        ),
+        json_schema_extra=_restart(RestartScope.LLM),
+    )
+    n_ctx: int = Field(
+        default=4096,
+        ge=512,
+        le=131072,
+        description="Размер контекстного окна встроенной модели (llama.cpp)",
+        json_schema_extra=_restart(RestartScope.LLM),
+    )
+    n_gpu_layers: int = Field(
+        default=0,
+        ge=0,
+        le=1000,
+        description="Сколько слоёв встроенной модели считать на видеокарте. 0 — только процессор",
         json_schema_extra=_restart(RestartScope.LLM),
     )
     host: str = Field(

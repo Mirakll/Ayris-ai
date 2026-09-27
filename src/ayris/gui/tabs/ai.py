@@ -20,12 +20,15 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
     QDialog,
+    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -41,7 +44,12 @@ from PySide6.QtWidgets import (
 from ayris.core.config import AiConfig, ConfigManager, RestartScope
 from ayris.core.config import ConfigChanged as SettingsDiff
 from ayris.core.errors import AyrisError, SecretsError
-from ayris.core.events import EventBus
+from ayris.core.events import (
+    EventBus,
+    ModelDownloadFailed,
+    ModelDownloadFinished,
+    ModelDownloadProgress,
+)
 from ayris.core.pipeline import NluMode, mode_from_config
 from ayris.core.secrets import SecretsStore, get_secrets, is_valid_ref
 from ayris.gui.tabs.base import SettingsTab
@@ -69,6 +77,7 @@ from ayris.nlu.llm.catalog import (
 )
 from ayris.nlu.llm.factory import (
     HOST_PROVIDERS,
+    LLAMACPP_PROVIDER,
     create_llm_client,
     is_cloud_provider,
     is_local_provider,
@@ -78,6 +87,10 @@ from ayris.nlu.llm.ollama_client import OllamaPullProgress
 from ayris.nlu.llm.prompts import build_chat_prompt, build_nlu_prompt
 from ayris.nlu.llm.tools import CommandCard, render_catalog
 from ayris.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from ayris.core.models import ModelRecord
+    from ayris.gui.widgets.model_manager import ModelManagerBackend
 
 __all__ = ["AiServices", "AiTab"]
 
@@ -129,6 +142,9 @@ class AiServices:
     Всё — с дефолтами, чтобы вкладка поднималась и без приложения (в тестах и
     предпросмотре). ``clear_history`` приходит от пайплайна: без него кнопка сброса
     истории заблокирована. ``total_ram_mb`` позволяет тестам не звать ``psutil``.
+    ``backend`` нужен только пути llama.cpp: через него скачивается GGUF из каталога
+    моделей. Строится лениво при первой загрузке; ``None`` — менеджер моделей
+    недоступен, и загрузка из каталога выключена (свой файл выбрать всё равно можно).
     """
 
     secrets: SecretsStore = field(default_factory=get_secrets)
@@ -136,6 +152,43 @@ class AiServices:
     command_cards: Callable[[], Sequence[CommandCard]] = _no_cards
     clear_history: Callable[[], None] | None = None
     total_ram_mb: int = 0
+    backend: ModelManagerBackend | None = None
+
+
+def _default_backend(bus: EventBus | None) -> ModelManagerBackend | None:
+    """Собрать бэкенд менеджера моделей для загрузки GGUF, или ``None``, если нельзя.
+
+    Разделяет процессную базу и пути с остальным приложением, чтобы скачанная
+    модель попала в тот же реестр, что видит вкладка «Обновления». В отличие от
+    менеджера моделей, вкладке «ИИ» пустой каталог не нужен: при недоступной базе
+    возвращаем ``None`` и просто гасим загрузку из каталога, не роняя вкладку.
+    """
+    try:
+        from ayris.core.database import get_database
+        from ayris.core.paths import get_paths
+        from ayris.core.repositories import Repositories
+        from ayris.gui.tabs.updates import RegistryBackend
+        from ayris.models.registry import ModelRegistry
+
+        repositories = Repositories(get_database())
+        registry = ModelRegistry(repositories.models, get_paths(), bus=bus)
+        return RegistryBackend(registry)
+    except Exception:
+        _log.exception("менеджер моделей недоступен — загрузка GGUF из каталога отключена")
+        return None
+
+
+class _DownloadRelay(QObject):
+    """Переносит события загрузки модели с потока-загрузчика в поток вкладки.
+
+    Прогресс публикуется из демон-потока координатора; трогать виджеты оттуда
+    нельзя. Сигналы эмитятся из подписчика шины и доставляются очередью в поток,
+    которому принадлежит реле, — тот же приём, что у менеджера моделей.
+    """
+
+    progress = Signal(object)
+    finished = Signal(object)
+    failed = Signal(object)
 
 
 class _RestartBar(QFrame):
@@ -394,6 +447,8 @@ class AiTab(SettingsTab):
         self._catalog_rows: list[_CatalogRow] = []
         self._syncing_mode = False
         self._pulling_spec: LlmModelSpec | None = None
+        self._pulling_catalog_id = ""
+        self._backend_tried = False
         self._ram_mb = self.services.total_ram_mb or detect_total_ram_mb()
         self._command_cards = self.services.command_cards
         self._mode_buttons: dict[NluMode, QRadioButton] = {}
@@ -405,6 +460,25 @@ class AiTab(SettingsTab):
         self._pull_runner.progress.connect(self._on_pull_progress)
         self._pull_runner.finished.connect(self._on_pull_finished)
         self._pull_runner.failed.connect(self._on_pull_failed)
+        # GGUF downloads (the llama.cpp path) run in the model registry's own
+        # coordinator thread and report over the bus; a relay marshals those
+        # events onto this thread, exactly as the model-manager widget does.
+        self._dl_relay = _DownloadRelay(self)
+        self._dl_relay.progress.connect(self._on_gguf_progress)
+        self._dl_relay.finished.connect(self._on_gguf_finished)
+        self._dl_relay.failed.connect(self._on_gguf_failed)
+        if bus is not None:
+            unsubscribers = [
+                bus.subscribe(ModelDownloadProgress, self._dl_relay.progress.emit),
+                bus.subscribe(ModelDownloadFinished, self._dl_relay.finished.emit),
+                bus.subscribe(ModelDownloadFailed, self._dl_relay.failed.emit),
+            ]
+
+            def _drop_download_subs() -> None:
+                for unsubscribe in unsubscribers:
+                    unsubscribe()
+
+            self.add_teardown(_drop_download_subs)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -760,7 +834,14 @@ class AiTab(SettingsTab):
         layout = QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(self._theme.metric("spacing_sm"))
-        for spec in RECOMMENDED:
+        for index, spec in enumerate(RECOMMENDED):
+            # Разделительная линия между моделями: без неё кнопка «Загрузить»
+            # (её видит не каждая строка) читается как висящая между двумя
+            # соседними моделями, а не принадлежащая своей. Высоту и цвет задаём
+            # явно — на min/max-height из QSS в вертикальном лэйауте полагаться
+            # нельзя, линия схлопывается в ноль.
+            if index:
+                layout.addWidget(self._catalog_divider())
             row = _CatalogRow(spec, self._theme)
             row.download_requested.connect(self._start_pull)
             layout.addWidget(row)
@@ -773,11 +854,33 @@ class AiTab(SettingsTab):
         self._catalog_status.setProperty("role", "muted")
         self._catalog_status.setWordWrap(True)
         layout.addWidget(self._catalog_status)
+        # Свой файл модели (только llama.cpp): путь к .gguf минует каталог и реестр —
+        # воркер грузит модель по абсолютному пути. Кнопка и строка пути видны лишь
+        # под llama.cpp, их показывает _sync_provider.
+        pick_row = QHBoxLayout()
+        pick_row.setSpacing(self._theme.metric("spacing_sm"))
+        self._gguf_pick_button = QPushButton("Выбрать файл .gguf…")
+        self._gguf_pick_button.clicked.connect(self._pick_gguf)
+        pick_row.addWidget(self._gguf_pick_button)
+        pick_row.addStretch(1)
+        layout.addLayout(pick_row)
+        self._model_path_label = QLabel("")
+        self._model_path_label.setProperty("role", "muted")
+        self._model_path_label.setWordWrap(True)
+        layout.addWidget(self._model_path_label)
         self._catalog_block = self._model_block(
             "Рекомендованные модели",
-            "Оценка по вашей памяти. Загрузка доступна для Ollama — модель тянется по имени.",
+            "Оценка по вашей памяти. Ollama тянет модель по имени; "
+            "для llama.cpp GGUF скачивается в менеджер моделей.",
             body,
         )
+
+    def _catalog_divider(self) -> QFrame:
+        """Тонкая горизонтальная линия цветом границы между строками каталога."""
+        line = QFrame()
+        line.setFixedHeight(max(1, self._theme.metric("border_width")))
+        line.setStyleSheet(f"background-color: {self._theme.theme.color('border')}; border: none;")
+        return line
 
     def _pick_model(self, _index: int) -> None:
         model = self._model_combo.currentData()
@@ -792,6 +895,7 @@ class AiTab(SettingsTab):
         provider = str(self._provider_combo.currentData() or settings.ai.provider)
         cloud = is_cloud_provider(provider)
         local = is_local_provider(provider)
+        is_llamacpp = provider == LLAMACPP_PROVIDER
         self._host_card.setVisible(provider in HOST_PROVIDERS)
         self._key_block.setVisible(cloud)
         self._catalog_block.setVisible(local)
@@ -799,8 +903,33 @@ class AiTab(SettingsTab):
         self._probe_button.setText("Проверить ключ" if cloud else "Проверить соединение")
         for row in self._catalog_rows:
             row.set_verdict(self._ram_mb)
-            row.set_downloadable(provider == "ollama" and row.spec.runs_on(provider))
+            row.set_downloadable(self._row_downloadable(row, provider))
+        # Свой файл и его путь имеют смысл только для встроенного llama.cpp.
+        self._gguf_pick_button.setVisible(is_llamacpp)
+        self._model_path_label.setVisible(is_llamacpp)
+        if is_llamacpp:
+            self._refresh_model_path_label()
         self._key_field.refresh()
+
+    def _row_downloadable(self, row: _CatalogRow, provider: str) -> bool:
+        """Можно ли тянуть эту модель текущим провайдером.
+
+        Ollama тянет любую по имени-тегу; llama.cpp — только те, для которых Айрис
+        поставляет GGUF (``gguf_catalog_id``); у LM Studio свой загрузчик.
+        """
+        if provider == "ollama":
+            return row.spec.runs_on("ollama")
+        if provider == LLAMACPP_PROVIDER:
+            return bool(row.spec.gguf_catalog_id) and row.spec.runs_on(LLAMACPP_PROVIDER)
+        return False
+
+    def _refresh_model_path_label(self) -> None:
+        """Показать выбранный файл модели или подсказку «файл не выбран»."""
+        path = self._manager.settings.ai.model_path
+        if path:
+            self._model_path_label.setText(f"Выбран файл: {Path(path).name}")
+        else:
+            self._model_path_label.setText("Файл модели не выбран — скачайте или укажите .gguf.")
 
     # -- проба соединения и списка моделей -----------------------------------
 
@@ -875,8 +1004,12 @@ class AiTab(SettingsTab):
         if not isinstance(spec, LlmModelSpec) or self._pulling_spec is not None:
             return
         self.flush_pending()
-        if self._manager.settings.ai.provider != "ollama":
-            self._catalog_status.setText("Загрузка доступна только для Ollama.")
+        provider = self._manager.settings.ai.provider
+        if provider == LLAMACPP_PROVIDER:
+            self._start_gguf_download(spec)
+            return
+        if provider != "ollama":
+            self._catalog_status.setText("Загрузка доступна только для Ollama и llama.cpp.")
             return
         client = self._build_client()
         self._pulling_spec = spec
@@ -890,12 +1023,20 @@ class AiTab(SettingsTab):
         self._pull_runner.run(client, spec.ollama_tag)
 
     def _cancel_pull(self) -> None:
+        if self._pulling_catalog_id:
+            backend = self.services.backend
+            if backend is not None:
+                backend.cancel_download(self._pulling_catalog_id)
+            self._download.set_cancellable(False)
+            self._catalog_status.setText("Отменяю загрузку…")
+            return
         self._pull_runner.cancel()
         self._download.set_cancellable(False)
         self._catalog_status.setText("Отменяю загрузку…")
 
     def _finish_pull(self) -> None:
         self._pulling_spec = None
+        self._pulling_catalog_id = ""
         self._download.set_cancellable(False)
         self._sync_provider()
 
@@ -914,6 +1055,134 @@ class AiTab(SettingsTab):
     def _on_pull_failed(self, message: str) -> None:
         self._finish_pull()
         self._catalog_status.setText(f"Не удалось загрузить: {message}")
+
+    # -- загрузка GGUF через менеджер моделей (llama.cpp) --------------------
+
+    def _ensure_backend(self) -> ModelManagerBackend | None:
+        """Лениво собрать бэкенд менеджера моделей; ``None`` — загрузка недоступна.
+
+        Попытка сборки одна: при недоступной базе ``_default_backend`` возвращает
+        ``None`` и логирует причину, повторять на каждый клик незачем.
+        """
+        if self.services.backend is None and not self._backend_tried:
+            self._backend_tried = True
+            self.services.backend = _default_backend(self.event_bus)
+        return self.services.backend
+
+    def _start_gguf_download(self, spec: LlmModelSpec) -> None:
+        catalog_id = spec.gguf_catalog_id
+        if not catalog_id:
+            self._catalog_status.setText(f"Для «{spec.name}» нет встроенного GGUF.")
+            return
+        backend = self._ensure_backend()
+        if backend is None:
+            self._catalog_status.setText(
+                "Менеджер моделей недоступен — выберите файл .gguf вручную."
+            )
+            return
+        self._pulling_spec = spec
+        self._pulling_catalog_id = catalog_id
+        self._download.reset()
+        self._download.set_cancellable(True)
+        self._download.show()
+        self._catalog_status.setText(f"Скачиваю «{spec.name}»…")
+        for row in self._catalog_rows:
+            row.button.setEnabled(False)
+        try:
+            backend.start_download(catalog_id)
+        except AyrisError as exc:
+            self._finish_pull()
+            self._download.hide()
+            self._catalog_status.setText(f"Не удалось начать загрузку: {exc.user_message}")
+        except Exception as exc:  # бэкенд может кинуть что угодно — вкладка не падает
+            _log.exception("не удалось начать загрузку GGUF")
+            self._finish_pull()
+            self._download.hide()
+            self._catalog_status.setText(f"Не удалось начать загрузку: {exc}")
+
+    def _on_gguf_progress(self, event: object) -> None:
+        if not isinstance(event, ModelDownloadProgress):
+            return
+        if event.model_id != self._pulling_catalog_id:
+            return
+        self._download.set_progress(event.downloaded, event.total, event.speed_bps, event.eta_s)
+
+    def _on_gguf_finished(self, event: object) -> None:
+        if not isinstance(event, ModelDownloadFinished):
+            return
+        if event.model_id != self._pulling_catalog_id:
+            return
+        spec = self._pulling_spec
+        self._download.flush()
+        self._activate_downloaded(event.model_id, event.path, spec)
+        self._finish_pull()
+        name = spec.name if spec is not None else event.model_id
+        self._catalog_status.setText(f"Модель «{name}» загружена и выбрана.")
+
+    def _on_gguf_failed(self, event: object) -> None:
+        if not isinstance(event, ModelDownloadFailed):
+            return
+        if event.model_id != self._pulling_catalog_id:
+            return
+        self._finish_pull()
+        self._download.hide()
+        if event.cancelled:
+            self._catalog_status.setText("Загрузка отменена.")
+        else:
+            reason = event.user_message or event.error
+            self._catalog_status.setText(f"Не удалось загрузить: {reason}")
+
+    def _activate_downloaded(self, catalog_id: str, path: str, spec: LlmModelSpec | None) -> None:
+        """Записать путь в конфиг и сделать модель активной в реестре.
+
+        Конфиг пишется напрямую (это работает и без шины, в тестах), а активная
+        запись в реестре держит выбор в согласии со вкладкой «Обновления». Правка
+        ``ai.model_path`` под :class:`RestartScope.LLM` перезапустит воркер с новой
+        моделью и прогреет её на следующем старте.
+        """
+        record = self._find_record(catalog_id)
+        resolved = path or (record.path if record is not None else "")
+        updates: dict[str, object] = {"ai.model_path": resolved}
+        if spec is not None:
+            updates["ai.model"] = spec.name
+        self._manager.apply(updates)
+        self._refresh_model_path_label()
+        backend = self.services.backend
+        if backend is not None and record is not None:
+            try:
+                backend.set_active(record)
+            except Exception:  # активация — «на всякий», конфиг уже записан
+                _log.exception("не удалось отметить модель активной в реестре")
+
+    def _find_record(self, catalog_id: str) -> ModelRecord | None:
+        backend = self.services.backend
+        if backend is None:
+            return None
+        try:
+            for record in backend.installed():
+                if record.kind == "llm" and record.catalog_id == catalog_id:
+                    return record
+        except Exception:  # чтение реестра не должно ронять обработчик события
+            _log.exception("не удалось найти скачанную запись в реестре")
+        return None
+
+    def _pick_gguf(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите файл модели (.gguf)",
+            "",
+            "Модели GGUF (*.gguf);;Все файлы (*)",
+        )
+        if not path:
+            return
+        self._set_local_model(path)
+
+    def _set_local_model(self, path: str) -> None:
+        """Указать свой файл модели: пишем абсолютный путь в конфиг, минуя реестр."""
+        resolved = str(Path(path))
+        self._manager.apply({"ai.model_path": resolved})
+        self._refresh_model_path_label()
+        self._catalog_status.setText(f"Выбран файл: {Path(resolved).name}")
 
     # -- секция параметров генерации ----------------------------------------
 
