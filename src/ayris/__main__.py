@@ -327,8 +327,11 @@ def _run_application(options: CliOptions) -> int:
 
         # The dispatcher (task 18) becomes the text field's destination: a typed
         # command runs the same understanding → IntentMatched path a spoken one
-        # does, and the trigger dispatcher executes what matched.
-        pipeline = install_pipeline(ayris)
+        # does, and the trigger dispatcher executes what matched. Handed the
+        # worker supervisor too, so the voice input path — wake word / hotkey →
+        # audio worker phrase → STT worker → understanding — is wired to the same
+        # pipeline; it degrades softly while the workers are still starting.
+        pipeline = install_pipeline(ayris, worker_manager)
 
         def submit_text(text: str) -> None:
             # run_text is synchronous by design (it returns a result); keep it off

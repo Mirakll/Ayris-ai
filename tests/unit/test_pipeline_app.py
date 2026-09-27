@@ -10,21 +10,31 @@ functions read, over a real in-memory database, event bus and state machine.
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from ayris.audio.stt.base import STT_SAMPLE_RATE, TranscriptResult
 from ayris.core.app import Component, LifecycleStage
-from ayris.core.config import RestartScope, Settings
+from ayris.core.config import RestartScope, Settings, diff_settings
 from ayris.core.database import Database, reset_database
-from ayris.core.events import EventBus, IntentMatched
+from ayris.core.events import (
+    ConfigChanged,
+    EventBus,
+    IntentMatched,
+    SpeechEnded,
+    WakeWordDetected,
+)
 from ayris.core.models import Command
 from ayris.core.pipeline_app import install_pipeline
 from ayris.core.repositories import Repositories
 from ayris.core.state import StateMachine
 from ayris.workers.manager import WorkerManager, install_workers
+from ayris.workers.registry import WorkerKind
 
 pytestmark = pytest.mark.unit
 
@@ -190,3 +200,127 @@ def test_installed_pipeline_stop_unsubscribes(app: _FakeApp) -> None:
     from ayris.core.events import CommandsChanged
 
     app.bus.publish(CommandsChanged(command_id=1))
+
+
+# --------------------------------------------------------------------------- #
+# the voice input path
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _FakeManager:
+    """A worker supervisor answering ``segment`` and ``transcribe`` from memory.
+
+    Stands in for :class:`~ayris.workers.manager.WorkerManager` so the whole voice
+    input path — wake word → phrase → recognition → match — runs without a worker
+    process, a model or a microphone. Only :meth:`call_sync` is needed: it is the
+    one method the two adapters in :mod:`ayris.core.worker_speech` reach for.
+    """
+
+    segment: object = None
+    transcript: object = None
+    calls: list[tuple[str, str]] = field(default_factory=list)
+
+    def call_sync(
+        self,
+        worker: str,
+        method: str,
+        params: Any = None,
+        *,
+        timeout: float | None = None,
+        audio: bytes | None = None,
+        sample_rate: int = STT_SAMPLE_RATE,
+        channels: int = 1,
+        sample_format: str = "int16",
+    ) -> Any:
+        self.calls.append((worker, method))
+        if worker == WorkerKind.AUDIO.value and method == "segment":
+            return self.segment
+        if worker == WorkerKind.STT.value and method == "transcribe":
+            return self.transcript
+        raise AssertionError(f"неожиданный вызов воркера: {worker}.{method}")
+
+
+def test_a_spoken_phrase_runs_the_same_path_as_a_typed_one(app: _FakeApp) -> None:
+    phrase = "открой блокнот"
+    command_id = _command_with_voice(app.repositories, app.profile.id, phrase)  # type: ignore[attr-defined]
+    manager = _FakeManager(
+        segment={
+            "available": True,
+            "pcm": b"\x01\x02\x03\x04",
+            "sample_rate": STT_SAMPLE_RATE,
+        },
+        transcript=TranscriptResult(text=phrase, confidence=0.0, engine="fake").to_params(),
+    )
+    matched: list[IntentMatched] = []
+    done = threading.Event()
+
+    def on_match(event: IntentMatched) -> None:
+        matched.append(event)
+        done.set()
+
+    app.bus.subscribe(IntentMatched, on_match, weak=False)
+
+    pipeline = install_pipeline(app, manager)  # type: ignore[arg-type]
+    stop = app.components[-1].stop
+    try:
+        # A wake word opens the session; the finished phrase's PCM is pulled from
+        # the audio worker, recognised by the STT worker and matched — the very
+        # path a typed command runs, only with a microphone where the keyboard was.
+        app.bus.publish(WakeWordDetected(phrase="айрис"))
+        assert pipeline.session_id != ""
+        app.bus.publish(SpeechEnded(duration_ms=800, reason="silence"))
+
+        assert done.wait(5.0), "произнесённая команда не дошла до IntentMatched"
+        assert len(matched) == 1
+        assert matched[0].command_id == command_id
+        assert (WorkerKind.AUDIO.value, "segment") in manager.calls
+        assert (WorkerKind.STT.value, "transcribe") in manager.calls
+    finally:
+        if stop is not None:
+            stop()
+
+
+def test_voice_loop_follows_the_wake_settings(app: _FakeApp) -> None:
+    manager = _FakeManager()
+    pipeline = install_pipeline(app, manager)  # type: ignore[arg-type]
+    stop = app.components[-1].stop
+    try:
+        # Default settings allow a spoken activation, so the loop is attached and
+        # a wake word opens a session.
+        app.bus.publish(WakeWordDetected(phrase="айрис"))
+        assert pipeline.session_id != ""
+        pipeline.cancel()
+        assert pipeline.session_id == ""
+
+        # Wake word off and the microphone on «always» leave nothing that could
+        # open a session: the loop detaches and the wake word is now ignored.
+        muted = Settings.model_validate(
+            {"voice": {"wake": {"enabled": False, "mic_mode": "always"}}}
+        )
+        app.bus.publish(ConfigChanged(diff=diff_settings(app.settings, muted)))
+        app.bus.publish(WakeWordDetected(phrase="айрис"))
+        assert pipeline.session_id == ""
+
+        # Turning the wake word back on re-attaches the loop on the fly.
+        live = Settings.model_validate({"voice": {"wake": {"enabled": True}}})
+        app.bus.publish(ConfigChanged(diff=diff_settings(muted, live)))
+        app.bus.publish(WakeWordDetected(phrase="айрис"))
+        assert pipeline.session_id != ""
+        pipeline.cancel()
+    finally:
+        if stop is not None:
+            stop()
+
+
+def test_a_text_only_pipeline_ignores_wake_words(app: _FakeApp) -> None:
+    # With no worker manager there is nothing to feed the loop, so install_pipeline
+    # never attaches: a wake word cannot open a session, only run_text drives it.
+    pipeline = install_pipeline(app)
+    stop = app.components[-1].stop
+    try:
+        app.bus.publish(WakeWordDetected(phrase="айрис"))
+        assert pipeline.session_id == ""
+    finally:
+        if stop is not None:
+            stop()
