@@ -144,6 +144,18 @@ class TimerScheduler:
                 self._wait.cancel()
                 self._wait = None
 
+    def resume(self) -> None:
+        """Re-check timers after the machine woke from sleep.
+
+        The single wait is a monotonic ``threading.Timer`` that does NOT advance
+        while the machine is asleep, so on waking it is stale — its entries may be
+        long overdue. Recovering (fire the missed one-shots, re-point recurring
+        without an avalanche) and re-arming is exactly the cold-start path, so we
+        reuse it. Called by :class:`~ayris.core.power_events.PowerCoordinator`.
+        """
+        self.recover()
+        self._arm()
+
     # -- mutation -----------------------------------------------------------
 
     def add(self, timer: Timer) -> Timer:

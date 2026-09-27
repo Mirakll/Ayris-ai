@@ -246,6 +246,9 @@ def _run_application(options: CliOptions) -> int:
     from ayris.actions.timers import MissedPolicy, TimerScheduler, set_active_scheduler
     from ayris.core.models import AuditEntry
     from ayris.core.pipeline_app import install_pipeline
+    from ayris.core.power_events import install_power_events
+    from ayris.core.resilience import install_resilience
+    from ayris.core.watchdog import install_watchdog, read_shutdown_reason
     from ayris.gui.main_window import MainWindow, ShowWindowNativeEventFilter
     from ayris.gui.overlay import ActiveTimer as OverlayTimer
     from ayris.gui.splash import SplashScreen
@@ -325,6 +328,22 @@ def _run_application(options: CliOptions) -> int:
             )
         )
 
+        # Задача 69: устойчивость и восстановление. Единый слой сообщений об
+        # отказах, watchdog главного процесса (heartbeat цикла событий + воркеров)
+        # и обработка сна/пробуждения — все утиные и опциональные, поэтому
+        # монтируются здесь, где supervisor и QApplication уже подняты. Причина
+        # прошлого аварийного завершения, если она была записана watchdog'ом,
+        # всплывает в лог один раз при следующем запуске.
+        install_resilience(ayris, worker_manager)
+        install_watchdog(ayris, worker_manager, qapp=app)
+        previous_exit = read_shutdown_reason(ayris.paths)
+        if previous_exit is not None:
+            _log.warning(
+                "прошлый сеанс завершился аварийно (%s): %s",
+                previous_exit.get("kind", "watchdog"),
+                str(previous_exit.get("reason", "")).strip() or "причина не записана",
+            )
+
         # The dispatcher (task 18) becomes the text field's destination: a typed
         # command runs the same understanding → IntentMatched path a spoken one
         # does, and the trigger dispatcher executes what matched. Handed the
@@ -392,6 +411,11 @@ def _run_application(options: CliOptions) -> int:
             missed_grace=timedelta(minutes=timers_cfg.missed_grace_min),
         )
         set_active_scheduler(scheduler)
+
+        # Пробуждение из сна пересчитывает просроченные таймеры через
+        # scheduler.resume() и пересоздаёт аудиопоток; на Windows фильтр событий
+        # ловит WM_POWERBROADCAST, без Qt/Windows координатор просто доступен коду.
+        install_power_events(ayris, worker_manager, timer_scheduler=scheduler, qapp=app)
 
         class _OverlayTimers:
             """Adapts the scheduler's active list to the dashboard's timer provider."""
