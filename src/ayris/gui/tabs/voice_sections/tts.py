@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from ayris.audio.tts.app_router import active_tts_router
 from ayris.audio.tts.cloud_base import is_cloud_engine
 from ayris.core.config import RestartScope, TtsConfig
 from ayris.core.paths import get_paths
@@ -26,11 +27,16 @@ from ayris.gui.widgets import BusyIndicator, SliderField, ThemedComboBox, Toggle
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from ayris.gui.tabs.voice import VoiceTab
+    from ayris.gui.tabs.voice import SpeakSample, VoiceTab
 
 __all__ = ["TtsSection"]
 
 _log = get_logger(__name__)
+
+#: How long «Прослушать» keeps the button busy waiting for the preview to finish.
+#: Generous enough to cover a first-use engine load; the phrase keeps playing if
+#: the wait is hit, only the button frees up.
+_PREVIEW_TIMEOUT_S = 30.0
 
 _ENGINES = {
     "piper": "Piper (локально)",
@@ -226,7 +232,7 @@ class TtsSection:
 
     def refresh(self) -> None:
         self._reload_voices()
-        can_listen = self._tab.services.speak_sample is not None
+        can_listen = self._sample_service() is not None
         self._listen_button.setEnabled(can_listen)
         self._listen_button.setToolTip(
             "" if can_listen else "Проба станет доступна после запуска синтеза"
@@ -365,8 +371,33 @@ class TtsSection:
 
     # -- listen -------------------------------------------------------------
 
+    def _sample_service(self) -> SpeakSample | None:
+        """The callable «Прослушать» runs, or ``None`` when nothing can speak yet.
+
+        A test injects its own through :class:`~ayris.gui.tabs.voice.VoiceServices`;
+        the running app injects nothing, so the preview goes through the live
+        :class:`~ayris.audio.tts.router.TtsRouter` the dispatcher registered — the
+        very voice the assistant answers with, at the current speed, tone and volume
+        (those are live; the engine and voice follow a restart). Before the workers
+        are up there is no router, so the button stays disabled with a tooltip that
+        says why.
+        """
+        injected = self._tab.services.speak_sample
+        if injected is not None:
+            return injected
+        if active_tts_router() is None:
+            return None
+        return self._preview_through_router
+
+    def _preview_through_router(self) -> None:
+        """Speak the fixed sample through the runtime router; safe off the UI thread."""
+        router = active_tts_router()
+        if router is None:  # torn down between the enablement check and the click
+            return
+        router.preview().wait(timeout=_PREVIEW_TIMEOUT_S)
+
     def _listen(self) -> None:
-        service = self._tab.services.speak_sample
+        service = self._sample_service()
         if service is None:
             return
         self._listen_button.setEnabled(False)
