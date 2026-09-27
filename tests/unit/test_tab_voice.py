@@ -272,6 +272,43 @@ def test_test_buttons_enabled_when_services_provided(
     tab.close()
 
 
+def test_listen_falls_back_to_the_runtime_router(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No speak_sample is injected in the running app; «Прослушать» then speaks the
+    # fixed sample through the live router the dispatcher registered. Its presence
+    # enables the button, and pressing it previews once and waits off the UI thread.
+    waited: list[float | None] = []
+
+    class _Handle:
+        def wait(self, timeout: float | None = None) -> bool:
+            waited.append(timeout)
+            return True
+
+    class _Router:
+        def __init__(self) -> None:
+            self.previews = 0
+
+        def preview(self) -> _Handle:
+            self.previews += 1
+            return _Handle()
+
+    router = _Router()
+    monkeypatch.setattr("ayris.gui.tabs.voice_sections.tts.active_tts_router", lambda: router)
+
+    tab = _make_tab(manager, ThemeManager(app))  # no speak_sample injected
+    tts = tab._sections[1]
+    assert tts._listen_button.isEnabled()
+
+    service = tts._sample_service()
+    assert service is not None
+    service()  # call the resolved sample directly, skipping the worker thread
+    assert router.previews == 1
+    assert waited == [pytest.approx(30.0)]
+    tab.dispose()
+    tab.close()
+
+
 def test_missing_model_shows_a_warning(app: QApplication, manager: ConfigManager) -> None:
     manager.apply({"voice.stt.mode": "offline"})
     tab = _make_tab(manager, ThemeManager(app), installed=lambda _kind: frozenset({"other-model"}))
