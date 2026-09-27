@@ -167,12 +167,12 @@ def test_unavailable_block_is_not_interactive_with_reason(
     app: QApplication, theme: ThemeManager, catalog: BlockCatalog
 ) -> None:
     palette = _palette(theme, catalog)
-    # Say не подключён в этой сборке: карточка не интерактивна, причина в подсказке.
-    card = _card_for(palette, "Say")
+    # RunShell не подключён в этой сборке: карточка не интерактивна, причина в подсказке.
+    card = _card_for(palette, "RunShell")
     assert not card._available
     assert card.property("interactive") is False
     assert "ещё не подключено" in card.toolTip()
-    assert card.toolTip() == catalog.get("Say").unavailable_reason
+    assert card.toolTip() == catalog.get("RunShell").unavailable_reason
 
 
 def test_unavailable_dangerous_block_keeps_warning_marker(
@@ -280,8 +280,8 @@ def test_click_unavailable_card_emits_nothing(
     palette = _palette(theme, catalog)
     seen: list[str] = []
     palette.block_chosen.connect(seen.append)
-    # Say недоступен: клик по нему не выбирает блок.
-    _click(_card_for(palette, "Say"))
+    # RunShell недоступен: клик по нему не выбирает блок.
+    _click(_card_for(palette, "RunShell"))
     assert seen == []
 
 
@@ -347,7 +347,7 @@ def test_unavailable_card_does_not_start_drag(
     monkeypatch.setattr(bp_module, "QDrag", _FakeDrag)
     _FakeDrag.instances.clear()
     palette = _palette(theme, catalog)
-    card = _card_for(palette, "Say")
+    card = _card_for(palette, "RunShell")
     card.mousePressEvent(
         _mouse(
             QEvent.Type.MouseButtonPress,

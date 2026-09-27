@@ -552,7 +552,10 @@ def test_params_changed_without_selection_is_noop(
     editor = _editor(store, theme, catalog)
     editor.load_command(_command_id(store, "Свет"))
     editor._on_palette_choice("Say")
-    editor._action_view.clearSelection()
+    # Снять выделение в АКТИВНОМ виде (по умолчанию нодовом): пустой путь ничего не
+    # выделяет, так что _selected_block() вернёт None. Чистить список тут бессмысленно —
+    # выделение живёт на холсте нод.
+    editor._current_action_view().select_path(())
     before = editor._model.actions[0].params if editor._model else {}
     editor._on_params_changed()  # блок не выбран — ничего не меняется
     assert editor._model is not None and editor._model.actions[0].params == before
