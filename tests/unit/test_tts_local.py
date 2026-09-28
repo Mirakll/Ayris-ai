@@ -829,6 +829,24 @@ class TestPiperEngine:
                 TtsOptions(),
             )
 
+    def test_a_voice_id_ending_in_onnx_is_not_doubled(self):
+        """«Своя модель» stores the file name, so the id may already end in .onnx.
+
+        Appending the suffix unconditionally gave «voice.onnx.onnx», which no file
+        matches — the preview then failed inside the player and «Прослушать» fell
+        silent. The resolver must add .onnx only when it is missing.
+        """
+        resolved = piper_engine._resolve_model_path(
+            VoiceSpec(engine="piper", voice_id="ru_RU-ruslan-medium.onnx")
+        )
+        assert resolved.name == "ru_RU-ruslan-medium.onnx"
+
+    def test_a_bare_voice_id_gets_the_onnx_suffix(self):
+        resolved = piper_engine._resolve_model_path(
+            VoiceSpec(engine="piper", voice_id="ru_RU-irina-medium")
+        )
+        assert resolved.name == "ru_RU-irina-medium.onnx"
+
     # ------------------------------------------------------- shaping the audio
     #
     # length_scale, the noise argument and the pitch resample are pure functions

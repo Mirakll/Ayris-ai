@@ -20,7 +20,9 @@ from PySide6.QtWidgets import (
 from ayris.audio.tts.app_router import active_tts_router
 from ayris.audio.tts.base import VoiceSpec, engine_class
 from ayris.audio.tts.cloud_base import is_cloud_engine
+from ayris.audio.tts.player import PlaybackReason
 from ayris.core.config import RestartScope, TtsConfig
+from ayris.core.errors import TtsError
 from ayris.core.paths import get_paths
 from ayris.gui.tabs.voice import AsyncRunner, combo_options
 from ayris.gui.tabs.voice_sections.stt import _SecretField
@@ -446,11 +448,31 @@ class TtsSection:
         return self._preview_through_router
 
     def _preview_through_router(self) -> None:
-        """Speak the fixed sample through the runtime router; safe off the UI thread."""
+        """Speak the fixed sample through the runtime router; safe off the UI thread.
+
+        Raises when the preview does not sound, so :meth:`_on_listen_failed` can say
+        why instead of leaving «Прослушать» silent — a voice whose files are missing
+        fails inside the player thread, where the error would otherwise only reach the
+        log. A cancelled preview (the user clicked another voice) is not an error.
+        """
         router = active_tts_router()
         if router is None:  # torn down between the enablement check and the click
             return
-        router.preview().wait(timeout=_PREVIEW_TIMEOUT_S)
+        handle = router.preview()
+        finished = handle.wait(timeout=_PREVIEW_TIMEOUT_S)
+        if not finished:
+            raise TtsError(
+                "tts preview did not finish within the timeout",
+                user_message="синтез не ответил вовремя, попробуйте ещё раз.",
+            )
+        if handle.reason == PlaybackReason.ERROR:
+            raise TtsError(
+                "tts preview ended with an error",
+                user_message=(
+                    "выбранный голос не синтезируется. Проверьте, что он скачан "
+                    "целиком, или выберите другой (подробности — в журнале)."
+                ),
+            )
 
     def _listen(self) -> None:
         service = self._sample_service()

@@ -18,7 +18,9 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from ayris.audio.devices import DeviceDirection, RawDevice, list_devices
+from ayris.audio.tts.player import PlaybackReason
 from ayris.core.config import ConfigManager, RestartScope, dump_settings
+from ayris.core.errors import TtsError
 from ayris.core.secrets import SecretsStore
 from ayris.gui.tabs import tab_spec
 from ayris.gui.tabs.voice import VoiceServices, VoiceTab
@@ -366,6 +368,8 @@ def test_listen_falls_back_to_the_runtime_router(
     waited: list[float | None] = []
 
     class _Handle:
+        reason = PlaybackReason.COMPLETED
+
         def wait(self, timeout: float | None = None) -> bool:
             waited.append(timeout)
             return True
@@ -414,6 +418,80 @@ def test_listen_button_stays_live_after_a_preview(
     tts._listen_button.setEnabled(False)  # as _listen() does while it speaks
     tts._finish_listen()  # the worker finished; the button must come back
     assert tts._listen_button.isEnabled()
+    tab.dispose()
+    tab.close()
+
+
+def test_preview_reports_a_failed_synthesis(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A missing or half-downloaded voice fails inside the player thread, where the
+    # error only reaches the log; the handle then reports ERROR. The preview must
+    # raise so «Прослушать» shows «Не удалось озвучить: …» instead of falling silent.
+    class _Handle:
+        reason = PlaybackReason.ERROR
+
+        def wait(self, timeout: float | None = None) -> bool:
+            return True
+
+    class _Router:
+        def preview(self) -> _Handle:
+            return _Handle()
+
+    monkeypatch.setattr("ayris.gui.tabs.voice_sections.tts.active_tts_router", lambda: _Router())
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+    with pytest.raises(TtsError) as excinfo:
+        tts._preview_through_router()
+    assert excinfo.value.user_message
+    tab.dispose()
+    tab.close()
+
+
+def test_preview_times_out_when_synthesis_hangs(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # wait() returning False means the synth never answered within the timeout; the
+    # preview must raise rather than report a success that never sounded.
+    class _Handle:
+        reason = PlaybackReason.COMPLETED
+
+        def wait(self, timeout: float | None = None) -> bool:
+            return False
+
+    class _Router:
+        def preview(self) -> _Handle:
+            return _Handle()
+
+    monkeypatch.setattr("ayris.gui.tabs.voice_sections.tts.active_tts_router", lambda: _Router())
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+    with pytest.raises(TtsError) as excinfo:
+        tts._preview_through_router()
+    assert excinfo.value.user_message
+    tab.dispose()
+    tab.close()
+
+
+def test_preview_stays_quiet_when_cancelled(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clicking another voice cancels the running preview; a cancellation is not a
+    # failure, so the preview returns without raising and «Прослушать» stays calm.
+    class _Handle:
+        reason = PlaybackReason.CANCELLED
+
+        def wait(self, timeout: float | None = None) -> bool:
+            return True
+
+    class _Router:
+        def preview(self) -> _Handle:
+            return _Handle()
+
+    monkeypatch.setattr("ayris.gui.tabs.voice_sections.tts.active_tts_router", lambda: _Router())
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+    tts._preview_through_router()  # must not raise
     tab.dispose()
     tab.close()
 
