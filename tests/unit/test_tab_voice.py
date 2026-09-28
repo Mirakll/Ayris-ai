@@ -394,6 +394,30 @@ def test_listen_falls_back_to_the_runtime_router(
     tab.close()
 
 
+def test_listen_button_stays_live_after_a_preview(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # In the running app speak_sample is not injected, so the preview goes through
+    # the runtime router. _finish_listen must re-enable the button from that same
+    # source; gating it on services.speak_sample latched «Прослушать» off after the
+    # first play — it answered once, then went dead.
+    class _Router:
+        def preview(self) -> object:
+            return object()
+
+    monkeypatch.setattr("ayris.gui.tabs.voice_sections.tts.active_tts_router", lambda: _Router())
+
+    tab = _make_tab(manager, ThemeManager(app))  # no speak_sample injected
+    tts = tab._sections[1]
+    assert tts._listen_button.isEnabled()
+
+    tts._listen_button.setEnabled(False)  # as _listen() does while it speaks
+    tts._finish_listen()  # the worker finished; the button must come back
+    assert tts._listen_button.isEnabled()
+    tab.dispose()
+    tab.close()
+
+
 def test_missing_model_shows_a_warning(app: QApplication, manager: ConfigManager) -> None:
     manager.apply({"voice.stt.mode": "offline"})
     tab = _make_tab(manager, ThemeManager(app), installed=lambda _kind: frozenset({"other-model"}))

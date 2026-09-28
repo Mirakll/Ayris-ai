@@ -464,7 +464,10 @@ class TtsSection:
     def _finish_listen(self) -> None:
         self._busy.setActive(False)
         self._busy.hide()
-        self._listen_button.setEnabled(self._tab.services.speak_sample is not None)
+        # Re-enable from the same source as refresh(): the running app injects no
+        # speak_sample and previews through the runtime router, so gating on
+        # services.speak_sample alone latched the button off after the first play.
+        self._listen_button.setEnabled(self._sample_service() is not None)
 
     def _on_listen_failed(self, message: str) -> None:
         self._finish_listen()
