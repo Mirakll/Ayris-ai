@@ -45,6 +45,9 @@ pytest-cache-files-*/
 htmlcov/
 coverage.xml
 junit/
+# Машиночитаемые отчёты бенчмарков (tests/perf) — генерируются прогоном и
+# выгружаются артефактом nightly.yml, как coverage.xml; в дереве не держим.
+reports/
 .tox/
 .nox/
 .hypothesis/

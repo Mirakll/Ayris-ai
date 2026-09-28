@@ -1,0 +1,89 @@
+# Ночной прогон Ayris. Смысл этого файла: то, чему не место в обратной связи на
+# PR, но что должно проверяться регулярно. Обычный CI (ci.yml) держит цикл на
+# PR коротким — гоняет быстрые тесты параллельно и исключает `slow`. Здесь всё
+# наоборот: полный СЕРИЙНЫЙ прогон вместе с медленными тестами, ветвевое
+# покрытие целиком и бенчмарки раздела 23 с машиночитаемым отчётом. Ничего из
+# этого не красит PR — job запускается только по расписанию и вручную.
+#
+# Раннер — windows: Ayris это Windows-приложение, а часть медленных тестов
+# (утечки хендлов, серия перезапусков воркеров) осмысленна только на win32.
+# ci.yml НЕ трогаем — это его ночной спутник, а не замена.
+
+name: Nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Каждую ночь в 03:37 UTC. Минута не круглая нарочно: :00 — час пик у
+    # планировщика GitHub, задачи со всей планеты встают в одну очередь.
+    - cron: "37 3 * * *"
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+  # Тесты не открывают настоящих окон и на ночном раннере тоже.
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  full-serial:
+    name: Полный серийный прогон + покрытие / Windows
+    runs-on: windows-latest
+    # Ночному прогону не жалко часов, но не бесконечность: серийный набор со
+    # slow укладывается заметно быстрее, а зависший процесс-воркер иначе держал
+    # бы job до общего потолка в 6 часов.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-ci.txt
+            requirements-ci-nodeps.txt
+
+      - name: Установить зависимости
+        # Тот же порядок, что в ci.yml: второй вызов ставит пакеты, из которых
+        # нужен только бинарник (почему без зависимостей — в самом файле).
+        run: |
+          python -m pip install -r requirements-ci.txt
+          python -m pip install --no-deps -r requirements-ci-nodeps.txt
+          python -m pip install -e . --no-deps
+
+      - name: pytest серийно, со slow и покрытием
+        # Намеренно БЕЗ -n и БЕЗ `not slow`: единый последовательный прогон, в
+        # котором и гонки, и тесты про время воспроизводятся детерминированно
+        # (под -n «уложился в N мс» стал бы броском монеты, а покрытие с восьми
+        # воркеров пришлось бы собирать по кускам). Исключены только hardware
+        # (нужен микрофон/экран), models (веса — джоб test-models в ci.yml) и
+        # network (чужие серверы). Порог fail_under и branch=true — в
+        # pyproject.toml; отчёт html/xml кладём в артефакт.
+        #
+        # Бенчмарки раздела 23 (tests/perf) пишут reports/benchmarks.json прямо
+        # в прогоне; путь берётся из AYRIS_BENCH_OUT, по умолчанию он и есть.
+        env:
+          AYRIS_BENCH_OUT: reports/benchmarks.json
+        run: >
+          pytest -m "not hardware and not models and not network"
+          --cov --cov-report=xml --cov-report=html --cov-report=term-missing
+          --junitxml=junit/pytest-nightly.xml
+
+      - name: Выгрузить отчёты
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-reports
+          path: |
+            junit/
+            coverage.xml
+            htmlcov/
+            reports/benchmarks.json
+          if-no-files-found: ignore
