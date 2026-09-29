@@ -334,7 +334,10 @@ warn_required_dynamic_aliases = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-pythonpath = ["src"]
+# ``src`` for the application, ``.`` for the repo-root ``build`` package (task 71):
+# its modules are plain tested Python (Nuitka is mocked), so tests import them as
+# ``build.nuitka_build`` etc. without an install step.
+pythonpath = ["src", "."]
 addopts = [
     "-ra",
     "--strict-markers",

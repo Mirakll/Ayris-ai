@@ -1,0 +1,126 @@
+# Релиз Ayris (задача 71, §16.3). Смысл этого файла: собрать распространяемый
+# ayris.exe и выложить его в GitHub Release. Это единственное место, где вообще
+# запускается Nuitka — компиляция идёт десятки минут, поэтому ей не место ни в
+# ci.yml (короткий цикл на PR), ни в nightly.yml (тесты, а не сборка). Джоб
+# срабатывает на тег v* и вручную; ci.yml/nightly.yml не трогаем.
+#
+# Раннер — windows: Ayris это Windows-приложение, MSVC на windows-latest уже
+# стоит, и Nuitka собирает нативный бинарник им. Сборка идёт ОДИН раз
+# (standalone), портабельный вариант получается копией дистрибутива с маркером
+# рядом — второй компиляции не нужно, состав файлов у них общий.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# Загрузка ассетов в релиз требует записи в contents (ci.yml обходится read).
+permissions:
+  contents: write
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+
+jobs:
+  build-windows:
+    name: Сборка ayris.exe / Windows
+    runs-on: windows-latest
+    # Компиляция Nuitka — минуты, не часы, но зависший линкер иначе держал бы
+    # job до общего потолка GitHub (6 ч). Двух часов хватает с большим запасом.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements-ci.txt
+            requirements-ci-nodeps.txt
+
+      - name: Установить зависимости и Nuitka
+        # Здесь, в отличие от ci.yml, ставим ПОЛНЫЙ набор с зависимостями: Nuitka
+        # должна видеть настоящие пакеты, чтобы вкомпилировать их в дистрибутив.
+        # Экстра build тянет саму Nuitka (пин в pyproject.toml, не в
+        # requirements-ci.txt — на раннере тестов она не нужна).
+        run: python -m pip install -e ".[build]"
+
+      - name: Собрать standalone
+        # Внутренний smoke пропускаем: у оконного exe (console отключена)
+        # sys.stdout может быть пустым, и проверка «в выводе есть версия» дала бы
+        # ложный провал. Ниже отдельный шаг проверяет по коду возврата — так
+        # надёжнее для GUI-бинарника.
+        run: python -m build.nuitka_build --output-dir dist --skip-smoke-test
+
+      - name: Проверка --version
+        # Оконный exe пишет argparse-версию до ленивых импортов Qt и выходит.
+        # Ловим по коду возврата, а не по тексту: без консоли вывод может не
+        # доехать до pwsh, но чистый выход 0 доказывает, что бинарник стартует,
+        # разбирает аргументы и завершается.
+        shell: pwsh
+        run: |
+          $exe = "dist/ayris.dist/ayris.exe"
+          $out = & $exe --version 2>&1
+          Write-Host "--version → $out"
+          if ($LASTEXITCODE -ne 0) {
+            throw "ayris.exe --version завершился с кодом $LASTEXITCODE"
+          }
+
+      - name: Собрать пакеты (standalone + портабельный)
+        # Standalone — папка ayris/. Портабельный — её копия с маркером
+        # ayris.portable и папкой models/ рядом: core/paths.py по маркеру
+        # переключает корень на каталог exe, профиль и модели ложатся возле
+        # бинарника, и всё работает с флешки (в т.ч. из пути с пробелами и
+        # кириллицей). Второй Nuitka-сборки не требуется — состав файлов общий.
+        shell: pwsh
+        run: |
+          $v = (python -c "from build.version_info import VERSION; print(VERSION)").Trim()
+          Write-Host "Версия: $v"
+          "AYRIS_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+          Copy-Item -Recurse dist/ayris.dist dist/ayris
+          Compress-Archive -Path dist/ayris -DestinationPath "ayris-$v-windows-x64.zip" -Force
+
+          Copy-Item -Recurse dist/ayris.dist dist/ayris-portable
+          python -c "from pathlib import Path; from build.portable_spec import make_portable; make_portable(Path('dist/ayris-portable'))"
+          Compress-Archive -Path dist/ayris-portable -DestinationPath "ayris-$v-windows-x64-portable.zip" -Force
+
+      - name: Выгрузить сборку в артефакты
+        # Артефакт делаем всегда — так workflow_dispatch без тега тоже даёт
+        # скачиваемые zip и отчёт о размере, а не только релизный путь.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ayris-windows-x64
+          path: |
+            ayris-*-windows-x64.zip
+            ayris-*-windows-x64-portable.zip
+            dist/build-report.json
+          if-no-files-found: warn
+
+      - name: Опубликовать в GitHub Release
+        # Только для тега: dispatch-прогон собирает и кладёт в артефакты, но
+        # релиз не трогает. Релиз создаётся, если его ещё нет; ассеты заливаем с
+        # --clobber, чтобы повторный прогон тега перезаписал их, а не падал.
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release view "$tag" >/dev/null 2>&1 || \
+            gh release create "$tag" --title "Ayris $tag" --generate-notes
+          gh release upload "$tag" \
+            "ayris-${AYRIS_VERSION}-windows-x64.zip" \
+            "ayris-${AYRIS_VERSION}-windows-x64-portable.zip" \
+            dist/build-report.json \
+            --clobber
