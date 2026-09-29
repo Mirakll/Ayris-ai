@@ -200,7 +200,7 @@
 > [`tasks/_deferred/`](tasks/_deferred/) — отсюда разрыв нумерации 64 → 69.
 - [ ] **69** — [Устойчивость и восстановление](tasks/69_resilience.md) — зависит от: 05, 07
 - [ ] **70** — [Тесты и CI](tasks/70_tests_ci.md) — зависит от: этапы A–H
-- [ ] **71** — [Сборка Nuitka и Portable](tasks/71_build.md) — зависит от: 70
+- [x] **71** — [Сборка Nuitka и Portable](tasks/71_build.md) — зависит от: 70
 - [ ] **72** — [Инсталлер и автообновления](tasks/72_installer_updates.md) — зависит от: 71
 - [ ] **73** — [Документация MkDocs](tasks/73_docs.md) — зависит от: 72
 - [ ] **74** — [Приёмка релиза](tasks/74_release_check.md) — зависит от: всё
