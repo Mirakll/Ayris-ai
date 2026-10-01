@@ -24,12 +24,14 @@ goes in which slot follows from the settings:
   ``credential_ref`` (when that names a provider) so ``cloud_fallback`` can be
   toggled live without a restart — the mode gates whether it is used.
 
-``engine``/``voice``/``output_device`` are ``RestartScope.TTS``: a change to them
-takes effect on restart, so the slots are read once. ``expressiveness`` joins them
-there - it is a load-time engine option (Piper's ``noise_scale``), applied when the
-engine is next built. Speed, pitch, volume, ``sentence_pause`` and ``cloud_fallback``
-are live, so the ``ConfigChanged`` handler pushes them into the running router with
-``set_params``/``set_mode``.
+``engine``/``voice``/``output_device`` are ``RestartScope.TTS``, which restarts
+the TTS *worker*; this router, though, lives in the UI process and is both what
+the settings window previews through and what the pipeline speaks answers with.
+So the ``ConfigChanged`` handler rebuilds the slots in place when the engine,
+voice or expressiveness changes - a user who picks Silero and clicks «Прослушать»
+hears Silero at once, without restarting the app. Speed, pitch, volume,
+``sentence_pause`` and ``cloud_fallback`` are live too, pushed into the running
+router with ``set_params``/``set_mode``.
 
 :func:`set_active_tts_router` / :func:`active_tts_router` are the shared handle,
 the same shape as
@@ -95,6 +97,7 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
     """
     cfg = app.settings.voice.tts
     built_engine = cfg.engine
+    built_slots = _slot_key(cfg)
     params = VoiceParams(
         speed=cfg.speed,
         pitch=cfg.pitch,
@@ -118,10 +121,13 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
     )
 
     def on_config(_event: ConfigChanged) -> None:
-        # engine/voice are RestartScope.TTS, so the slots stand until restart; only
-        # the live knobs move. The mode is recomputed from the engine that was
-        # actually built, so ticking cloud_fallback flips the fallback direction
-        # without pretending a not-yet-loaded new engine is already in the slot.
+        # Live knobs move on every change. engine/voice/expressiveness decide the
+        # slots: nominally RestartScope.TTS (which restarts the worker), but this
+        # router is also the UI's preview and the pipeline's voice, so the slots
+        # are rebuilt in place when any of them changes - otherwise «Прослушать»
+        # would keep speaking the engine captured at startup. When only the
+        # fallback toggles, the mode is recomputed from the engine actually built.
+        nonlocal built_engine, built_slots
         live = app.settings.voice.tts
         router.set_params(
             VoiceParams(
@@ -131,7 +137,21 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
                 sentence_pause=live.sentence_pause,
             )
         )
-        router.set_mode(mode_from_config(built_engine, cloud_fallback=live.cloud_fallback))
+        new_slots = _slot_key(live)
+        if new_slots != built_slots:
+            built_slots = new_slots
+            built_engine = live.engine
+            new_cloud, new_local = _providers(live)
+            router.set_providers(
+                cloud=new_cloud,
+                local=new_local,
+                mode=mode_from_config(live.engine, cloud_fallback=live.cloud_fallback),
+            )
+            _log.info(
+                "маршрутизатор TTS пересобран вживую: движок %s, голос %s", live.engine, live.voice
+            )
+        else:
+            router.set_mode(mode_from_config(built_engine, cloud_fallback=live.cloud_fallback))
 
     unsub_config = app.bus.subscribe(ConfigChanged, on_config, weak=False)
 
@@ -147,6 +167,24 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
         cfg.credential_ref if is_cloud_engine(cfg.credential_ref) else "нет",
     )
     return router, close
+
+
+def _slot_key(cfg: TtsConfig) -> tuple[str, str, float, str, str, str]:
+    """The fields that decide how the slots are built.
+
+    When any of these changes the providers must be rebuilt; speed, pitch, volume,
+    ``sentence_pause`` and ``cloud_fallback`` are *not* here because they are pushed
+    into the running router without touching the engines. ``expressiveness`` is a
+    load-time option (Piper's ``noise_scale``), so it belongs with the slots.
+    """
+    return (
+        cfg.engine,
+        cfg.voice,
+        cfg.expressiveness,
+        cfg.credential_ref,
+        cfg.endpoint,
+        cfg.model,
+    )
 
 
 def _providers(cfg: TtsConfig) -> tuple[EngineProvider | None, EngineProvider | None]:

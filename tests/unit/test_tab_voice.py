@@ -247,6 +247,55 @@ def test_expressiveness_card_follows_the_engine(app: QApplication, manager: Conf
     tab.close()
 
 
+def test_switching_engine_coerces_a_foreign_voice(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    """A Silero speaker must not survive a switch to Piper.
+
+    Picking Piper while ``voice`` still names ``baya`` would make «Прослушать»
+    (and every answer) ask Piper for a ``baya.onnx`` it cannot have, so the box
+    and the saved voice snap to a voice Piper actually owns.
+    """
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("silero"))
+    baya = tts._voice_combo.findData("baya")
+    assert baya >= 0
+    tts._voice_combo.setCurrentIndex(baya)
+    tab.flush_pending()
+    assert manager.settings.voice.tts.voice == "baya"
+
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("piper"))
+    tab.flush_pending()
+    saved = manager.settings.voice.tts.voice
+    assert saved != "baya"
+    assert saved == tts._voice_combo.currentData()
+    assert saved in tts._owned_voices
+    tab.dispose()
+    tab.close()
+
+
+def test_a_cloud_engine_does_not_coerce_the_voice(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    """A cloud voice box is free text, so a foreign name is accepted as typed."""
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("silero"))
+    tts._voice_combo.setCurrentIndex(tts._voice_combo.findData("baya"))
+    tab.flush_pending()
+    assert manager.settings.voice.tts.voice == "baya"
+
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("openai"))
+    tab.flush_pending()
+    assert tts._owned_voices == set()
+    assert manager.settings.voice.tts.voice == "baya"
+    tab.dispose()
+    tab.close()
+
+
 def test_vad_slider_moves_the_meter_threshold(app: QApplication, manager: ConfigManager) -> None:
     tab = _make_tab(manager, ThemeManager(app))
     audio = tab._sections[3]

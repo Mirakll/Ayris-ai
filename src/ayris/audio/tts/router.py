@@ -569,6 +569,38 @@ class TtsRouter:
             self._params = params
         self._player.set_volume(params.gain)
 
+    def set_providers(
+        self,
+        *,
+        cloud: EngineProvider | None,
+        local: EngineProvider | None,
+        mode: TtsMode,
+    ) -> None:
+        """Swap the engine providers after a live engine or voice change.
+
+        ``engine``/``voice`` are nominally ``RestartScope.TTS``, but that scope
+        restarts the TTS *worker*; this router lives in the UI process, and it is
+        both what the settings window previews through and what the pipeline
+        speaks answers with. A user who picks a new voice and clicks «Прослушать»
+        has to hear *that* voice without restarting the whole app, so the slots
+        are rebuilt in place here instead of standing until a restart.
+
+        The old engines are unloaded so a switch away from a heavy voice frees its
+        memory; the new ones load lazily on the next phrase, exactly as at build
+        time. The fallback state is cleared - the user has just chosen an engine,
+        so the next phrase should try it rather than honour a decision made under
+        the previous one.
+        """
+        with self._lock:
+            old_cloud, old_local = self._cloud, self._local
+            self._cloud = _Slot(cloud, cloud=True)
+            self._local = _Slot(local, cloud=False)
+            self._mode = mode
+            self._use_secondary = False
+            self._preload = None
+        old_cloud.close()
+        old_local.close()
+
     def preload(self) -> None:
         """Warm the fallback engine in the background so a switch is instant.
 
