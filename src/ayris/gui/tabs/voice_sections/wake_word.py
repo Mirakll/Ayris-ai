@@ -159,6 +159,43 @@ class WakeWordSection:
             self._debounce_field,
         )
 
+        self._listen_window_field = SliderField(
+            tab.theme,
+            minimum=1,
+            maximum=30,
+            value=6,
+            unit="с",
+            label="Ожидание начала речи",
+        )
+        tab.bind_scaled_slider(
+            self._listen_window_field,
+            "voice.wake.listen_window_sec",
+            "Окно ожидания речи",
+            factor=1.0,
+        )
+        tab.add_card(
+            "Сколько ждать начала речи",
+            "После активации Айрис ждёт столько, пока вы начнёте говорить. Не услышала — "
+            "тихо перестаёт слушать. Когда речь началась, фраза уже не обрывается "
+            "по этому времени.",
+            self._listen_window_field,
+        )
+
+        self._continue_toggle = ToggleSwitch(
+            tab.theme, label="Продолжать диалог без слова активации"
+        )
+        tab.bind_toggle(
+            self._continue_toggle,
+            "voice.wake.continue_listening",
+            "Продолжать слушать после ответа",
+        )
+        tab.add_card(
+            "Продолжать слушать после ответа",
+            "После ответа Айрис остаётся слушать то же окно, чтобы продолжить разговор без "
+            "повторного «Айрис». Промолчите — слушание тихо закроется.",
+            self._continue_toggle,
+        )
+
         self._build_test_card()
         tab.add_restart_bar(RestartScope.WAKE)
 

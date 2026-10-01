@@ -614,7 +614,14 @@ class WakeConfig(ConfigSection):
         default=6.0,
         ge=1.0,
         le=30.0,
-        description="Сколько слушать команду после активации",
+        description="Сколько ждать начала речи после активации, прежде чем перестать слушать",
+    )
+    continue_listening: bool = Field(
+        default=True,
+        description=(
+            "Продолжать слушать после ответа, чтобы вести диалог без повторного "
+            "слова активации. Окно ожидания — то же, что «listen_window_sec»"
+        ),
     )
     credential_ref: str = Field(
         default="porcupine",

@@ -61,6 +61,7 @@ from ayris.core.events import (
     EventBus,
     IntentMatched,
     SpeechEnded,
+    SpeechStarted,
     TranscriptReady,
     WakeWordDetected,
 )
@@ -175,6 +176,11 @@ SOURCE_TEXT: Final = "text"
 
 #: Fallback ``source`` when a wake word arrived without a phrase attached.
 SOURCE_WAKE: Final = "wake"
+
+#: ``source`` for a session re-armed after an answer so the conversation can
+#: continue without the wake word being said again. Gated on
+#: ``voice.wake.continue_listening``; its listening window times out silently.
+SOURCE_FOLLOWUP: Final = "followup"
 
 #: How many finished traces DevTools can look back over. A trace is a few hundred
 #: bytes and the tab shows a table, not a log.
@@ -514,6 +520,7 @@ class Pipeline:
         "_catalog",
         "_clock",
         "_context",
+        "_continue_listening",
         "_echo_guard",
         "_fallback_chat",
         "_gateway",
@@ -591,6 +598,11 @@ class Pipeline:
         self._echo_guard = False
         self._llm_understanding = False
         self._fallback_chat = False
+        # Keep the microphone open after an answer so the user can carry on the
+        # conversation without the wake word. Off until settings say otherwise,
+        # so a pipeline built for a test (settings=None) keeps the one-shot
+        # behaviour its stage assertions were written against.
+        self._continue_listening = False
         self._catalog = catalog
         self._gateway = gateway
         self._memory = memory
@@ -631,6 +643,7 @@ class Pipeline:
         # coming back through the speakers and is dropped; a hotkey or a typed
         # command ignores it, since neither can be an echo.
         self._echo_guard = not settings.voice.tts.interrupt_on_speech
+        self._continue_listening = settings.voice.wake.continue_listening
 
     # ------------------------------------------------------------------
     # wiring
@@ -647,6 +660,7 @@ class Pipeline:
             return
         self._subscriptions = [
             self._bus.subscribe(WakeWordDetected, self._on_wake_word, weak=False),
+            self._bus.subscribe(SpeechStarted, self._on_speech_started, weak=False),
             self._bus.subscribe(SpeechEnded, self._on_speech_ended, weak=False),
             self._bus.subscribe(CancelRequested, self._on_cancel_requested, weak=False),
         ]
@@ -830,6 +844,25 @@ class Pipeline:
         source = SOURCE_PTT if event.phrase == _PTT_PHRASE else event.phrase
         self.activate(source=source, phrase=event.phrase)
 
+    def _on_speech_started(self, _event: SpeechStarted) -> None:
+        """Speech began — stop waiting for an onset, start bounding the phrase.
+
+        The listening deadline measures how long Ayris waits for the user to
+        *start* talking (``voice.wake.listen_window_sec``). Once the onset
+        arrives the phrase itself is bounded by the recording deadline instead,
+        which is as long as a whole utterance — otherwise a slow start on a short
+        window would cut the phrase off mid-sentence. :meth:`_on_speech_ended`
+        keeps the same LISTENING→RECORDING fallback for a phrase reported with no
+        onset first, so a test that publishes only ``SpeechEnded`` still works.
+        """
+        with self._lock:
+            session = self._session
+            if session is None:
+                return
+            if self._states.state is PipelineState.LISTENING:
+                self._states.enter(PipelineState.RECORDING, session_id=session.session_id)
+                self._sync_assistant_state(PipelineState.RECORDING)
+
     def _on_speech_ended(self, event: SpeechEnded) -> None:
         """A phrase finished. Fetch its audio and start recognising.
 
@@ -938,6 +971,10 @@ class Pipeline:
         if self._session is session:
             self._session = None
         trace = session.trace
+        # Decide the follow-up re-arm from the state as it is now, before the
+        # ``speak`` block below can backfill ``trace.answer`` on a failure path:
+        # only a pass that succeeded and actually said something continues.
+        should_continue = self._should_continue(session, outcome)
         if trace.outcome is ExecutionResult.OK:
             trace.outcome = outcome
         if error and not trace.error:
@@ -950,7 +987,41 @@ class Pipeline:
         self._states.to_idle(detail=speak or error)
         self._sync_assistant_state(PipelineState.IDLE, failure=error if speak else "")
         self._record(session)
+        if should_continue:
+            self._arm_follow_up_locked()
         return speak
+
+    def _should_continue(self, session: _Session, outcome: ExecutionResult) -> bool:
+        """Whether to re-open the microphone after this session, for a dialogue.
+
+        Only when the user asked for it (``voice.wake.continue_listening``), the
+        pass ran a voice command to a clean, spoken answer: a typed or dry-run
+        session never opens the mic, a failure or a silent command does not keep
+        it open to loop on noise, and without a voice to answer with there is no
+        conversation to continue.
+        """
+        return (
+            self._continue_listening
+            and outcome is ExecutionResult.OK
+            and bool(session.trace.answer)
+            and not session.from_text
+            and not session.dry_run
+            and self._tts is not None
+        )
+
+    def _arm_follow_up_locked(self) -> None:
+        """Re-open a listening window after an answer, under the lock.
+
+        A fresh :data:`SOURCE_FOLLOWUP` session, so the user can keep talking
+        without the wake word. The window is the same ``listen_window_sec`` as a
+        wake activation, and one that closes with nobody speaking times out
+        silently (:meth:`_on_timeout`), which is what ends the conversation —
+        each turn needs a real utterance, so this cannot spin on its own.
+        """
+        session = self._begin_locked(source=SOURCE_FOLLOWUP)
+        self._states.enter(PipelineState.LISTENING, session_id=session.session_id)
+        self._sync_assistant_state(PipelineState.LISTENING)
+        _log.info("сессия %s открыта (диалог продолжается)", session.session_id)
 
     def _record(self, session: _Session) -> None:
         """Write the trace to the log, the ring buffer and ``history``."""

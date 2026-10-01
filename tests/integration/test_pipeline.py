@@ -68,6 +68,7 @@ from ayris.core.events import (
     ModeChanged,
     PipelineStateChanged,
     SpeechEnded,
+    SpeechStarted,
     TranscriptReady,
     WakeWordDetected,
 )
@@ -78,6 +79,7 @@ from ayris.core.pipeline import (
     NOT_HEARD_MESSAGE,
     NOT_MATCHED_MESSAGE,
     NOTHING_SAID_MESSAGE,
+    SOURCE_FOLLOWUP,
     SOURCE_PTT,
     SOURCE_TEXT,
     TIMEOUT_MESSAGE,
@@ -1181,6 +1183,98 @@ class TestTimeouts:
         rig.pipeline.activate(source=SOURCE_PTT)
 
         assert rig.scheduler.pending == (9.0,)
+
+
+class TestFollowUp:
+    """Диалог без повторного слова активации и начало речи как граница записи."""
+
+    @staticmethod
+    def _settings(**wake: object) -> Settings:
+        """«Только команды» плюс заданная настройка слова активации."""
+        return settings_with(ai={"fallback_to_llm": False}, voice={"wake": wake})
+
+    def test_a_spoken_answer_re_opens_the_window(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+        rig.pipeline.attach()
+
+        rig.voice_command()
+
+        assert rig.tts.said == ["Готово."]
+        assert rig.pipeline.state is PipelineState.LISTENING
+        assert rig.pipeline.session_id != ""
+        # Окно диалога — то же «ожидание начала речи», что и у слова активации.
+        assert rig.scheduler.pending == (6.0,)
+
+    def test_the_re_opened_window_is_a_follow_up_session(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+        rig.pipeline.attach()
+
+        rig.voice_command()
+
+        assert rig.pipeline.state is PipelineState.LISTENING
+        # Последний закрытый трейс — проход по слову активации; продолжение ещё открыто.
+        assert rig.trace().source == WAKE_PHRASE
+
+    def test_the_window_times_out_without_a_word(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+        rig.pipeline.attach()
+
+        rig.voice_command()
+        assert rig.scheduler.fire_all() == 1  # никто не заговорил — окно тихо закрылось
+
+        assert rig.tts.said == ["Готово."]  # ни одного «не расслышала»
+        assert rig.pipeline.state is PipelineState.IDLE
+        assert rig.trace().source == SOURCE_FOLLOWUP
+        assert rig.trace().outcome is ExecutionResult.TIMEOUT
+
+    def test_the_dialogue_continues_without_the_wake_word(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+        rig.pipeline.attach()
+
+        rig.voice_command()  # «айрис, …» → ответ, окно снова открыто
+        rig.spoke()  # вторая фраза — уже без слова активации
+
+        assert rig.actions.calls == 2
+        assert rig.pipeline.state is PipelineState.LISTENING
+
+    def test_it_stays_one_shot_when_switched_off(self) -> None:
+        rig = build(settings=self._settings(continue_listening=False))
+        rig.pipeline.attach()
+
+        rig.voice_command()
+
+        assert rig.pipeline.state is PipelineState.IDLE
+        assert rig.scheduler.pending == ()
+
+    def test_typed_entry_never_re_opens_the_window(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+
+        assert rig.pipeline.run_text(PHRASE).ok
+        assert rig.pipeline.state is PipelineState.IDLE
+        assert rig.scheduler.pending == ()
+
+    def test_speech_onset_moves_listening_to_recording(self) -> None:
+        rig = build()
+        rig.pipeline.attach()
+
+        rig.wake()
+        assert rig.pipeline.state is PipelineState.LISTENING
+
+        rig.bus.publish(SpeechStarted())
+
+        assert rig.pipeline.state is PipelineState.RECORDING
+        # Дедлайн ожидания начала речи снят: фразу ограничивает уже запись.
+        assert 6.0 not in rig.scheduler.pending
+
+    def test_a_phrase_with_no_onset_still_records(self) -> None:
+        """Старый ход — только SpeechEnded, без SpeechStarted — работает как прежде."""
+        rig = build()
+        rig.pipeline.attach()
+
+        rig.voice_command()
+
+        assert rig.actions.calls == 1
+        assert rig.pipeline.state is PipelineState.IDLE
 
 
 class TestStageErrors:
