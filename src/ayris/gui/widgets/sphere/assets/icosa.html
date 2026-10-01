@@ -145,7 +145,12 @@
         vec3 V = normalize(uCamPos - vWorld);
         float fres = pow(1.0 - abs(dot(normalize(vNormalW), V)), 2.0);
         vec3 col = mix(base, uEdge, fres * 0.5) + fres * 0.15;
-        float a = clamp(uOpacity * (0.55 + 0.9 * fres), 0.0, 0.8);
+        // Альфа: высокий «пол» 1.05 (грань в лоб не проваливается в тёмное «нутро» на
+        // фоне пылающих от bloom рёбер), френель-прирост 0.75 к касательным. Прежние
+        // 0.55/0.9 (как в прототипе) давали face-on α≈0.24 → центр читался чёрным
+        // провалом; теперь α≈0.46 в лоб, ~0.79 к касательной (clamp 0.92) — заливка
+        // сохранена, градиент к рёбрам цел.
+        float a = clamp(uOpacity * (1.05 + 0.75 * fres), 0.0, 0.92);
         gl_FragColor = vec4(col, a);
       }`,
     transparent: true, blending: THREE.AdditiveBlending,
@@ -222,17 +227,27 @@
     base.dispose();
   }
 
-  // Невидимый окклюдер: сплошной икосаэдр пишет ТОЛЬКО глубину (colorWrite:false),
-  // чтобы эффекты стыковки с ДАЛЬНЕЙ стороны фигуры перекрывались корпусом —
-  // физически «за фигурой» их не видно. polygonOffset даёт запас, чтобы эффекты
-  // ровно на передней поверхности не мерцали z-fight'ом с гранью. Сам корпус-стекло
-  // (fillMat/lineMat) остаётся depthTest:false → сквозной вид не меняется.
+  // Окклюдер: сплошной икосаэдр НЕМНОГО МЕНЬШЕ корпуса (0.96·R), невидим
+  // (colorWrite:false), всегда пишет глубину — грани с ДАЛЬНЕЙ стороны фигуры и
+  // эффекты стыковки «за корпусом» отсекаются depthTest'ом, а вид в покое остаётся
+  // сплошным, ровно как в прототипе.
+  //   ПОЧЕМУ МЕНЬШЕ, А НЕ РОВНО ПО R: раньше окклюдер стоял ровно на R —
+  // поверхность-в-поверхность с гранями (та же IcosahedronGeometry(R)). Совпадающие
+  // глубины дают z-fight, ЗАВИСЯЩИЙ ОТ РАКУРСА: на части кадров ПЕРЕДНИЕ грани
+  // проигрывали depthTest окклюдеру и отсекались → корпус «моргал» чёрными
+  // полостями (те самые «моментами проскакивает», до ~250 тёмных ячеек в замере,
+  // во всех режимах, даже без проворота). polygonOffset это не лечил (замер: он лишь
+  // менял частоту, но не убирал вспышки, а на +units раздувал их площадь). Зазор
+  // 0.96·R уводит окклюдер ЗА грани — совпадения поверхностей больше нет, поэтому
+  // передние грани и «гнёзда» шапок (тоже на R) проходят depthTest кадр-в-кадр.
+  //   Замер (readPixels+bloom, по 1200+ кадров на режим): calm/listen/think/speak —
+  // 0 кадров с полостями (было 21/25 «плохих» кадров при R-в-R). Проём при провороте
+  // по-прежнему закрывает «гнездо» шапки (см. applyTwist), окклюдер трогать не нужно.
+  const occMat = new THREE.MeshBasicMaterial({
+    colorWrite: false, depthWrite: true, depthTest: true,
+  });
   {
-    const occMat = new THREE.MeshBasicMaterial({ colorWrite: false });
-    occMat.polygonOffset = true;
-    occMat.polygonOffsetFactor = 1.0;
-    occMat.polygonOffsetUnits = 1.0;
-    const occluder = new THREE.Mesh(new THREE.IcosahedronGeometry(R, 0), occMat);
+    const occluder = new THREE.Mesh(new THREE.IcosahedronGeometry(R * 0.96, 0), occMat);
     occluder.renderOrder = -1;                 // глубину пишем прежде всех прозрачных эффектов
     bodyGroup.add(occluder);
   }
@@ -276,7 +291,26 @@
       const ref = neigh[0].clone().sub(axis.clone().multiplyScalar(neigh[0].dot(axis))).normalize();
       const bi = new THREE.Vector3().crossVectors(axis, ref);
       neigh.sort((a, b) => Math.atan2(a.dot(bi), a.dot(ref)) - Math.atan2(b.dot(bi), b.dot(ref)));
-      caps.push({ axis, vertex: v.clone(), ring: neigh, group });
+      // Геометрия «гнезда» шапки: её же 5 граней в позиции ПОКОЯ (корпус, радиус R),
+      // с наружными нормалями — чтобы гнездо рисовалось ТЕМ ЖЕ стеклянным шейдером,
+      // что и грань, и заполненный проём был неотличим от грани (а не ярким «пятном»).
+      // Форма = форма шапки, поэтому докрывается и зона у остриё-вершины.
+      const sock = [], snor = [];
+      for (const f of group) {
+        const o = f * 9;
+        const ax=p[o],ay=p[o+1],az=p[o+2], bx=p[o+3],by=p[o+4],bz=p[o+5], cx=p[o+6],cy=p[o+7],cz=p[o+8];
+        const ux=bx-ax,uy=by-ay,uz=bz-az, vx=cx-ax,vy=cy-ay,vz=cz-az;
+        let nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+        const mx=(ax+bx+cx)/3, my=(ay+by+cy)/3, mz=(az+bz+cz)/3;
+        if (nx*mx+ny*my+nz*mz < 0) { nx=-nx; ny=-ny; nz=-nz; }   // нормаль наружу
+        const nl=Math.hypot(nx,ny,nz)||1; nx/=nl; ny/=nl; nz/=nl;
+        sock.push(ax,ay,az, bx,by,bz, cx,cy,cz);
+        snor.push(nx,ny,nz, nx,ny,nz, nx,ny,nz);
+      }
+      const socketGeo = new THREE.BufferGeometry();
+      socketGeo.setAttribute('position', new THREE.Float32BufferAttribute(sock, 3));
+      socketGeo.setAttribute('normal', new THREE.Float32BufferAttribute(snor, 3));
+      caps.push({ axis, vertex: v.clone(), ring: neigh, group, socketGeo });
     }
     // для каждой шапки — список шапок с непересекающимся набором граней
     // (несмежные вершины): только такие можно проворачивать одновременно
@@ -303,6 +337,29 @@
     bodyGroup.add(c.seamLoop);
 
     c.fx = { active: false, t: 0 };   // состояние подсветки шва (вариант 2)
+
+    // «Гнездо» шапки — её собственные 5 граней в позиции ПОКОЯ (корпус, радиус R),
+    // нарисованные ТЕМ ЖЕ стеклянным шейдером, что и грани (общие uniform'ы цвета/
+    // камеры по ссылке → тон и френель совпадают с гранями кадр-в-кадр). Пока шапка
+    // сидит — гнездо совпадает с ней и погашено (uOpacity 0 → вид фигуры в покое не
+    // меняется вовсе). Когда шапка ПРОВОРАЧИВАЕТСЯ и отходит, между её гранями и
+    // корпусом зияли ЧЁРНЫЕ щели (фон: окклюдер отсекает дальние грани, и в проёме
+    // виден фон); гнездо остаётся на месте проёма и закрывает его РОВНО как грань —
+    // не ярче (нет «мытья») и той же формы (докрыта и зона у остриё-вершины).
+    //   depthTest:true и БЕЗ polygonOffset → на БЛИЖНЕЙ стороне гнездо бьёт окклюдер
+    // ровно как передние грани (тот сдвинут на +1 от камеры), а на ДАЛЬНЕЙ — сам
+    // отсекается им. Поэтому гнездо отвёрнутой (дальней) шапки не «просвечивает» на
+    // перёд: ни «ауры» (гнездо ⊆ силуэт), ни общего «мытья», ни мигания
+    // (uOpacity плавно по огибающей lift01, строго 0 в покое).
+    c.socketMat = new THREE.ShaderMaterial({
+      uniforms: { uColorA, uColorB, uEdge, uCamPos, uOpacity: { value: 0 }, uR: { value: R } },
+      vertexShader: fillMat.vertexShader,
+      fragmentShader: fillMat.fragmentShader,
+      transparent: true, blending: THREE.AdditiveBlending,
+      depthWrite: false, depthTest: true, side: THREE.DoubleSide,
+    });
+    c.socket = new THREE.Mesh(c.socketGeo, c.socketMat);
+    bodyGroup.add(c.socket);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -839,14 +896,21 @@
       faces[i].pivot.position.copy(faces[i].centroid);
       faces[i].pivot.quaternion.copy(faces[i].q0);
     }
+    for (let i = 0; i < caps.length; i++) {
+      caps[i].socketMat.uniforms.uOpacity.value = 0;   // гнёзда всех шапок гаснут
+      caps[i].socket.visible = false;                  // и не рисуются (0 лишних вызовов в покое)
+    }
     if (!twist.active) return;
     const pc = Math.min(1, Math.max(0, twist.p));   // страховка: огибающая строго в [0,1]
     const s = smoother(pc);
     const lp = lift01(pc);
+    const fo = fillMat.uniforms.uOpacity.value;      // текущая непрозрачность стекла (setFigureOpacity)
     // …и двигаем каждую активную шапку как отдельное жёсткое тело
     for (let n = 0; n < twist.n; n++) {
       const slot = twist.slots[n];
       const cap = slot.cap;
+      cap.socketMat.uniforms.uOpacity.value = fo * lp;   // гнездо = грань той же непрозрачности, гейт по раскрытости
+      cap.socket.visible = true;
       qCap.setFromAxisAngle(cap.axis, slot.spin * s);
       qCap.normalize();                                      // страховка: строго единичный кватернион (без масштаба)
       tmpV2.copy(cap.axis).multiplyScalar(slot.lift * lp);   // подъём строго вдоль оси-вершины
@@ -1034,6 +1098,10 @@
     updateDock(dt);
     updateError(dt, clockT);
 
+    // Проём проворота закрывает ЛОКАЛЬНОЕ «дно» шапки (см. applyTwist) — окклюдер при
+    // этом всегда пишет глубину, вид фигуры в покое не меняется, дальние грани не
+    // «вылезают». Отдельная заливка нутра больше не нужна.
+
     // плавный переход цвета/bloom
     const k = 1 - Math.pow(0.002, dt);
     cur.a.lerp(tgt.a, k); cur.b.lerp(tgt.b, k); cur.e.lerp(tgt.e, k);
@@ -1214,6 +1282,7 @@
   applyMode('calm');
   cur.a.copy(tgt.a); cur.b.copy(tgt.b); cur.e.copy(tgt.e); cur.bloom = tgt.bloom;
   startLoop();
+
 </script>
 </body>
 </html>
