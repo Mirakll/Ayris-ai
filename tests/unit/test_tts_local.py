@@ -85,6 +85,7 @@ from ayris.audio.tts.sentence_split import (
     is_speakable,
     normalize_whitespace,
     split_sentences,
+    strip_markup,
 )
 from ayris.core.errors import TtsError
 from ayris.core.events import NotificationRequested
@@ -398,6 +399,22 @@ class TestSentenceSplit:
 
     def test_normalize_whitespace_collapses_runs(self):
         assert normalize_whitespace("  а\t\tб \n в ") == "а б в"
+
+    def test_strip_markup_drops_markdown_keeps_the_word(self):
+        assert strip_markup("**важно**") == "важно"
+        assert strip_markup("это _курсив_ и `код`") == "это курсив и код"
+        assert strip_markup("## Заголовок") == " Заголовок"
+
+    def test_strip_markup_drops_straight_quotes_around_terms(self):
+        assert strip_markup('запрос "лор"') == "запрос лор"
+        assert strip_markup("слово 'лор'") == "слово лор"
+        # Ёлочки движок читает как паузу, а не слово — их оставляем.
+        assert strip_markup("он сказал «готово»") == "он сказал «готово»"
+
+    def test_split_strips_markup_before_speaking(self):
+        assert split_sentences('Ваш запрос "лор" может быть **разным**.') == [
+            "Ваш запрос лор может быть разным."
+        ]
 
     def test_nothing_is_lost(self):
         """Every word of the answer must reach the speakers."""
