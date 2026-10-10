@@ -681,8 +681,10 @@ class TestShutdown:
 
 
 class TestRegistry:
-    """Planning rules only. Some worker modules arrive in later tasks, so a plan
-    that has to contain all four is built with ``include_unavailable``."""
+    """Planning rules only. TTS synthesis runs in the GUI process, so the plan
+    never includes a TTS worker; some other worker modules arrive in later tasks,
+    so a plan that must list the remaining types is built with
+    ``include_unavailable``."""
 
     def test_every_kind_has_a_type_and_a_label(self):
         assert {entry.kind for entry in WORKER_TYPES} == set(WorkerKind)
@@ -715,7 +717,7 @@ class TestRegistry:
 
     def test_the_default_plan_starts_the_local_workers(self):
         plan = plan_workers(Settings(), include_unavailable=True)
-        assert [planned.spec.name for planned in plan] == ["audio", "stt", "tts", "llm"]
+        assert [planned.spec.name for planned in plan] == ["audio", "stt", "llm"]
         assert plan.eco_mode is False
         assert plan.deferred == (), "with eco mode off everything needed starts up front"
         assert plan.by_kind(WorkerKind.AUDIO) is not None
@@ -747,16 +749,28 @@ class TestRegistry:
         assert stt.autostart is False
         assert "экономии" in stt.reason
 
-    def test_a_cloud_voice_does_not_preload_a_synthesiser(self):
-        plan = plan_workers(
-            settings_with(
-                {"performance": {"eco_mode": True}, "voice": {"tts": {"engine": "yandex"}}}
-            ),
-            include_unavailable=True,
-        )
-        tts = plan.by_kind(WorkerKind.TTS)
-        assert tts is not None
-        assert tts.autostart is False
+    def test_tts_is_never_planned_because_synthesis_is_in_process(self):
+        """Speech synthesis runs in the GUI process through the in-process
+        TtsRouter, so no TTS worker is ever planned — not for a local engine, not
+        for a cloud one, and not in either eco state. The «tts» type stays
+        registered as a model category; it is just never a running process."""
+        for engine in ("piper", "silero", "yandex"):
+            for eco in (False, True):
+                plan = plan_workers(
+                    settings_with(
+                        {
+                            "performance": {"eco_mode": eco},
+                            "voice": {"tts": {"engine": engine}},
+                        }
+                    ),
+                    include_unavailable=True,
+                )
+                assert plan.by_kind(WorkerKind.TTS) is None, (engine, eco)
+                names = [planned.spec.name for planned in plan]
+                assert "tts" not in names, (engine, eco)
+        # The worker type is still registered — the model manager and onboarding
+        # treat «tts» as a category of models, not a process to start.
+        assert worker_type(WorkerKind.TTS) is not None
 
     def test_no_llm_worker_when_nothing_asks_a_model(self):
         plan = plan_workers(

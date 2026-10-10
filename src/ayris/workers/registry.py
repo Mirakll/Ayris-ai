@@ -513,6 +513,21 @@ def _always(settings: Settings) -> bool:
     return True
 
 
+def _never(settings: Settings) -> bool:
+    """Never planned as a process.
+
+    Speech synthesis runs in the GUI process through the in-process
+    :func:`~ayris.audio.tts.app_router.active_tts_router`, which owns the local
+    and cloud slots itself. The TTS worker holds no client and nothing ever calls
+    its ``synthesize``/``synthesize_stream``/``load_voice``/``next_chunk``, so a
+    planned one would only start on every launch and sit idle, costing a process
+    and tens of megabytes. The type stays registered — the model manager and
+    onboarding treat ``"tts"`` as a *category of models*, not a running process.
+    """
+    del settings
+    return False
+
+
 WORKER_TYPES: Final[tuple[WorkerType, ...]] = (
     WorkerType(
         kind=WorkerKind.AUDIO,
@@ -535,7 +550,10 @@ WORKER_TYPES: Final[tuple[WorkerType, ...]] = (
         kind=WorkerKind.TTS,
         entrypoint=_ENTRYPOINTS[WorkerKind.TTS],
         build=_tts_spec,
-        is_needed=_always,
+        # Synthesis happens in the GUI process (active_tts_router), so this worker
+        # would only idle. Never planned; see _never. is_preferred is left in
+        # place but is never consulted, since is_needed short-circuits first.
+        is_needed=_never,
         is_preferred=_tts_preferred,
     ),
     WorkerType(
