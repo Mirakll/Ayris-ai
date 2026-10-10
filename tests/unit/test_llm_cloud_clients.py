@@ -396,6 +396,30 @@ class TestOpenAiCompatible:
         assert request.url.host == "api.deepseek.com"
         assert recorder.body_of(request)["model"] == "deepseek-chat"
 
+    def test_gemini_pins_googles_openai_endpoint_and_default_model(
+        self, make_client: Callable[..., LlmClient]
+    ) -> None:
+        # Gemini is just another OpenAI-compatible host: Google's /v1beta/openai
+        # endpoint, a bearer key and a Gemini default model.
+        recorder = Recorder(stream=openai_sse(("ok",)))
+        client = make_client(recorder, provider="gemini", model="")
+        list(client.stream([LlmMessage.user("hi")]))
+        request = recorder.last
+        assert request.url.host == "generativelanguage.googleapis.com"
+        assert request.url.path == "/v1beta/openai/chat/completions"
+        assert request.headers["authorization"] == f"Bearer {KEY}"
+        assert recorder.body_of(request)["model"] == "gemini-flash-latest"
+
+    def test_gemini_strips_the_models_prefix_from_the_picked_name(
+        self, make_client: Callable[..., LlmClient]
+    ) -> None:
+        # Google's /models list names them "models/gemini-flash-latest"; the OpenAI
+        # endpoint 404s on the prefixed form, so the client sends the bare id.
+        recorder = Recorder(stream=openai_sse(("ok",)))
+        client = make_client(recorder, provider="gemini", model="models/gemini-3.8-flash")
+        list(client.stream([LlmMessage.user("hi")]))
+        assert recorder.body_of(recorder.last)["model"] == "gemini-3.8-flash"
+
     def test_openrouter_sends_attribution_headers(
         self, make_client: Callable[..., LlmClient]
     ) -> None:

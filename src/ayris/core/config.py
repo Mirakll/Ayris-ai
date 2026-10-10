@@ -748,6 +748,7 @@ class AiConfig(ConfigSection):
         "deepseek",
         "gigachat",
         "yandex",
+        "gemini",
         "custom",
     ] = Field(
         default="llamacpp",

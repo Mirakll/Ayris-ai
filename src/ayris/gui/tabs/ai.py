@@ -107,6 +107,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "deepseek": "DeepSeek",
     "gigachat": "GigaChat · Сбер",
     "yandex": "YandexGPT",
+    "gemini": "Gemini · Google",
     "custom": "Свой OpenAI-совместимый",
 }
 

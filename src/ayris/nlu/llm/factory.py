@@ -95,6 +95,7 @@ CLOUD_PROVIDERS: Final[Mapping[str, str]] = MappingProxyType(
         "deepseek": "ayris.nlu.llm.deepseek_client:DeepSeekLlmClient",
         "gigachat": "ayris.nlu.llm.gigachat_client:GigaChatLlmClient",
         "yandex": "ayris.nlu.llm.yandex_gpt_client:YandexGptLlmClient",
+        "gemini": "ayris.nlu.llm.gemini_client:GeminiLlmClient",
         CUSTOM_PROVIDER: "ayris.nlu.llm.custom_client:CustomOpenAiLlmClient",
     }
 )
