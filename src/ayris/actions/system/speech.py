@@ -255,7 +255,9 @@ def _configured_engine(router: TtsRouter) -> str:
     try:
         from ayris.core.config import get_settings
 
-        return get_settings().voice.tts.engine or _DEFAULT_ENGINE
+        # engine is a non-empty Literal → always truthy; an inline `or default`
+        # is unreachable for mypy. The except below still covers an unreadable config.
+        return get_settings().voice.tts.engine
     except Exception:  # настройки читаем по возможности — их отсутствие не беда
         return _DEFAULT_ENGINE
 
