@@ -463,6 +463,105 @@ class TestSentenceAssembler:
         assert assembler.emitted_count == 1
         assert assembler.flush() == ["Как дела сегодня."]
 
+    # The buffer-trim speed-up (O(n²)→O(n)) must not change a single emitted
+    # sentence. These pin the streamed output to the untrimmed reference and to a
+    # whole-text split, across texts that exercise every lossy branch of
+    # ``split_sentences`` (abbreviations, dropped non-speakable pieces, run-ons
+    # past the length valve) and every chunking a token stream can arrive in.
+
+    _CORPUS: ClassVar[tuple[str, ...]] = (
+        "",
+        "Одно предложение.",
+        "Привет всем. Как дела сегодня? Хорошо!",
+        "Это т. е. сокращение, а не конец. Второе предложение тут.",
+        "Начало... пауза... и ещё немного текста в конце.",
+        "Да. Нет. Может быть. Снова да. И ещё раз нет.",
+        "Температура 36.6 градуса, а не два предложения. Готово.",
+        "Список: 1. первый 2. второй 3. третий, и финал.",
+        "   пробелы   по   краям   и   точка.   Ещё   одна.   ",
+        "Без терминатора в самом конце обрывается на полуслове",
+        "!!! ??? ... — одни знаки. Потом нормальный текст идёт.",
+        (
+            "Очень длинное предложение без единого терминатора которое всё тянется "
+            "и тянется и тянется разрастаясь далеко за предел длины так что клапан "
+            "длины обязан разрубить его по границе клаузы иначе голос не начнётся "
+            "вовремя и вся затея со стримингом теряет смысл ради которого затевалась"
+        ),
+        "Mixed English and русский. Second sentence here. Третье тоже.",
+    )
+
+    @staticmethod
+    def _chunkings(text: str) -> list[list[str]]:
+        """Every way a token stream might hand this text over, in order."""
+        ways: list[list[str]] = [
+            [text],  # whole answer at once
+            list(text),  # char by char — the worst case for re-scanning
+        ]
+        for size in (2, 3, 5, 7, 13):  # fixed-width token-ish chunks
+            ways.append([text[i : i + size] for i in range(0, len(text), size)] or [""])
+        for step in (4, 9):  # include empty fragments the stream may emit
+            pieces: list[str] = []
+            for i in range(0, len(text), step):
+                pieces.append("")
+                pieces.append(text[i : i + step])
+            ways.append(pieces or [""])
+        return ways
+
+    @staticmethod
+    def _reference_emit(chunks: Sequence[str]) -> list[str]:
+        """The pre-optimisation assembler: re-split the whole buffer every feed."""
+        from ayris.audio.tts.sentence_split import MAX_CHUNK_CHARS, split_sentences
+
+        buffer = ""
+        emitted = 0
+        out: list[str] = []
+        for text in chunks:
+            if not text:
+                continue
+            buffer += text
+            sentences = split_sentences(buffer, max_chars=MAX_CHUNK_CHARS)
+            confirmed = max(0, len(sentences) - 1)
+            out.extend(sentences[emitted:confirmed])
+            emitted = max(emitted, confirmed)
+        sentences = split_sentences(buffer, max_chars=MAX_CHUNK_CHARS)
+        out.extend(sentences[emitted:])
+        return out
+
+    @staticmethod
+    def _assembler_emit(chunks: Sequence[str]) -> list[str]:
+        assembler = SentenceAssembler()
+        out: list[str] = []
+        for text in chunks:
+            out.extend(assembler.feed(text))
+        out.extend(assembler.flush())
+        return out
+
+    def test_trimmed_output_matches_the_untrimmed_reference(self) -> None:
+        for text in self._CORPUS:
+            for chunks in self._chunkings(text):
+                assert self._assembler_emit(chunks) == self._reference_emit(
+                    chunks
+                ), f"divergence on {text!r} chunked as {chunks!r}"
+
+    def test_streamed_output_matches_a_whole_text_split(self) -> None:
+        from ayris.audio.tts.sentence_split import MAX_CHUNK_CHARS, split_sentences
+
+        for text in self._CORPUS:
+            whole = split_sentences(text, max_chars=MAX_CHUNK_CHARS)
+            for chunks in self._chunkings(text):
+                assert (
+                    self._assembler_emit(chunks) == whole
+                ), f"streamed {text!r} as {chunks!r} != whole-text split"
+
+    def test_trimming_bounds_the_buffer_on_a_long_stream(self) -> None:
+        # The point of the trim: feeding many confirmed sentences one token at a
+        # time must not leave the buffer growing without bound.
+        assembler = SentenceAssembler()
+        for _ in range(200):
+            assembler.feed("Короткая фраза. ")
+        held = len(assembler._buffer)  # white-box bound check
+        assert held < 100, f"buffer did not shrink: {held} chars retained"
+
 
 # --- объём памяти (catalog.py) -----------------------------------------------
 
