@@ -47,6 +47,7 @@ from ayris.audio.capture import (
     apply_gain,
     downmix,
     pcm_level,
+    rms_dbfs,
     write_wav,
 )
 from ayris.audio.devices import (
@@ -428,6 +429,27 @@ class TestLevels:
         assert AudioLevel(rms=1.0).rms_db == pytest.approx(0.0)
         assert AudioLevel(peak=0.5).peak_db == pytest.approx(-6.02, abs=0.01)
 
+    def test_rms_dbfs_matches_pcm_level_rms_db(self):
+        """The VAD gate's RMS-only helper agrees with the full measure.
+
+        ``rms_dbfs`` skips the peak, trough and clip flag the gate never reads;
+        the number it returns must still equal ``pcm_level(pcm).rms_db`` for any
+        block, so switching the gate to it changes speed, not behaviour.
+        """
+        blocks = [
+            bytes(640),  # silence
+            array("h", [32767] * 320).tobytes(),  # full-scale
+            array("h", [-32768] * 320).tobytes(),
+            tone(1600, amplitude=16384),
+            tone(960, amplitude=8000, hz=200.0),
+            array("h", [i % 5000 - 2500 for i in range(320)]).tobytes(),
+        ]
+        for pcm in blocks:
+            assert rms_dbfs(pcm) == pytest.approx(pcm_level(pcm).rms_db, abs=1e-9)
+
+    def test_rms_dbfs_of_an_empty_block_is_the_floor(self):
+        assert rms_dbfs(b"") == pcm_level(b"").rms_db
+
 
 class TestGain:
     """Amplifying a quiet microphone without turning speech into a square wave."""
@@ -512,6 +534,21 @@ class TestResampler:
         resampler = Resampler(48000, 16000)
         pcm = resampler.process(tone(4800, amplitude=16384, rate=48000, hz=200.0))
         assert pcm_level(pcm).peak == pytest.approx(0.5, abs=0.05)
+
+    def test_upsampling_a_ramp_is_monotonic_and_starts_at_zero(self):
+        """Lock the fractional interpolation loop (the player's 22.05->48 kHz path).
+
+        The rewritten loop builds into a list and converts once instead of
+        appending to an ``array`` per sample; the arithmetic and phase
+        accumulation are unchanged, so on a monotonic ramp the output stays
+        monotonic, opens on the first input sample and makes more samples than it
+        consumed.
+        """
+        ramp = array("h", list(range(0, 2000, 100))).tobytes()  # 20 rising samples
+        out = samples_of(Resampler(22050, 48000).process(ramp))
+        assert len(out) > 20, "upsampling produces more samples than it consumes"
+        assert out[0] == 0
+        assert out == sorted(out), "a rising ramp interpolates to a rising output"
 
     @pytest.mark.parametrize("source", [48000, 44100, 32000, 22050])
     def test_block_boundaries_do_not_lose_or_duplicate_audio(self, source: int):
@@ -1137,6 +1174,37 @@ class TestWorker:
     def test_starting_brings_capture_up(self, worker: AudioWorker):
         assert worker.status({})["running"]
         assert worker.status({})["sample_rate"] == TARGET_SAMPLE_RATE
+
+    def test_live_reconfigure_races_the_capture_thread_without_crashing(self, worker: AudioWorker):
+        """A detection setting changed live is applied off the dispatcher thread
+        while the capture thread is still pushing frames through the very same
+        segmenter and denoiser. The detection lock serialises the two. This drives
+        both at once and asserts that nothing escapes and nothing deadlocks — a
+        non-reentrant lock would hang here, because ``_configure_detection`` falls
+        back to ``_build_detection`` while already holding it.
+        """
+        block = bytes(TARGET_SAMPLE_RATE // 50 * SAMPLE_WIDTH)  # 20 ms of silence
+        errors: list[Exception] = []
+        stop = threading.Event()
+
+        def push() -> None:
+            try:
+                while not stop.is_set():
+                    worker._on_frames(block)
+            except Exception as exc:  # record; assert on the main thread
+                errors.append(exc)
+
+        pusher = threading.Thread(target=push, name="test-frames")
+        pusher.start()
+        try:
+            for _ in range(300):
+                worker.on_configure(dict(worker.params))
+        finally:
+            stop.set()
+            pusher.join(timeout=5.0)
+
+        assert not pusher.is_alive(), "capture thread deadlocked on the detection lock"
+        assert errors == []
 
     def test_a_missing_microphone_does_not_fail_the_start(self):
         """Restarting the process cannot conjure a device; capture keeps looking."""

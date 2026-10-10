@@ -250,20 +250,49 @@ def pcm_level(pcm: bytes | bytearray | memoryview) -> AudioLevel:
     Returns:
         Amplitudes normalised to 0.0-1.0, with ``clipped`` set when at least one
         sample sits at the rail - the cue that the gain is too high.
+
+    Peak, trough and energy are found in a single walk of the block.  ``max``,
+    ``min`` and a generator ``sum`` were three separate passes over the same
+    samples, and this runs on every captured block.
     """
     samples = _to_samples(pcm)
     count = len(samples)
     if count == 0:
         return AudioLevel()
-    high = max(samples)
-    low = min(samples)
+    high = _INT16_MIN
+    low = _INT16_MAX
+    energy = 0
+    for sample in samples:
+        if sample > high:
+            high = sample
+        if sample < low:
+            low = sample
+        energy += sample * sample
     peak = max(high, -low)
-    energy = sum(sample * sample for sample in samples)
     return AudioLevel(
         rms=min(1.0, math.sqrt(energy / count) / _FULL_SCALE),
         peak=min(1.0, peak / _FULL_SCALE),
         clipped=high >= _INT16_MAX or low <= _INT16_MIN,
     )
+
+
+def rms_dbfs(pcm: bytes | bytearray | memoryview) -> float:
+    """RMS of a PCM block in dBFS - the one figure the VAD gate needs.
+
+    :func:`pcm_level` also finds the peak, the trough and the clip flag; the
+    voice-activity gate keeps only :attr:`AudioLevel.rms_db` and throws the rest
+    away.  On a path that runs on every 20 ms frame while the microphone is open,
+    computing them is wasted work, so this is energy only - one pass, no peak, no
+    trough.  The returned value equals ``pcm_level(pcm).rms_db`` for any block.
+    """
+    samples = _to_samples(pcm)
+    count = len(samples)
+    if count == 0:
+        return MIN_DBFS
+    energy = 0
+    for sample in samples:
+        energy += sample * sample
+    return _to_db(min(1.0, math.sqrt(energy / count) / _FULL_SCALE))
 
 
 def apply_gain(
@@ -403,18 +432,24 @@ class Resampler:
         size = len(buffer)
         ratio = self._ratio
         phase = self._phase
-        out: array[int] = array("h")
+        # Build into a plain list and convert once: ``array('h').append`` type- and
+        # range-checks every sample, and this loop runs per output sample of every
+        # resampled block (the player's 22.05->48 kHz path and the 44.1->16 kHz
+        # capture path).  The arithmetic and the phase accumulation are unchanged,
+        # so the samples are identical - no boundary click.
+        out: list[int] = []
+        append = out.append
         while phase + 1.0 < size:
             index = int(phase)
             fraction = phase - index
             first = buffer[index]
-            out.append(int(first + (buffer[index + 1] - first) * fraction))
+            append(int(first + (buffer[index + 1] - first) * fraction))
             phase += ratio
         # Keep the last sample the next block will interpolate from.
         base = min(int(phase), size - 1)
         self._tail = buffer[base:]
         self._phase = phase - base
-        return out
+        return array("h", out)
 
 
 def write_wav(path: Path, pcm: bytes, sample_rate: int = TARGET_SAMPLE_RATE) -> Path:
