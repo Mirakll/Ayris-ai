@@ -86,6 +86,7 @@ from ayris.nlu.followup import (
     publish_cancel,
     resolve_followup,
 )
+from ayris.nlu.gibberish import looks_like_gibberish
 from ayris.nlu.llm.base import LlmClient, LlmMessage, LlmResponse, LlmTool, NullLlmClient
 from ayris.nlu.llm.json_nlu import NluDecision, interpret, resolve_command
 from ayris.nlu.llm.memory import DialogMemory, is_reset
@@ -168,6 +169,17 @@ TIMEOUT_MESSAGE: Final = "Не успела. Попробуй ещё раз."
 #: …when the listening window closed with nobody speaking. Said only for an
 #: explicit activation, see :meth:`Pipeline._on_timeout`.
 NOTHING_SAID_MESSAGE: Final = "Ничего не услышала."
+
+#: Short, light replies to an obvious keyboard mash (:func:`looks_like_gibberish`)
+#: — said instead of spending a model call on noise. Rotated so a run of mashes
+#: does not repeat one line like a stuck record. Deliberately a question or a
+#: shrug, never a lecture: the point is to not take «фывп» seriously.
+GIBBERISH_QUIPS: Final[tuple[str, ...]] = (
+    "Хм, не поняла.",
+    "Это что было?",
+    "Не разобрала, повтори?",
+    "Что-что?",
+)
 
 #: Value of :attr:`ayris.core.pipeline_trace.PipelineTrace.source` for the two
 #: activations that are not a wake phrase.
@@ -524,6 +536,7 @@ class Pipeline:
         "_echo_guard",
         "_fallback_chat",
         "_gateway",
+        "_gibberish_turn",
         "_history",
         "_llm",
         "_llm_understanding",
@@ -603,6 +616,7 @@ class Pipeline:
         # so a pipeline built for a test (settings=None) keeps the one-shot
         # behaviour its stage assertions were written against.
         self._continue_listening = False
+        self._gibberish_turn = 0
         self._catalog = catalog
         self._gateway = gateway
         self._memory = memory
@@ -1312,6 +1326,7 @@ class Pipeline:
         """
         self._maybe_reset_memory(session)
         self._instant_intercept(session)
+        self._intercept_gibberish(session)
         if self._want_nlu(session):
             decision = self._llm_understand(session)
             if decision is not None and decision.resolved:
@@ -1321,6 +1336,27 @@ class Pipeline:
                 self._fail(session, NOT_MATCHED_MESSAGE, outcome=ExecutionResult.UNMATCHED)
                 raise _Stop(ExecutionResult.UNMATCHED)
         self._llm_chat(session)
+
+    def _intercept_gibberish(self, session: _Session) -> None:
+        """Answer an obvious keyboard mash with one short line, before the model.
+
+        A run of keys like «фывп» is not a question, and a small local model
+        turns it into a long «уточните запрос». :func:`looks_like_gibberish` is
+        deliberately narrow — only unpronounceable noise, never a real short word
+        or a reaction like «нишево», which the chat prompt handles — so the quip
+        here does not steal anything a model could have answered. Skipped on a
+        dry run, which reports what *would* match without speaking. Raises
+        :class:`_Stop` when it answered.
+        """
+        if session.dry_run or not looks_like_gibberish(session.text):
+            return
+        quip = GIBBERISH_QUIPS[self._gibberish_turn % len(GIBBERISH_QUIPS)]
+        self._gibberish_turn += 1
+        session.trace.intent = session.trace.intent or "chat:gibberish"
+        session.trace.match_source = _SOURCE_LLM
+        self._respond(session, quip)
+        self._done(session, ExecutionResult.OK)
+        raise _Stop(ExecutionResult.OK)
 
     def _want_nlu(self, session: _Session) -> bool:
         """Should the model parse this phrase into a command (JSON-NLU)?

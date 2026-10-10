@@ -76,6 +76,7 @@ from ayris.core.models import ExecutionResult, HistoryEntry
 from ayris.core.pipeline import (
     ACTION_FAILED_MESSAGE,
     CANCEL_REASON_BARGE_IN,
+    GIBBERISH_QUIPS,
     NOT_HEARD_MESSAGE,
     NOT_MATCHED_MESSAGE,
     NOTHING_SAID_MESSAGE,
@@ -857,6 +858,48 @@ class TestModes:
         rig.pipeline.run_text(UNKNOWN_PHRASE)
 
         assert rig.trace().mode == NluMode.AI.value
+
+
+class TestGibberish:
+    """Клавиатурный мусор получает короткий отклик, минуя модель."""
+
+    def test_a_keyboard_mash_is_answered_without_the_model(self) -> None:
+        llm = FakeLlm()
+        rig = build(settings=ai_only(), llm=llm)
+
+        result = rig.pipeline.run_text("фывп")
+
+        assert result.ok
+        assert result.spoken in GIBBERISH_QUIPS
+        assert llm.prompts == []  # модель на шум не звали
+        assert rig.trace().intent == "chat:gibberish"
+
+    def test_a_real_reaction_still_reaches_the_model(self) -> None:
+        llm = FakeLlm()
+        rig = build(settings=ai_only(), llm=llm)
+
+        rig.pipeline.run_text("нишево")
+
+        assert llm.asked == "нишево"  # реплику-реакцию разбирает модель, не гейт
+
+    def test_quips_rotate_so_a_run_does_not_repeat(self) -> None:
+        llm = FakeLlm()
+        rig = build(settings=ai_only(), llm=llm)
+
+        first = rig.pipeline.run_text("фывп").spoken
+        second = rig.pipeline.run_text("asdf").spoken
+
+        assert first != second
+        assert llm.prompts == []
+
+    def test_a_typed_mash_in_commands_mode_is_untouched(self) -> None:
+        """«Только команды» без ИИ не трогаем — там мусор и так короткое «не нашла»."""
+        rig = build(settings=commands_only(), llm=FakeLlm())
+
+        result = rig.pipeline.run_text("фывп")
+
+        assert result.outcome is ExecutionResult.UNMATCHED
+        assert rig.tts.said == [NOT_MATCHED_MESSAGE]
 
 
 class TestSegment:
