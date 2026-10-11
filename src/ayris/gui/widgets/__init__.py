@@ -20,6 +20,7 @@ from ayris.gui.widgets.icon_button import IconButton
 from ayris.gui.widgets.level_meter import LevelMeter
 from ayris.gui.widgets.model_card import CardStatus, ModelCard, ModelView
 from ayris.gui.widgets.model_manager import ModelManager, ModelManagerBackend
+from ayris.gui.widgets.model_picker import ModelPicker
 from ayris.gui.widgets.notice import InlineNotice, Toast
 from ayris.gui.widgets.resource_monitor import (
     ResourceMonitor,
@@ -54,6 +55,7 @@ __all__ = [
     "ModelCard",
     "ModelManager",
     "ModelManagerBackend",
+    "ModelPicker",
     "ModelView",
     "NodeKind",
     "ResourceMonitor",

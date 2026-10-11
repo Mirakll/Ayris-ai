@@ -48,6 +48,10 @@ from ayris import __app_name__
 from ayris.core.config import ConfigManager, OverlayConfig, WindowConfig
 from ayris.core.events import (
     ActionFailed,
+    AgentStepFinished,
+    AgentStepStarted,
+    AgentTurnFinished,
+    AssistantReplied,
     AudioLevelChanged,
     ConfigChanged,
     EventBus,
@@ -62,7 +66,7 @@ from ayris.core.events import (
     TranscriptReady,
     TtsStarted,
 )
-from ayris.core.models import Profile
+from ayris.core.models import JsonObject, Profile
 from ayris.core.profile import ProfileSwitched
 from ayris.core.state import AssistantState, MicMode, StatusSnapshot
 from ayris.gui.dashboard import DialogView, SettingsLayer, ShowcasePanel
@@ -190,6 +194,9 @@ class MainWindow(QMainWindow):
         self._restoring = True
         self._search_index = SettingsSearchIndex()
         self._unsubscribers: list[Callable[[], None]] = []
+        # Last phrase printed from ``AssistantReplied``, so the ``TtsStarted``
+        # that follows the same answer does not double the chat line.
+        self._last_reply = ""
 
         self.setWindowTitle(__app_name__)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
@@ -524,6 +531,10 @@ class MainWindow(QMainWindow):
             bus.subscribe(OnlineStatusChanged, self._on_online),
             bus.subscribe(ProfileSwitched, self._on_profile_switched),
             bus.subscribe(TranscriptReady, self._on_transcript),
+            bus.subscribe(AssistantReplied, self._on_reply),
+            bus.subscribe(AgentStepStarted, self._on_agent_step_started),
+            bus.subscribe(AgentStepFinished, self._on_agent_step_finished),
+            bus.subscribe(AgentTurnFinished, self._on_agent_turn_finished),
             bus.subscribe(TtsStarted, self._on_answer),
             bus.subscribe(ActionFailed, self._on_action_failed),
             bus.subscribe(MacroFailed, self._on_macro_failed),
@@ -567,7 +578,57 @@ class MainWindow(QMainWindow):
         if event.is_final and self._show_transcript():
             self.add_message(DialogKind.HEARD, event.text)
 
+    def _on_reply(self, event: AssistantReplied) -> None:
+        """Print what Ayris has to say, whether or not it will be spoken.
+
+        The pipeline publishes this before synthesis is even attempted, so the
+        chat no longer depends on a working voice — and failures reach the window
+        at all, which they never did while the only channel was the speakers.
+        """
+        self._last_reply = event.text
+        if event.failed:
+            if self._show_errors():
+                self.add_message(DialogKind.ERROR, event.text)
+        elif self._show_answers():
+            self.add_message(DialogKind.ANSWER, event.text)
+        self.set_status(event.text)
+
+    def _on_agent_step_started(self, event: AgentStepStarted) -> None:
+        """Live line as the agent reaches for a tool, muted and one per step."""
+        if self._show_answers():
+            self.add_message(DialogKind.STEP, f"→ {event.tool}{self._fmt_args(event.args_preview)}")
+
+    def _on_agent_step_finished(self, event: AgentStepFinished) -> None:
+        if not self._show_answers():
+            return
+        mark = "✓" if event.ok else "✗"
+        tail = f" {event.result_preview}" if event.result_preview else ""
+        self.add_message(DialogKind.STEP, f"   {mark}{tail}")
+
+    def _on_agent_turn_finished(self, event: AgentTurnFinished) -> None:
+        # The final answer is printed by :class:`AssistantReplied`; printing
+        # ``answer`` here too would double it. Only a quiet note on a cut-off run.
+        if event.stop_reason == "max_steps":
+            self.set_status("Остановилась: достигнут предел шагов агента.")
+
+    @staticmethod
+    def _fmt_args(args: JsonObject) -> str:
+        """Compact one-line view of a step's (already masked) arguments."""
+        if not args:
+            return ""
+        joined = ", ".join(f"{key}={value}" for key, value in args.items())
+        if len(joined) > 80:
+            joined = joined[:80] + "…"
+        return f" ({joined})"
+
     def _on_answer(self, event: TtsStarted) -> None:
+        # Anything the pipeline answers is already on screen from
+        # :class:`AssistantReplied`; printing it again on the echo would double
+        # every line. What is left here is speech that belongs to no session —
+        # the «скажи» action, a voice sample — which still deserves a line.
+        if event.text and event.text == self._last_reply:
+            self.set_status(event.text)
+            return
         if self._show_answers():
             self.add_message(DialogKind.ANSWER, event.text)
         self.set_status(event.text)

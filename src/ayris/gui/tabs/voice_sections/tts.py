@@ -20,7 +20,9 @@ from PySide6.QtWidgets import (
 from ayris.audio.tts.app_router import active_tts_router
 from ayris.audio.tts.base import VoiceSpec, engine_class
 from ayris.audio.tts.cloud_base import is_cloud_engine
+from ayris.audio.tts.player import PlaybackReason
 from ayris.core.config import RestartScope, TtsConfig
+from ayris.core.errors import TtsError
 from ayris.core.paths import get_paths
 from ayris.gui.tabs.voice import AsyncRunner, combo_options
 from ayris.gui.tabs.voice_sections.stt import _SecretField
@@ -78,6 +80,11 @@ class TtsSection:
         self._runner = AsyncRunner(tab)
         self._runner.finished.connect(lambda _result: self._finish_listen())
         self._runner.failed.connect(self._on_listen_failed)
+        #: Voice ids the current local engine actually owns, filled by
+        #: :meth:`_reload_local_voices`. A voice outside it is a stale carry-over
+        #: from the previous engine, which :meth:`_coerce_voice_to_engine` corrects
+        #: so Piper is never left pointing at a Silero speaker (``baya.onnx``).
+        self._owned_voices: set[str] = set()
         self._build()
         tab.register_refresh(self.refresh)
 
@@ -89,7 +96,7 @@ class TtsSection:
         for value, label in combo_options(TtsConfig, "engine", _ENGINES):
             self._engine_combo.addItem(label, value)
         tab.bind_combo(self._engine_combo, "voice.tts.engine", "Движок синтеза")
-        self._engine_combo.currentIndexChanged.connect(self._reload_voices)
+        self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         tab.add_card(
             "Движок", "Чем озвучивать ответы. Piper — быстрый локальный голос.", self._engine_combo
         )
@@ -280,6 +287,36 @@ class TtsSection:
             self._reload_local_voices(engine, settings.voice)
         self._update_cloud_visibility()
 
+    def _on_engine_changed(self) -> None:
+        """React to the user picking a different engine.
+
+        Reload the voice box for the new engine, then make sure the saved voice
+        belongs to it: switching from Silero to Piper must not leave ``voice`` on
+        a Silero speaker, or «Прослушать» (and every answer) would ask Piper for a
+        ``baya.onnx`` it has no way to have. See :meth:`_coerce_voice_to_engine`.
+        """
+        self._reload_voices()
+        self._coerce_voice_to_engine()
+
+    def _coerce_voice_to_engine(self) -> None:
+        """Select the engine's first voice when the saved one is not its own.
+
+        Runs only for a local engine (a cloud voice box is free text, so any value
+        is valid). :meth:`_reload_local_voices` adds the owned voices first and the
+        stale carry-over last, so index 0 is always an owned voice when the engine
+        has any. The reselection happens outside the rebuild's signal blocker, so
+        it fires ``currentIndexChanged`` and the ordinary binding persists it.
+        """
+        engine = str(self._engine_combo.currentData() or "")
+        if not engine or is_cloud_engine(engine):
+            return
+        if not self._owned_voices:
+            return  # nothing installed yet: leave the choice for a later download
+        if self._voice_combo.currentData() in self._owned_voices:
+            return
+        if self._voice_combo.count() > 0:
+            self._voice_combo.setCurrentIndex(0)
+
     def _reload_local_voices(self, engine: str, current: str) -> None:
         """The installed voices of a local engine, chosen from a fixed list.
 
@@ -313,6 +350,7 @@ class TtsSection:
             index = self._voice_combo.findData(current)
             if index >= 0:
                 self._voice_combo.setCurrentIndex(index)
+        self._owned_voices = seen
 
     def _builtin_voices(self, engine: str) -> tuple[VoiceSpec, ...]:
         """The engine's built-in voices, or empty when it has none or cannot load.
@@ -352,6 +390,8 @@ class TtsSection:
                 line = self._voice_combo.lineEdit()
                 if line is not None:
                     line.setText(current)
+        # A cloud voice box is free text; coercion never applies, so no owned set.
+        self._owned_voices = set()
 
     def _set_voice_editable(self, editable: bool) -> None:
         """Flip the voice box between a fixed picker and a free-text field.
@@ -433,9 +473,10 @@ class TtsSection:
         A test injects its own through :class:`~ayris.gui.tabs.voice.VoiceServices`;
         the running app injects nothing, so the preview goes through the live
         :class:`~ayris.audio.tts.router.TtsRouter` the dispatcher registered — the
-        very voice the assistant answers with, at the current speed, tone and volume
-        (those are live; the engine and voice follow a restart). Before the workers
-        are up there is no router, so the button stays disabled with a tooltip that
+        very voice the assistant answers with, at the current speed, tone and
+        volume. The router rebuilds its engine when the engine or voice changes, so
+        a just-picked voice is previewed without a restart. Before the workers are
+        up there is no router, so the button stays disabled with a tooltip that
         says why.
         """
         injected = self._tab.services.speak_sample
@@ -446,11 +487,31 @@ class TtsSection:
         return self._preview_through_router
 
     def _preview_through_router(self) -> None:
-        """Speak the fixed sample through the runtime router; safe off the UI thread."""
+        """Speak the fixed sample through the runtime router; safe off the UI thread.
+
+        Raises when the preview does not sound, so :meth:`_on_listen_failed` can say
+        why instead of leaving «Прослушать» silent — a voice whose files are missing
+        fails inside the player thread, where the error would otherwise only reach the
+        log. A cancelled preview (the user clicked another voice) is not an error.
+        """
         router = active_tts_router()
         if router is None:  # torn down between the enablement check and the click
             return
-        router.preview().wait(timeout=_PREVIEW_TIMEOUT_S)
+        handle = router.preview()
+        finished = handle.wait(timeout=_PREVIEW_TIMEOUT_S)
+        if not finished:
+            raise TtsError(
+                "tts preview did not finish within the timeout",
+                user_message="синтез не ответил вовремя, попробуйте ещё раз.",
+            )
+        if handle.reason == PlaybackReason.ERROR:
+            raise TtsError(
+                "tts preview ended with an error",
+                user_message=(
+                    "выбранный голос не синтезируется. Проверьте, что он скачан "
+                    "целиком, или выберите другой (подробности — в журнале)."
+                ),
+            )
 
     def _listen(self) -> None:
         service = self._sample_service()
@@ -464,7 +525,10 @@ class TtsSection:
     def _finish_listen(self) -> None:
         self._busy.setActive(False)
         self._busy.hide()
-        self._listen_button.setEnabled(self._tab.services.speak_sample is not None)
+        # Re-enable from the same source as refresh(): the running app injects no
+        # speak_sample and previews through the runtime router, so gating on
+        # services.speak_sample alone latched the button off after the first play.
+        self._listen_button.setEnabled(self._sample_service() is not None)
 
     def _on_listen_failed(self, message: str) -> None:
         self._finish_listen()

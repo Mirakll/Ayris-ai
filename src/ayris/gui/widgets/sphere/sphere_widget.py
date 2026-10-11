@@ -189,6 +189,18 @@ class SphereWidget(QWidget):
         """Whether animation pauses while the widget/window is hidden."""
         self._stop_when_hidden = stop
 
+    def set_avatar(self, kind: str) -> None:
+        """No-op: the QPainter fallback only ever draws the sphere.
+
+        Without WebEngine there is no icosahedron page, so the widget degrades
+        gracefully to the sphere whatever avatar is configured.
+        """
+        _ = kind
+
+    def set_icosa_config(self, cfg: dict[str, object]) -> None:
+        """No-op: icosahedron-only knobs do not apply to the painter sphere."""
+        _ = cfg
+
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
         if self._animations_enabled:

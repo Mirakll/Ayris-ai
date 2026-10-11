@@ -65,7 +65,14 @@ if TYPE_CHECKING:
     from ayris.audio.devices import DeviceEnumerator
     from ayris.models.catalog import ModelCatalog
 
-__all__ = ["AsyncRunner", "VoiceServices", "VoiceTab", "combo_options"]
+__all__ = [
+    "AsyncRunner",
+    "VoiceServices",
+    "VoiceTab",
+    "active_voice_services",
+    "combo_options",
+    "set_active_voice_services",
+]
 
 _log = get_logger(__name__)
 
@@ -110,6 +117,28 @@ class VoiceServices:
     speak_sample: SpeakSample | None = None
     #: Opens the model manager (task 50); ``None`` leaves the link inert.
     open_model_manager: Callable[[], None] | None = None
+
+
+_active_services: VoiceServices | None = None
+
+
+def set_active_voice_services(services: VoiceServices | None) -> None:
+    """Publish (or clear) the services the next «Голос» tab will read.
+
+    The tab is built through the plain ``register_tab`` factory, which knows only
+    ``(manager, theme, bus)`` and cannot carry the live microphone, models or STT
+    worker the self-tests need. ``__main__`` publishes them here at startup — the
+    same seam :func:`~ayris.gui.tabs.devtools.set_active_devtools_services` uses —
+    and clears it on teardown, so a tab opened before the workers exist (or built
+    in a test) simply falls back to the inert :class:`VoiceServices` default.
+    """
+    global _active_services
+    _active_services = services
+
+
+def active_voice_services() -> VoiceServices | None:
+    """The services set by ``__main__``, or ``None`` before startup wires them."""
+    return _active_services
 
 
 class AsyncRunner(QObject):
@@ -186,7 +215,8 @@ class VoiceTab(SettingsTab):
         services: VoiceServices | None = None,
     ) -> None:
         super().__init__("voice", "Голос", ("voice",), manager, theme, bus)
-        self.services = services if services is not None else VoiceServices()
+        resolved = services if services is not None else active_voice_services()
+        self.services = resolved if resolved is not None else VoiceServices()
         self.event_bus = bus
         self._restart_bars: dict[RestartScope, _RestartBar] = {}
         self._refreshers: list[Callable[[], None]] = []

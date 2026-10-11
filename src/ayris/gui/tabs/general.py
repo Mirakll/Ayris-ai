@@ -26,6 +26,7 @@ user declines.
 
 from __future__ import annotations
 
+import os
 import sys
 from typing import Final, get_args
 
@@ -78,6 +79,11 @@ _WORKER_LABELS: Final[dict[str, str]] = {
     "llm": "Языковая модель",
 }
 
+#: Upper bound for the LLM thread slider: the machine's logical cores, so the
+#: in-process llama.cpp engine can use the whole CPU, clamped to the schema's
+#: ``le`` (64) and never below 2 so the control is always a real range.
+_LLM_THREAD_MAX: Final[int] = max(2, min(os.cpu_count() or 2, 64))
+
 #: Thread-pool sliders: config path → (title, description, minimum, maximum).
 _POOLS: Final[tuple[tuple[str, str, str, int, int, RestartScope], ...]] = (
     (
@@ -99,9 +105,10 @@ _POOLS: Final[tuple[tuple[str, str, str, int, int, RestartScope], ...]] = (
     (
         "performance.llm_threads",
         "Потоки языковой модели",
-        "Параллельные запросы к модели",
+        "Ядер CPU на счёт ответа локальной модели. Больше — быстрее, "
+        "но выше нагрузка на процессор во время ответа",
         1,
-        2,
+        _LLM_THREAD_MAX,
         RestartScope.LLM,
     ),
     (
@@ -557,8 +564,13 @@ class GeneralTab(SettingsTab):
             _log.exception("не удалось сбросить состояние мастера первого запуска")
             return
         from ayris.onboarding import build_services, run_onboarding
+        from ayris.workers.manager import WorkerManager
 
-        services = build_services(self._theme, self._manager, self._bus)
+        # Приложение уже поднято, поэтому калибровку в мастере можно провести через
+        # живой аудио-воркер — тот же супервизор, что и у кнопок перезапуска.
+        control = active_worker_control()
+        worker = control if isinstance(control, WorkerManager) else None
+        services = build_services(self._theme, self._manager, self._bus, worker=worker)
         try:
             run_onboarding(services, parent=self.window())
         except Exception:
