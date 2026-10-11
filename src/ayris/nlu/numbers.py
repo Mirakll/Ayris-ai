@@ -634,7 +634,10 @@ def number_to_words(value: int | Decimal | float, *, feminine: bool = False) -> 
         words.append("ноль")
 
     if fraction:
-        digits = format(fraction.normalize(), "f").partition(".")[2]
+        # At most three places: a voice reads no further, and _under_thousand only
+        # speaks 0-999, so a longer fraction (e.g. 1/3 -> «3333…») would otherwise
+        # overflow it with an IndexError. Keep the first three digits.
+        digits = format(fraction.normalize(), "f").partition(".")[2][:3]
         tenths = int(digits)
         scale_forms = _FRACTION_SCALES.get(len(digits))
         words.append(plural_form(whole, "целая", "целых", "целых"))

@@ -103,6 +103,11 @@ class OllamaLlmClient(CloudLlmClient):
         # A local server needs no key; being *reachable* is checked per request.
         return bool(self._base_url)
 
+    def _trust_env(self) -> bool:
+        # A loopback server is reached directly — never through an outbound proxy,
+        # which would answer for it and turn «not running» into «проверьте интернет».
+        return False
+
     def _down_message(self) -> str:
         """The sentence the user reads when the server is not answering."""
         return (
@@ -117,11 +122,14 @@ class OllamaLlmClient(CloudLlmClient):
         A refused connection on ``localhost`` returns almost instantly, so this
         costs nothing when the server is up and turns «down» into the right
         sentence — not the branded «проверьте интернет» — before the retrying
-        chat request would otherwise spin through its backoff schedule.
+        chat request would otherwise spin through its backoff schedule. A non-2xx
+        reply counts as «down» too: nothing that answers ``/api/version`` with an
+        error is a healthy Ollama, and mapping it here keeps that case on the
+        local message instead of the retry path's «проверьте интернет».
         """
         client = self._require_client()
         try:
-            client.get(
+            response = client.get(
                 f"{self._base_url}/api/version",
                 headers={"Accept": "application/json"},
             )
@@ -130,6 +138,11 @@ class OllamaLlmClient(CloudLlmClient):
                 f"ollama: server unreachable at {self._base_url}: {exc}",
                 user_message=self._down_message(),
             ) from exc
+        if not (200 <= response.status_code < 300):
+            raise LlmError(
+                f"ollama: version check returned {response.status_code} at {self._base_url}",
+                user_message=self._down_message(),
+            )
 
     # ------------------------------------------------------------------
     # the streaming contract, wrapped in a reachability ping

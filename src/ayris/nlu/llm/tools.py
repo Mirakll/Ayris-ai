@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 from ayris.nlu.llm.base import LlmTool
@@ -234,11 +234,50 @@ class ActionReply:
     detail: str = ""
     error: str = ""
     dangerous: bool = False
+    content: str = ""
+    data: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def as_tool_result(self) -> str:
         """Что вернуть модели как результат tool call, чтобы она это озвучила."""
         return self.spoken or self.detail or ("ошибка: " + self.error if self.error else "готово")
+
+    @property
+    def for_agent(self) -> str:
+        """Результат для цикла агента: озвучка плюс содержимое и причина сбоя.
+
+        Озвучка говорит, ЧТО сделано; агенту нужно и СОДЕРЖИМОЕ (прочитанный
+        текст, найденные пути) из :attr:`content`, иначе он не сможет построить
+        следующий шаг на результате предыдущего.
+        """
+        parts: list[str] = []
+        if self.spoken.strip():
+            parts.append(self.spoken.strip())
+        if self.content:
+            parts.append(self.content)
+        if not self.ok and self.error:
+            parts.append(f"ошибка: {self.error}")
+        return " ".join(parts).strip() or ("готово" if self.ok else "ошибка")
+
+
+def _render_value(value: Any, *, limit: int = 2000) -> str:
+    """Компактно показать типизированный результат действия агенту.
+
+    Строку отдаём как есть, последовательность записей — через их ``as_data``,
+    всё остальное — через ``str``; результат обрезаем, чтобы один вызов не съел
+    контекст модели.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value[:limit]
+    if isinstance(value, list | tuple):
+        rendered: list[str] = []
+        for item in list(value)[:50]:
+            as_data = getattr(item, "as_data", None)
+            rendered.append(str(as_data()) if callable(as_data) else str(item))
+        return "; ".join(rendered)[:limit]
+    return str(value)[:limit]
 
 
 class RegistryGateway:
@@ -308,6 +347,8 @@ class RegistryGateway:
             ok=bool(result.ok),
             spoken=result.message_ru,
             detail=result.detail,
+            content=_render_value(result.value),
+            data=dict(result.data),
         )
 
     def action_tools(self) -> list[LlmTool]:

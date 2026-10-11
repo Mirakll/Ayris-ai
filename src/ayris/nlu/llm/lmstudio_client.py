@@ -49,6 +49,12 @@ class LmStudioLlmClient(OpenAiCompatibleClient):
         # Local and keyless: having somewhere to send to is enough.
         return bool(self._base_url)
 
+    def _trust_env(self) -> bool:
+        # A loopback server is reached directly — an outbound proxy (Happ, Xray)
+        # would intercept 127.0.0.1 and answer for it, mislabelling a stopped
+        # server as an internet problem.
+        return False
+
     def _auth_headers(self) -> Mapping[str, str]:
         # Only authorize when the user supplied a key; LM Studio needs none.
         return {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}

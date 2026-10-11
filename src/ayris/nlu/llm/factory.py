@@ -41,6 +41,7 @@ branded default stands.
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -55,7 +56,7 @@ from ayris.nlu.llm.keys import resolve_api_key
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     import httpx
 
@@ -95,6 +96,7 @@ CLOUD_PROVIDERS: Final[Mapping[str, str]] = MappingProxyType(
         "deepseek": "ayris.nlu.llm.deepseek_client:DeepSeekLlmClient",
         "gigachat": "ayris.nlu.llm.gigachat_client:GigaChatLlmClient",
         "yandex": "ayris.nlu.llm.yandex_gpt_client:YandexGptLlmClient",
+        "gemini": "ayris.nlu.llm.gemini_client:GeminiLlmClient",
         CUSTOM_PROVIDER: "ayris.nlu.llm.custom_client:CustomOpenAiLlmClient",
     }
 )
@@ -253,8 +255,13 @@ def _create_llamacpp_client(
     from ayris.nlu.llm.llamacpp_client import DEFAULT_N_CTX, LlamaCppLlmClient, LlamaCppOptions
 
     data = dict(extra or {})
+    model_path = _resolve_gguf_path(
+        _as_str(data.get("model_path")),
+        search_dirs=_as_str_seq(data.get("model_search_dirs")),
+        prefer=model,
+    )
     options = LlamaCppOptions(
-        model_path=_as_str(data.get("model_path")),
+        model_path=model_path,
         model=model,
         n_ctx=_as_int(data.get("n_ctx"), DEFAULT_N_CTX),
         n_threads=_as_opt_int(data.get("n_threads")),
@@ -272,6 +279,163 @@ def _create_llamacpp_client(
 def _as_str(value: object) -> str:
     """A config value read as a string, or empty when it is anything else."""
     return value if isinstance(value, str) else ""
+
+
+def _as_str_seq(value: object) -> tuple[str, ...]:
+    """A config value read as a tuple of strings, dropping anything that is not one."""
+    if not isinstance(value, (list | tuple)):
+        return ()
+    return tuple(item for item in value if isinstance(item, str) and item)
+
+
+def _resolve_gguf_path(
+    model_path: str, *, search_dirs: Sequence[str] = (), prefer: str = ""
+) -> str:
+    """The ``.gguf`` to load, falling back to an installed one when the path is bad.
+
+    A stale ``config.toml`` can name a ``.gguf`` that is not there, or carry an
+    empty path after a reset (which a transient defaults-load can also produce) -
+    either way the in-process engine would report «не выбран файл модели» and the
+    assistant would answer with a hint instead of a reply. Rather than fail, this
+    searches, in order: the profile's ``models/llm``, then ``search_dirs`` — the
+    folders the user has actually kept models in, remembered from their past
+    choices. Within a folder a file whose name matches ``prefer`` (the configured
+    model) wins, so the fallback does not grab some other, heavier model that
+    merely sorts first; otherwise the alphabetically first ``.gguf`` is used. The
+    swap is logged. An honest, existing path is returned unchanged; when nothing
+    is installed the original (empty or missing) path is handed back so the client
+    reports its usual reason.
+    """
+    if model_path:
+        try:
+            if Path(model_path).is_file():
+                return model_path
+        except OSError:
+            pass
+    # When the bootstrap handed defaults, `prefer` is the schema's default model
+    # name, not the user's. Also consult the model named in the persisted config
+    # so the self-heal picks their model, not whatever sorts first on disk.
+    wanted = [name for name in (prefer, _persisted_model_name()) if name]
+    for directory in _gguf_search_dirs(search_dirs):
+        picked = _pick_gguf(directory, wanted)
+        if picked:
+            if picked != model_path:
+                _log.warning(
+                    "llamacpp: файл модели %r недоступен, беру установленный %s",
+                    model_path,
+                    Path(picked).name,
+                )
+            return picked
+    return model_path
+
+
+def _persisted_model_name() -> str:
+    """``ai.model`` from ``config.toml`` on disk, or ``""`` on any failure."""
+    try:
+        from ayris.core.config import get_settings
+
+        return str(get_settings().ai.model)
+    except Exception:
+        return ""
+
+
+def _gguf_search_dirs(extra: Sequence[str]) -> list[Path]:
+    """Where to look for a replacement ``.gguf``: the profile dir, then the user's.
+
+    De-duplicated, order preserved, non-directories dropped. The profile comes
+    first so an installed-via-«ИИ» model wins; the remembered folders cover the
+    common case of models kept outside the profile (e.g. ``D:\\ayris-models``).
+    The persisted config is read as a last resort too: a worker spawned by a
+    parent that momentarily held defaults gets empty ``extra`` here, but the file
+    on disk still names the user's real model, so even then the engine recovers
+    instead of reporting «не выбран файл модели».
+    """
+    candidates: list[Path] = []
+    try:
+        from ayris.core.paths import get_paths
+
+        candidates.append(get_paths().llm_models_dir)
+    except OSError:
+        pass
+    for raw in list(extra) + _dirs_from_persisted_config():
+        try:
+            candidates.append(Path(raw))
+        except (OSError, ValueError):
+            continue
+    seen: dict[Path, None] = {}
+    for candidate in candidates:
+        try:
+            if candidate.is_dir():
+                seen.setdefault(candidate, None)
+        except OSError:
+            continue
+    return list(seen)
+
+
+def _dirs_from_persisted_config() -> list[str]:
+    """Model folders read straight from ``config.toml`` on disk, best-effort.
+
+    The safety net under the bootstrap params: those come from the parent's
+    in-memory settings, which a transient defaults-load can empty, but the file
+    the user actually edited still names their model. Returns the parent folder
+    of the current ``ai.model_path`` and of every full path in ``ai.model_history``.
+    Any failure (no file, a mid-write glimpse, a parse error) yields no dirs — the
+    caller still has the profile dir and whatever ``extra`` carried.
+    """
+    try:
+        from ayris.core.config import get_settings
+        from ayris.nlu.llm.local_models import GGUF_SUFFIX
+
+        ai = get_settings().ai
+    except Exception:
+        return []
+    raw_paths: list[str] = []
+    if ai.model_path:
+        raw_paths.append(ai.model_path)
+    for remembered in ai.model_history.values():
+        raw_paths.extend(remembered)
+    dirs: list[str] = []
+    for raw in raw_paths:
+        if GGUF_SUFFIX not in raw.lower():
+            continue  # a display name, not a file path
+        try:
+            parent = str(Path(raw).parent)
+        except (OSError, ValueError):
+            continue
+        if parent and parent != ".":
+            dirs.append(parent)
+    return dirs
+
+
+def _pick_gguf(directory: Path, prefer: Sequence[str]) -> str:
+    """A ``.gguf`` from ``directory``: one matching a ``prefer`` name, else the first.
+
+    Each ``prefer`` name is matched against the file stem case-insensitively, both
+    ways — a config name like ``Vikhr-Qwen-2.5-1.5b-Instruct-Q4_K_M`` is exactly
+    the stem, but a looser name still matches when one contains the other. The
+    names are tried in order (the bootstrap's, then the persisted config's), so
+    the fallback does not grab some other, heavier model that merely sorts first.
+    """
+    from ayris.nlu.llm.local_models import GGUF_SUFFIX
+
+    try:
+        found = sorted(
+            (item for item in directory.iterdir() if item.suffix.lower() == GGUF_SUFFIX),
+            key=lambda item: item.name.casefold(),
+        )
+    except OSError:
+        return ""
+    if not found:
+        return ""
+    for raw in prefer:
+        wanted = raw.strip().casefold()
+        if not wanted:
+            continue
+        for item in found:
+            stem = item.stem.casefold()
+            if stem == wanted or wanted in stem or stem in wanted:
+                return str(item)
+    return str(found[0])
 
 
 def _as_int(value: object, default: int) -> int:

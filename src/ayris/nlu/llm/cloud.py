@@ -292,6 +292,11 @@ class CloudLlmClient(LlmClient):
         verify: bool | ssl.SSLContext = (
             options.verify if options.transport is not None else self._resolve_verify()
         )
+        # An injected transport answers directly, so an environment proxy must
+        # never wrap it; otherwise defer to the provider — a cloud client honours
+        # HTTP(S)_PROXY, a local server forces a direct connection (see
+        # :meth:`_trust_env`).
+        trust_env = options.transport is None and self._trust_env()
         return httpx.Client(
             timeout=httpx.Timeout(
                 connect=options.connect_timeout_sec,
@@ -302,8 +307,23 @@ class CloudLlmClient(LlmClient):
             follow_redirects=True,
             headers={"User-Agent": _USER_AGENT},
             transport=options.transport,
+            trust_env=trust_env,
             verify=verify,
         )
+
+    def _trust_env(self) -> bool:
+        """Whether the HTTP client reads proxy settings from the environment.
+
+        True by default: a cloud provider's traffic leaves the machine, so a
+        corporate or VPN proxy named in ``HTTP(S)_PROXY`` is exactly the route it
+        should take. The local model servers override this to ``False`` — their
+        endpoint is a loopback address, and letting an outbound proxy (Happ, Xray
+        and the like) intercept it makes the proxy *answer* for a server it cannot
+        reach, so a stopped Ollama reads as a 5xx that becomes the misleading
+        «проверьте интернет» sentence instead of a plain refused connection. A
+        server you run is always reached directly, regardless of ``NO_PROXY``.
+        """
+        return True
 
     def _extra_ca_path(self) -> Path | None:
         """A provider-specific CA bundle to trust *in addition* to the system roots.

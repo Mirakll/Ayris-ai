@@ -33,11 +33,12 @@ class SentenceAssembler:
     single thread draining that request's deltas.
     """
 
-    __slots__ = ("_buffer", "_emitted", "_max_chars")
+    __slots__ = ("_buffer", "_emitted", "_max_chars", "_released")
 
     def __init__(self, *, max_chars: int = MAX_CHUNK_CHARS) -> None:
         self._buffer = ""
         self._emitted = 0
+        self._released = 0
         self._max_chars = max_chars
 
     def feed(self, text: str) -> list[str]:
@@ -64,12 +65,13 @@ class SentenceAssembler:
     @property
     def emitted_count(self) -> int:
         """How many sentences have been released so far in this request."""
-        return self._emitted
+        return self._released
 
     def reset(self) -> None:
         """Forget all state, ready for a new request."""
         self._buffer = ""
         self._emitted = 0
+        self._released = 0
 
     def _drain(self, *, final: bool) -> list[str]:
         sentences = split_sentences(self._buffer, max_chars=self._max_chars)
@@ -78,6 +80,36 @@ class SentenceAssembler:
         confirmed = len(sentences) if final else max(0, len(sentences) - 1)
         ready = sentences[self._emitted : confirmed]
         self._emitted = max(self._emitted, confirmed)
+        self._released += len(ready)
         if final:
             self.reset()
+            return ready
+        if confirmed:
+            self._trim(sentences[:confirmed])
         return ready
+
+    def _trim(self, confirmed: list[str]) -> None:
+        """Drop confirmed sentences from the buffer so the next fragment re-splits
+        only the unconfirmed tail.
+
+        Without this the whole, growing answer is re-scanned by
+        :func:`split_sentences` on *every* token — O(n²) over a long reply. The
+        cut is taken only when the confirmed sentences appear verbatim and in
+        order in the buffer: :func:`split_sentences` may merge a short piece into
+        its neighbour, drop a non-speakable one, or clause-split a run-on, and
+        then the raw position is not recoverable — that fragment keeps the full
+        buffer and pays the full scan, which is correct, only not faster.
+        Trimming at a confirmed boundary cannot change how the tail splits (the
+        abbreviation look-back never reaches past a sentence end); ``_emitted`` is
+        the index into the *current* buffer's split and resets with it, while the
+        public :attr:`emitted_count` keeps counting across trims. A differential
+        test pins the emitted sequence identical to the untrimmed assembler.
+        """
+        cut = 0
+        for sentence in confirmed:
+            found = self._buffer.find(sentence, cut)
+            if found < 0:
+                return  # lossy split this fragment — leave the buffer whole
+            cut = found + len(sentence)
+        self._buffer = self._buffer[cut:]
+        self._emitted = 0
