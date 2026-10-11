@@ -38,6 +38,7 @@ __all__ = [
     "is_speakable",
     "normalize_whitespace",
     "split_sentences",
+    "strip_markup",
 ]
 
 #: Characters that may end a sentence.
@@ -148,6 +149,17 @@ _CLAUSE_BREAKS: Final = ",;:—–"
 #: Collapses runs of whitespace, including the newlines an LLM answer arrives with.
 _WHITESPACE: Final = re.compile(r"\s+")
 
+#: Markdown emphasis and code fences a model sprinkles into prose. Piper and
+#: Silero read a bare «*» as «звёздочка» and «`» as «обратная кавычка», so they
+#: are peeled off before anything is pronounced. The surrounding word stays:
+#: «**важно**» becomes «важно», not silence.
+_MARKUP: Final = re.compile(r"[*_`#~]+")
+
+#: Straight and typographic quotes a model wraps terms in. A lone «"» or «'»
+#: around a word becomes «кавычка» in the voice, so they go too; the Russian
+#: «елочки» (« ») are kept, since an engine voices them as a pause, not a word.
+_QUOTES: Final = re.compile(r"[\"'“”„‟‹›]+")
+
 #: The word immediately before a candidate boundary, without its period.
 _TRAILING_WORD: Final = re.compile(r"([^\s.!?…]+)[.!?…]*$")
 
@@ -182,6 +194,21 @@ def normalize_whitespace(text: str) -> str:
     return _WHITESPACE.sub(" ", text).strip()
 
 
+def strip_markup(text: str) -> str:
+    """Drop markdown and straight quotes an engine would read out as words.
+
+    An LLM answer leaks «**», «*», «`», «#» and straight quotes around terms
+    («"лор"»); a synthesizer has no idea they are markup and pronounces each one
+    («звёздочка», «кавычка»), which is exactly what the user hears. Stripping
+    them here - before splitting, so every engine and the cache key see the same
+    cleaned text - keeps the words and removes only the symbols. Whitespace a
+    removed marker leaves behind is collapsed by :func:`normalize_whitespace` in
+    the same pass through :func:`split_sentences`.
+    """
+    without_markup = _MARKUP.sub("", text)
+    return _QUOTES.sub("", without_markup)
+
+
 def split_sentences(text: str, *, max_chars: int = MAX_CHUNK_CHARS) -> list[str]:
     """Split ``text`` into pieces that can each be synthesized on their own.
 
@@ -197,7 +224,7 @@ def split_sentences(text: str, *, max_chars: int = MAX_CHUNK_CHARS) -> list[str]
         sentence in the spoken answer - but a piece that is only punctuation is,
         because :func:`is_speakable` is what decides that «...» is not a phrase.
     """
-    normalized = normalize_whitespace(text)
+    normalized = normalize_whitespace(strip_markup(text))
     if not is_speakable(normalized):
         return []
 

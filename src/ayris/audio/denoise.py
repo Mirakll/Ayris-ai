@@ -541,10 +541,17 @@ class RnnoiseDenoiser(Denoiser):
             self._out.clear()
 
     def _frame(self, chunk: array[int]) -> array[int]:
-        """Run one 480-sample frame through the network."""
+        """Run one 480-sample frame through the network.
+
+        The int16 samples are widened to the float32 RNNoise wants in one C-level
+        pass (``array("f", chunk)``) and the frame buffer is filled from them with
+        a single memory copy, instead of unpacking 480 Python floats through the
+        ctypes varargs constructor — the per-sample generator was pure overhead in
+        the hottest audio loop.
+        """
         import ctypes
 
-        buffer = (ctypes.c_float * RNNOISE_FRAME_SAMPLES)(*(float(value) for value in chunk))
+        buffer = (ctypes.c_float * RNNOISE_FRAME_SAMPLES).from_buffer_copy(array("f", chunk))
         self._lib.rnnoise_process_frame(self._state, buffer, buffer)
         return array("h", (_clip(value) for value in buffer))
 

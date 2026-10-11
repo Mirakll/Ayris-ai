@@ -36,6 +36,7 @@ from ayris.audio.wake_word.base import (
     normalise_phrase,
 )
 from ayris.core.errors import WakeWordError
+from ayris.core.paths import native_path, native_path_problem
 from ayris.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -102,8 +103,19 @@ class VoskKwsEngine(WakeWordEngine):
         if callable(set_log_level):
             set_log_level(-1)
 
+        # Vosk encodes the path as UTF-8 and Kaldi reads it back through the ANSI
+        # code page, so a Cyrillic folder never opens - see native_path.  STT's
+        # vosk_engine guards the same way; the spotter has to as well, or a model
+        # sitting under the repo's own «мистер бит ест рис» path fails to load
+        # with nothing in the error pointing at the real cause.
+        opened = native_path(directory)
+        if opened is None:
+            raise WakeWordError(
+                f"vosk: cannot open a non-ASCII model path {directory}",
+                user_message=native_path_problem(directory, what="модель Vosk для слова активации"),
+            )
         try:
-            self._model = module.Model(str(directory))
+            self._model = module.Model(opened)
         except Exception as exc:
             self._model = None
             raise WakeWordError(

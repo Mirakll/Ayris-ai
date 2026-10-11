@@ -24,12 +24,14 @@ goes in which slot follows from the settings:
   ``credential_ref`` (when that names a provider) so ``cloud_fallback`` can be
   toggled live without a restart — the mode gates whether it is used.
 
-``engine``/``voice``/``output_device`` are ``RestartScope.TTS``: a change to them
-takes effect on restart, so the slots are read once. ``expressiveness`` joins them
-there - it is a load-time engine option (Piper's ``noise_scale``), applied when the
-engine is next built. Speed, pitch, volume, ``sentence_pause`` and ``cloud_fallback``
-are live, so the ``ConfigChanged`` handler pushes them into the running router with
-``set_params``/``set_mode``.
+``engine``/``voice``/``output_device`` are ``RestartScope.TTS``, which restarts
+the TTS *worker*; this router, though, lives in the UI process and is both what
+the settings window previews through and what the pipeline speaks answers with.
+So the ``ConfigChanged`` handler rebuilds the slots in place when the engine,
+voice or expressiveness changes - a user who picks Silero and clicks «Прослушать»
+hears Silero at once, without restarting the app. Speed, pitch, volume,
+``sentence_pause`` and ``cloud_fallback`` are live too, pushed into the running
+router with ``set_params``/``set_mode``.
 
 :func:`set_active_tts_router` / :func:`active_tts_router` are the shared handle,
 the same shape as
@@ -45,6 +47,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from ayris.audio.tts.base import TtsOptions, VoiceSpec, create_engine, engine_class
+from ayris.audio.tts.cache import PhraseCache, default_cache_dir
 from ayris.audio.tts.cloud_base import create_cloud_engine, is_cloud_engine
 from ayris.audio.tts.router import TtsRouter, VoiceParams, mode_from_config
 from ayris.audio.tts.service import connect_player
@@ -76,6 +79,10 @@ _log = get_logger(__name__)
 _DEFAULT_LOCAL_ENGINE: Final = "piper"
 _DEFAULT_LOCAL_VOICE: Final = "ru_RU-irina-medium"
 
+#: Bytes per megabyte, for turning ``voice.tts.cache_size_mb`` into the byte
+#: budget :class:`~ayris.audio.tts.cache.PhraseCache` takes.
+_MB: Final = 1024 * 1024
+
 
 def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Callable[[], None]]:
     """Build the runtime router over ``player`` and return it with a teardown.
@@ -95,6 +102,7 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
     """
     cfg = app.settings.voice.tts
     built_engine = cfg.engine
+    built_slots = _slot_key(cfg)
     params = VoiceParams(
         speed=cfg.speed,
         pitch=cfg.pitch,
@@ -104,6 +112,13 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
     mode = mode_from_config(built_engine, cloud_fallback=cfg.cloud_fallback)
 
     cloud, local = _providers(cfg)
+
+    # The phrase cache turns the handful of confirmations the assistant repeats all
+    # day («Готово», «Не расслышала») into a file read on their second use. It is
+    # keyed by the configured local voice; a cloud primary is left uncached so an
+    # auto-mode fallback never serves a cloud-synthesized phrase amid local speech.
+    cache = PhraseCache(default_cache_dir(), limit_bytes=cfg.cache_size_mb * _MB)
+    default_voice = _default_cache_voice(cfg)
 
     bridge = connect_player(app.bus, player)
     router = TtsRouter(
@@ -115,13 +130,23 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
         bus=app.bus,
         monitor=None,
         on_spoken=None,
+        cache=cache,
+        default_voice=default_voice,
     )
+    # Take the local engine's cold start off the first reply. warm() loads the
+    # primary local voice for the offline-first modes; preload() warms the local
+    # fallback in auto mode. Each is a no-op outside its own mode and best-effort.
+    router.warm()
+    router.preload()
 
     def on_config(_event: ConfigChanged) -> None:
-        # engine/voice are RestartScope.TTS, so the slots stand until restart; only
-        # the live knobs move. The mode is recomputed from the engine that was
-        # actually built, so ticking cloud_fallback flips the fallback direction
-        # without pretending a not-yet-loaded new engine is already in the slot.
+        # Live knobs move on every change. engine/voice/expressiveness decide the
+        # slots: nominally RestartScope.TTS (which restarts the worker), but this
+        # router is also the UI's preview and the pipeline's voice, so the slots
+        # are rebuilt in place when any of them changes - otherwise «Прослушать»
+        # would keep speaking the engine captured at startup. When only the
+        # fallback toggles, the mode is recomputed from the engine actually built.
+        nonlocal built_engine, built_slots
         live = app.settings.voice.tts
         router.set_params(
             VoiceParams(
@@ -131,7 +156,29 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
                 sentence_pause=live.sentence_pause,
             )
         )
-        router.set_mode(mode_from_config(built_engine, cloud_fallback=live.cloud_fallback))
+        # The cache budget is a live knob: a user who drags it to 0 means "stop
+        # caching now", and shrinking it trims the directory on the spot.
+        cache.set_limit(live.cache_size_mb * _MB)
+        new_slots = _slot_key(live)
+        if new_slots != built_slots:
+            built_slots = new_slots
+            built_engine = live.engine
+            new_cloud, new_local = _providers(live)
+            router.set_providers(
+                cloud=new_cloud,
+                local=new_local,
+                mode=mode_from_config(live.engine, cloud_fallback=live.cloud_fallback),
+                default_voice=_default_cache_voice(live),
+            )
+            # A live switch to a local engine should warm it too, so the first
+            # answer after the change does not eat the cold load.
+            router.warm()
+            router.preload()
+            _log.info(
+                "маршрутизатор TTS пересобран вживую: движок %s, голос %s", live.engine, live.voice
+            )
+        else:
+            router.set_mode(mode_from_config(built_engine, cloud_fallback=live.cloud_fallback))
 
     unsub_config = app.bus.subscribe(ConfigChanged, on_config, weak=False)
 
@@ -147,6 +194,39 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
         cfg.credential_ref if is_cloud_engine(cfg.credential_ref) else "нет",
     )
     return router, close
+
+
+def _default_cache_voice(cfg: TtsConfig) -> VoiceSpec | None:
+    """The voice the phrase cache keys by, or ``None`` to leave this engine uncached.
+
+    Only a local primary is cached. A cloud engine runs in auto mode, where the
+    local voice is the fallback: a confirmation synthesized in the cloud and then
+    served from the cache after the network dropped would be an audible voice swap
+    in the middle of locally-spoken answers. Offline and local-first both speak in
+    the configured local voice, which does not change under the user mid-session,
+    so a stored «Готово» always matches what the next one would sound like.
+    """
+    if is_cloud_engine(cfg.engine):
+        return None
+    return _resolve_local_voice(cfg.engine, cfg.voice)
+
+
+def _slot_key(cfg: TtsConfig) -> tuple[str, str, float, str, str, str]:
+    """The fields that decide how the slots are built.
+
+    When any of these changes the providers must be rebuilt; speed, pitch, volume,
+    ``sentence_pause`` and ``cloud_fallback`` are *not* here because they are pushed
+    into the running router without touching the engines. ``expressiveness`` is a
+    load-time option (Piper's ``noise_scale``), so it belongs with the slots.
+    """
+    return (
+        cfg.engine,
+        cfg.voice,
+        cfg.expressiveness,
+        cfg.credential_ref,
+        cfg.endpoint,
+        cfg.model,
+    )
 
 
 def _providers(cfg: TtsConfig) -> tuple[EngineProvider | None, EngineProvider | None]:

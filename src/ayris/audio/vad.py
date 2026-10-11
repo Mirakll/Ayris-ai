@@ -39,7 +39,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
-from ayris.audio.capture import MIN_DBFS, TARGET_SAMPLE_RATE, pcm_level
+from ayris.audio.capture import MIN_DBFS, TARGET_SAMPLE_RATE, rms_dbfs
 from ayris.audio.ring_buffer import SAMPLE_WIDTH
 from ayris.core.errors import AudioError
 
@@ -353,7 +353,7 @@ class EnergyVad(Vad):
     def is_speech(self, frame: bytes) -> bool:
         """Classify one frame and update the noise floor."""
         self._check_frame(frame)
-        level = pcm_level(frame).rms_db
+        level = rms_dbfs(frame)
         threshold = self._floor_db + self._settings.margin_db
         self._open = level >= (threshold - _HYSTERESIS_DB if self._open else threshold)
         if not self._open:
@@ -533,7 +533,7 @@ class VadStream:
     def _classify(self, frame: bytes) -> VadFrame:
         """Run one frame through the engine and the level gate."""
         voiced = self._vad.is_speech(frame)
-        rms_db = pcm_level(frame).rms_db
+        rms_db = rms_dbfs(frame)
         speech = voiced and (not self._vad.needs_level_gate or rms_db >= self._gate_db)
         index = self._index
         self._index += 1

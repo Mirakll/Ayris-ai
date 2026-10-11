@@ -57,6 +57,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final
 
 from ayris.audio.stt.base import (
     DEFAULT_LANGUAGE,
+    MIN_SPEECH_MS,
+    SILENCE_DBFS,
     SttEngine,
     TranscriptResult,
     TranscriptSegment,
@@ -116,6 +118,25 @@ _FRAME_MS: Final = 100.0
 #: ``min_speech_ms`` filter normally keeps such buffers away, but it is a setting
 #: and can be turned down to zero.
 _MIN_AUDIO_MS: Final = 50.0
+
+
+def _rms_dbfs(waveform: Any, *, numpy: Any) -> float:
+    """Level of a float32 waveform (-1.0..1.0) in dBFS.
+
+    Equal to :meth:`~ayris.audio.stt.base.AudioBuffer.rms_dbfs` for the same PCM
+    (``20*log10(sqrt(mean(samples^2))/32768) == 10*log10(mean(waveform^2))``), but
+    computed on the waveform the engine already built for recognition instead of
+    walking the PCM a second time in a pure-Python loop. The mean is taken in
+    float64 so the value is bit-stable against the reference to several places and
+    the SILENCE_DBFS decision never flips.
+    """
+    if waveform.size == 0:
+        return -math.inf
+    mean_sq = float(numpy.square(waveform.astype(numpy.float64)).mean())
+    if mean_sq <= 0.0:
+        return -math.inf
+    return 10.0 * math.log10(mean_sq)
+
 
 #: How long one output character covers, for the end of the last word in a
 #: segment: the encoder strides 40 ms, so a timestamp is the start of a 40 ms cell.
@@ -228,12 +249,19 @@ class GigaAmEngine(SttEngine):
         """
         options = self._require_loaded()
         prepared = self._prepare(audio)
-        floor = max(float(options.min_speech_ms), _MIN_AUDIO_MS)
-        if prepared.duration_ms < floor or prepared.is_silent():
+        # Length gate first, before any array work: both the external floor and
+        # the built-in MIN_SPEECH_MS apply, so keep whichever is stricter.
+        floor = max(float(options.min_speech_ms), _MIN_AUDIO_MS, float(MIN_SPEECH_MS))
+        if prepared.duration_ms < floor:
             return self._empty(prepared.duration_ms)
 
+        # Build the waveform once (recognition needs it anyway) and run the silence
+        # check on it, instead of AudioBuffer.is_silent() walking the same PCM again
+        # in a pure-Python RMS loop plus a full array copy.
         waveform = self._numpy.frombuffer(prepared.pcm, dtype="<i2")
         waveform = waveform.astype(self._numpy.float32) / 32768.0
+        if _rms_dbfs(waveform, numpy=self._numpy) < SILENCE_DBFS:
+            return self._empty(prepared.duration_ms)
         rate = prepared.sample_rate
 
         started = perf_counter()

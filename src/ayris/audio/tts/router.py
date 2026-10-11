@@ -54,6 +54,7 @@ from ayris.audio.tts.base import (
     clamp_speed,
     concat_chunks,
 )
+from ayris.audio.tts.cache import MAX_TEXT_CHARS
 from ayris.audio.tts.cloud_base import TtsAuthError, TtsQuotaError, is_cloud_engine
 from ayris.audio.tts.player import PlaybackReason, SpeechRequest
 from ayris.audio.tts.sentence_split import is_speakable, split_sentences
@@ -67,6 +68,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from ayris.audio.tts.base import TtsEngine, VoiceSpec
+    from ayris.audio.tts.cache import PhraseCache
     from ayris.audio.tts.player import TtsPlayer
     from ayris.core.connectivity import ConnectivityMonitor
     from ayris.core.events import EventBus, Unsubscribe
@@ -465,6 +467,15 @@ class TtsRouter:
             Without a bus it observes the player directly instead.
         on_spoken: Called with every finished phrase except previews. This is the
             history hook: whoever stores what the assistant said passes it here.
+        cache: Disk cache of short repeated phrases. ``None`` disables caching
+            entirely; otherwise «Готово» and «Не расслышала» are served from a
+            file on the second use instead of being synthesized again. Only
+            single-sentence phrases within :data:`~ayris.audio.tts.cache.MAX_TEXT_CHARS`
+            are cached, keyed by voice/speed/pitch (:mod:`ayris.audio.tts.cache`).
+        default_voice: The configured voice, used as the cache key when a caller
+            of :meth:`say` does not name one of its own. ``None`` with a caller
+            that also names no voice means the phrase is spoken but not cached -
+            there is nothing stable to key it by.
 
     Thread-safe. ``say`` is called from the pipeline, the settings window calls
     ``preview`` and ``set_params``, and the synthesis itself runs on the player's
@@ -477,7 +488,9 @@ class TtsRouter:
         # _on_online_status raises and the router cannot be built with a bus.
         "__weakref__",
         "_bus",
+        "_cache",
         "_cloud",
+        "_default_voice",
         "_history",
         "_local",
         "_lock",
@@ -503,6 +516,8 @@ class TtsRouter:
         monitor: ConnectivityMonitor | None = None,
         bus: EventBus | None = None,
         on_spoken: Callable[[SpokenPhrase], None] | None = None,
+        cache: PhraseCache | None = None,
+        default_voice: VoiceSpec | None = None,
     ) -> None:
         self._player = player
         self._mode = mode
@@ -512,6 +527,8 @@ class TtsRouter:
         self._monitor = monitor
         self._bus = bus
         self._on_spoken = on_spoken
+        self._cache = cache
+        self._default_voice = default_voice
         self._lock = threading.RLock()
         self._pending: dict[str, SpeechHandle] = {}
         self._history: deque[SpokenPhrase] = deque(maxlen=_HISTORY_LIMIT)
@@ -569,6 +586,50 @@ class TtsRouter:
             self._params = params
         self._player.set_volume(params.gain)
 
+    def set_providers(
+        self,
+        *,
+        cloud: EngineProvider | None,
+        local: EngineProvider | None,
+        mode: TtsMode,
+        default_voice: VoiceSpec | None = None,
+    ) -> None:
+        """Swap the engine providers after a live engine or voice change.
+
+        ``engine``/``voice`` are nominally ``RestartScope.TTS``, but that scope
+        restarts the TTS *worker*; this router lives in the UI process, and it is
+        both what the settings window previews through and what the pipeline
+        speaks answers with. A user who picks a new voice and clicks «Прослушать»
+        has to hear *that* voice without restarting the whole app, so the slots
+        are rebuilt in place here instead of standing until a restart.
+
+        The old engines are unloaded so a switch away from a heavy voice frees its
+        memory; the new ones load lazily on the next phrase, exactly as at build
+        time. The fallback state is cleared - the user has just chosen an engine,
+        so the next phrase should try it rather than honour a decision made under
+        the previous one. ``default_voice`` is the newly configured voice the
+        phrase cache keys by, updated here for the same reason the slots are; the
+        cache itself is emptied, since the change may have altered the sound in a
+        way the key does not capture.
+        """
+        with self._lock:
+            old_cloud, old_local = self._cloud, self._local
+            self._cloud = _Slot(cloud, cloud=True)
+            self._local = _Slot(local, cloud=False)
+            self._mode = mode
+            self._use_secondary = False
+            self._preload = None
+            self._default_voice = default_voice
+        old_cloud.close()
+        old_local.close()
+        # The slots are rebuilt only when something that shapes the sound changed -
+        # engine, voice or expressiveness - and none of expressiveness is in the
+        # cache key, so the safe move is to drop the lot rather than reason about
+        # which stored phrase is still valid. Rebuilding it is cheap: it fills back
+        # up from the next few confirmations.
+        if self._cache is not None:
+            self._cache.invalidate()
+
     def preload(self) -> None:
         """Warm the fallback engine in the background so a switch is instant.
 
@@ -586,6 +647,30 @@ class TtsRouter:
                 return
             self._preload = threading.Thread(
                 target=self._preload_local, name="ayris-tts-preload", daemon=True
+            )
+            self._preload.start()
+
+    def warm(self) -> None:
+        """Warm the *primary* local engine for the offline-first modes at start.
+
+        The mirror of :meth:`preload` for the other side: when the local voice is
+        what speaks the first answer (:attr:`TtsMode.OFFLINE` /
+        :attr:`TtsMode.LOCAL_FIRST`), loading it eagerly in the background takes the
+        engine's cold start — a few hundred ms for Piper, seconds for Silero — off
+        the first reply's critical path. In auto mode the cloud speaks first, so
+        this is a no-op there and :meth:`preload` warms the local *fallback* instead.
+        Idempotent and best-effort: a failed warm just means the first phrase pays
+        the load it would have paid anyway.
+        """
+        if self._mode not in (TtsMode.OFFLINE, TtsMode.LOCAL_FIRST) or not self._local.configured:
+            return
+        with self._lock:
+            if self._local.ready:
+                return
+            if self._preload is not None and self._preload.is_alive():
+                return
+            self._preload = threading.Thread(
+                target=self._preload_local, name="ayris-tts-warm", daemon=True
             )
             self._preload.start()
 
@@ -727,12 +812,54 @@ class TtsRouter:
             engine="",
             priority=priority,
         )
-        request.chunks = self._speech(request, handle, params)
+        cache = self._cache
+        cache_voice = None if preview else self._cache_voice(text, params)
+        cached = (
+            cache.get(text, cache_voice, params.speed, params.pitch)
+            if cache is not None and cache_voice is not None
+            else None
+        )
+        if cached is not None and cache_voice is not None:
+            # The common case for a confirmation on its second use: hand the player
+            # the stored audio and skip synthesis entirely. The engine name is set
+            # so TtsStarted and the history still read as the voice that produced it.
+            request.engine = cache_voice.engine
+            request.chunks = (cached,)
+            handle._note_engine(cache_voice.engine)
+        elif cache_voice is not None:
+            request.chunks = self._speech_caching(request, handle, params, cache_voice)
+        else:
+            request.chunks = self._speech(request, handle, params)
         with self._lock:
             self._pending[request_id] = handle
         self._player.set_volume(params.gain)
         self._player.speak(request)
         return handle
+
+    def _cache_voice(self, text: str, params: VoiceParams) -> VoiceSpec | None:
+        """The voice a phrase would be cached under, or ``None`` to not cache it.
+
+        A phrase is cacheable only when the cache is on, a voice is known to key it
+        by (the one the caller named, or the configured ``default_voice``), and the
+        text is one short sentence. The single-sentence rule keeps ``sentence_pause``
+        - which is *not* part of the key - from ever baking a stale gap into a stored
+        multi-sentence answer: a lone sentence never earns a pause, so what is stored
+        is what any pause setting would produce. The length cap mirrors the cache's
+        own, so a long answer is spoken straight through instead of being collected
+        in memory only for :meth:`~ayris.audio.tts.cache.PhraseCache.put` to reject.
+        """
+        cache = self._cache
+        if cache is None or not cache.enabled:
+            return None
+        voice = params.voice or self._default_voice
+        if voice is None:
+            return None
+        stripped = text.strip()
+        if not stripped or len(stripped) > MAX_TEXT_CHARS:
+            return None
+        if len(split_sentences(stripped)) > 1:
+            return None
+        return voice
 
     def _route(self) -> tuple[_Slot | None, _Slot | None]:
         """The engine to try and the one to fall back to, in that order.
@@ -821,6 +948,40 @@ class TtsRouter:
                     first_of_sentence = False
                     audible_before = True
                 yield chunk
+
+    def _speech_caching(
+        self,
+        request: SpeechRequest,
+        handle: SpeechHandle,
+        params: VoiceParams,
+        voice: VoiceSpec,
+    ) -> Iterator[AudioChunk]:
+        """:meth:`_speech`, and store the result when the phrase runs to the end.
+
+        Wraps the ordinary synthesis stream and keeps the non-empty chunks it
+        yields. When the generator is exhausted cleanly - the whole phrase was
+        spoken - the joined audio is written to the cache so the next identical
+        «Готово» is a file read. A cancel closes the generator (``GeneratorExit``)
+        and a synthesis failure raises through it, and neither reaches the store,
+        so only a phrase actually heard in full is cached. It is also only stored
+        when the engine that spoke matches ``voice``: a mid-phrase fallback to the
+        cloud must not be filed under the local voice's key, where it would be
+        served back the next time the network is up.
+        """
+        collected: list[AudioChunk] = []
+        for chunk in self._speech(request, handle, params):
+            if not chunk.empty:
+                collected.append(chunk)
+            yield chunk
+        if not collected or request.engine != voice.engine:
+            return
+        cache = self._cache
+        if cache is None:
+            return
+        try:
+            cache.put(request.text, voice, params.speed, params.pitch, concat_chunks(collected))
+        except TtsError as exc:
+            _log.debug("tts: фразу не сложить для кэша: %s", exc.technical)
 
     def _sentence(
         self,

@@ -514,7 +514,13 @@ def _resolve_model_path(voice: VoiceSpec) -> Path:
     """
     if voice.path:
         return Path(voice.path)
-    return get_paths().tts_models_dir / f"{voice.voice_id}{_MODEL_SUFFIX}"
+    # The id is normally a stem, but a voice added through «Своя модель» keeps its
+    # file name, so it may already carry «.onnx». Appending unconditionally gave
+    # «voice.onnx.onnx», which no file matches - mirror find_voice_files and only
+    # add the suffix when it is missing.
+    stem = voice.voice_id
+    name = stem if stem.endswith(_MODEL_SUFFIX) else f"{stem}{_MODEL_SUFFIX}"
+    return get_paths().tts_models_dir / name
 
 
 def _read_config(path: Path) -> dict[str, Any] | None:

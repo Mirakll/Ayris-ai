@@ -40,7 +40,7 @@ from typing import Any, ClassVar, Final
 from ayris.audio.capture import Resampler
 from ayris.audio.tts.base import SAMPLE_WIDTH, AudioChunk, TtsEngine, TtsOptions, VoiceSpec
 from ayris.core.errors import TtsError
-from ayris.core.paths import get_paths
+from ayris.core.paths import get_paths, native_path, native_path_problem
 
 __all__ = [
     "DEFAULT_MODEL_FILE",
@@ -175,9 +175,19 @@ class SileroTtsEngine(TtsEngine):
 
         torch = self._import()
         self.unload()
+        # torch.package hands the path to a C++ fopen that reads it back through
+        # the ANSI code page, so a Cyrillic profile folder (C:\Users\<имя>\…)
+        # never opens - resolve to an ASCII 8.3 spelling first, like Vosk and
+        # Piper do (see native_path).
+        opened = native_path(model_path)
+        if opened is None:
+            raise TtsError(
+                f"silero: cannot open a non-ASCII model path {model_path}",
+                user_message=native_path_problem(model_path, what="модель Silero"),
+            )
         try:
             torch.set_num_threads(threads)
-            model = torch.package.PackageImporter(str(model_path)).load_pickle(
+            model = torch.package.PackageImporter(opened).load_pickle(
                 "tts_models", "model"
             )
             model.to(torch.device("cpu"))
