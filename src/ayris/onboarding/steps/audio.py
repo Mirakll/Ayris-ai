@@ -48,14 +48,25 @@ class AudioProbe(Protocol):
     def can_calibrate(self) -> bool:
         """Доступна ли калибровка (нужен живой источник звука)."""
 
-    def calibrate(self, *, base_gain: float) -> CalibrationReport:
-        """Снять шум и фразу, вернуть отчёт. Блокирующая — звать в потоке."""
+    def calibrate(
+        self,
+        *,
+        base_gain: float,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> CalibrationReport:
+        """Снять шум и фразу, вернуть отчёт. Блокирующая — звать в потоке.
+
+        ``on_phase`` дёргается перед каждым замером (``"silence"``, затем
+        ``"phrase"``) — шаг превращает это в живую подсказку. Колбэк приходит из
+        рабочего потока, звать его в UI-поток должен сам шаг.
+        """
 
 
 class _AudioSignals(QObject):
-    """Переносит уровень микрофона с потока воркера на поток GUI."""
+    """Переносит уровень микрофона и фазу калибровки на поток GUI."""
 
     level = Signal(float)
+    phase = Signal(str)
 
 
 class AudioStep(WizardStep):
@@ -77,6 +88,9 @@ class AudioStep(WizardStep):
         self._probe = probe
         self._bus = bus
         self._unsub: Callable[[], None] | None = None
+        #: Видели ли живой уровень с микрофона на этом показе шага. Кнопка
+        #: калибровки честно ждёт реального звука, а не только готовности воркера.
+        self._capture_live = False
 
         layout = QVBoxLayout(self)
         layout.setSpacing(theme.metric("spacing_lg"))
@@ -132,6 +146,7 @@ class AudioStep(WizardStep):
 
         self._signals = _AudioSignals(self)
         self._signals.level.connect(self._on_level)
+        self._signals.phase.connect(self._on_phase_changed)
         self._runner = AsyncRunner(self)
         self._runner.finished.connect(self._on_calibrated)
         self._runner.failed.connect(self._on_calibration_failed)
@@ -165,22 +180,31 @@ class AudioStep(WizardStep):
             return []
 
     def _sync_calibrate_enabled(self) -> None:
-        can = self._probe is not None and self._probe.can_calibrate()
         has_mic = self._probe is not None
-        self._calibrate_button.setEnabled(can)
+        worker_ready = self._probe is not None and self._probe.can_calibrate()
+        # Калибровка доступна, только когда звук реально идёт: воркер поднят и мы
+        # уже видели живой уровень. Так кнопка и полоса уровня оживают вместе.
+        live = worker_ready and self._capture_live
+        self._calibrate_button.setEnabled(live)
         if not has_mic:
             self._device_notice.setText(
                 "Микрофон не найден. Можно продолжить без него и настроить позже "
                 "на вкладке «Голос»."
             )
-        elif not can:
+        elif not worker_ready:
             self._device_notice.setText("Калибровка станет доступна после запуска захвата звука.")
+        elif not live:
+            self._device_notice.setText("Ждём звук с микрофона…")
         else:
             self._device_notice.setText("")
 
     # -- уровень -----------------------------------------------------------
 
     def _on_level(self, rms: float) -> None:
+        if not self._capture_live:
+            # Первый живой отсчёт: захват пошёл — оживляем кнопку калибровки.
+            self._capture_live = True
+            self._sync_calibrate_enabled()
         if self.isVisible():
             self._meter.set_level(rms)
 
@@ -198,14 +222,21 @@ class AudioStep(WizardStep):
         )
         probe = self._probe
         base_gain = self._config.settings.voice.audio_input.gain
+        emit_phase = self._signals.phase.emit
 
         def work() -> CalibrationReport:
-            return probe.calibrate(base_gain=base_gain)
+            return probe.calibrate(base_gain=base_gain, on_phase=emit_phase)
 
         self._runner.run(work)
 
+    def _on_phase_changed(self, stage: str) -> None:
+        if stage == "silence":
+            self._calibrate_status.setText("Замеряю тишину — помолчите 3 секунды…")
+        elif stage == "phrase":
+            self._calibrate_status.setText("Говорите: «айрис открой браузер»")
+
     def _on_calibrated(self, result: object) -> None:
-        self._calibrate_button.setEnabled(True)
+        self._sync_calibrate_enabled()
         from ayris.audio.calibration import CalibrationReport
 
         if not isinstance(result, CalibrationReport):
@@ -229,7 +260,7 @@ class AudioStep(WizardStep):
         self._meter.set_threshold(rec.vad_threshold)
 
     def _on_calibration_failed(self, message: str) -> None:
-        self._calibrate_button.setEnabled(True)
+        self._sync_calibrate_enabled()
         self._calibrate_status.setText(f"Калибровка не удалась: {message}")
 
     # -- контракт шага -----------------------------------------------------
@@ -241,6 +272,7 @@ class AudioStep(WizardStep):
             self._unsub = self._bus.subscribe(AudioLevelChanged, self._relay_level)
 
     def deactivate(self) -> None:
+        self._capture_live = False
         self._drop_subscription()
 
     def apply(self) -> None:
