@@ -68,6 +68,10 @@ __all__ = [
     "ActionFinished",
     "ActionStarted",
     "ActiveModelChanged",
+    "AgentStepFinished",
+    "AgentStepStarted",
+    "AgentTurnFinished",
+    "AssistantReplied",
     "AudioLevelChanged",
     "CancelRequested",
     "CommandReloaded",
@@ -413,6 +417,29 @@ class DebugFinished(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class AssistantReplied(Event):
+    """Ayris has an answer, published the moment the words exist.
+
+    Deliberately independent of speech. The window used to print answers off
+    :class:`TtsStarted`, so a voice that failed to load silenced the chat too and
+    a pass that had honestly run looked like it had been ignored; failures were
+    worse still, because they were only ever spoken. This goes out from the
+    pipeline whether or not anything will be said out loud, and before synthesis
+    is attempted — a consumer that shows text never waits on audio.
+
+    ``failed`` separates «что-то пошло не так» from a real answer, so the chat
+    can colour it as an error; ``spoken`` says whether this text is also on its
+    way to the speakers, which lets a consumer skip the :class:`TtsStarted` echo
+    of the same phrase.
+    """
+
+    text: str
+    failed: bool = False
+    spoken: bool = True
+    request_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class TtsStarted(Event):
     """Sound began coming out of the speakers.
 
@@ -496,6 +523,42 @@ class LlmUsageReported(Event):
     def total_tokens(self) -> int:
         """Prompt plus completion, the figure shown next to the model name."""
         return self.prompt_tokens + self.completion_tokens
+
+
+@dataclass(frozen=True, slots=True)
+class AgentStepStarted(Event):
+    """Агент начал шаг — вызов инструмента. ``args_preview`` уже замаскирован.
+
+    Публикующая сторона пропускает аргументы через ``mask_params`` — тот же
+    контракт, что у :class:`ActionStarted`: шина зеркалится в лог DevTools, где
+    секрет иначе читался бы с экрана.
+    """
+
+    step: int
+    tool: str
+    args_preview: JsonObject = field(default_factory=dict)
+    request_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentStepFinished(Event):
+    """Шаг агента завершился: удачно или нет, с короткой строкой результата."""
+
+    step: int
+    tool: str
+    ok: bool = True
+    result_preview: str = ""
+    request_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class AgentTurnFinished(Event):
+    """Ход агента закончен: сколько шагов пройдено и каким ответом он завершился."""
+
+    steps: int = 0
+    answer: str = ""
+    stop_reason: str = ""
+    request_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)

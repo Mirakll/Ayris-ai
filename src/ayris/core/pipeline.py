@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import threading
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from time import perf_counter
@@ -57,10 +57,15 @@ from ayris.core.events import (
     ActionFailed,
     ActionFinished,
     ActionStarted,
+    AgentStepFinished,
+    AgentStepStarted,
+    AgentTurnFinished,
+    AssistantReplied,
     CancelRequested,
     EventBus,
     IntentMatched,
     SpeechEnded,
+    SpeechStarted,
     TranscriptReady,
     WakeWordDetected,
 )
@@ -85,11 +90,15 @@ from ayris.nlu.followup import (
     publish_cancel,
     resolve_followup,
 )
+from ayris.nlu.gibberish import looks_like_gibberish
+from ayris.nlu.llm.agent import AgentStep, run_agent
 from ayris.nlu.llm.base import LlmClient, LlmMessage, LlmResponse, LlmTool, NullLlmClient
+from ayris.nlu.llm.factory import is_cloud_provider
 from ayris.nlu.llm.json_nlu import NluDecision, interpret, resolve_command
 from ayris.nlu.llm.memory import DialogMemory, is_reset
 from ayris.nlu.llm.prompts import build_chat_prompt, build_nlu_prompt
 from ayris.nlu.llm.tools import (
+    ActionReply,
     CommandCard,
     RegistryGateway,
     command_tools,
@@ -168,6 +177,17 @@ TIMEOUT_MESSAGE: Final = "Не успела. Попробуй ещё раз."
 #: explicit activation, see :meth:`Pipeline._on_timeout`.
 NOTHING_SAID_MESSAGE: Final = "Ничего не услышала."
 
+#: Short, light replies to an obvious keyboard mash (:func:`looks_like_gibberish`)
+#: — said instead of spending a model call on noise. Rotated so a run of mashes
+#: does not repeat one line like a stuck record. Deliberately a question or a
+#: shrug, never a lecture: the point is to not take «фывп» seriously.
+GIBBERISH_QUIPS: Final[tuple[str, ...]] = (
+    "Хм, не поняла.",
+    "Это что было?",
+    "Не разобрала, повтори?",
+    "Что-что?",
+)
+
 #: Value of :attr:`ayris.core.pipeline_trace.PipelineTrace.source` for the two
 #: activations that are not a wake phrase.
 SOURCE_PTT: Final = "ptt"
@@ -175,6 +195,11 @@ SOURCE_TEXT: Final = "text"
 
 #: Fallback ``source`` when a wake word arrived without a phrase attached.
 SOURCE_WAKE: Final = "wake"
+
+#: ``source`` for a session re-armed after an answer so the conversation can
+#: continue without the wake word being said again. Gated on
+#: ``voice.wake.continue_listening``; its listening window times out silently.
+SOURCE_FOLLOWUP: Final = "followup"
 
 #: How many finished traces DevTools can look back over. A trace is a few hundred
 #: bytes and the tab shows a table, not a log.
@@ -404,6 +429,11 @@ class _Session:
     #: выполнять действие и не рассылать ``IntentMatched``, иначе диспетчер
     #: триггеров запустил бы команду по событию.
     dry_run: bool = False
+    #: Сколько раз окно прослушивания было переоткрыто после ложного онсета
+    #: (хвост слова активации или шум дали сегмент короче ``min_speech_ms``).
+    #: Ограничено :data:`_MAX_FALSE_ONSET_REARMS`, чтобы постоянный шум не крутил
+    #: сессию без конца, а истёк по таймауту окна.
+    false_onset_rearms: int = 0
 
     def mark_cancelled(self, reason: str) -> SpeechHandleLike | None:
         """Flag the session and hand back the speech to stop, if any."""
@@ -514,9 +544,11 @@ class Pipeline:
         "_catalog",
         "_clock",
         "_context",
+        "_continue_listening",
         "_echo_guard",
         "_fallback_chat",
         "_gateway",
+        "_gibberish_turn",
         "_history",
         "_llm",
         "_llm_understanding",
@@ -526,6 +558,7 @@ class Pipeline:
         "_mode",
         "_phrase_source",
         "_pipeline_log",
+        "_prewarm",
         "_prompt_override_dir",
         "_prompt_resources_dir",
         "_record_transcript",
@@ -565,6 +598,7 @@ class Pipeline:
         memory: DialogMemory | None = None,
         prompt_resources_dir: Path | None = None,
         prompt_override_dir: Path | None = None,
+        prewarm: Callable[[NluMode], None] | None = None,
     ) -> None:
         self._bus = bus
         self._state = state
@@ -591,11 +625,18 @@ class Pipeline:
         self._echo_guard = False
         self._llm_understanding = False
         self._fallback_chat = False
+        # Keep the microphone open after an answer so the user can carry on the
+        # conversation without the wake word. Off until settings say otherwise,
+        # so a pipeline built for a test (settings=None) keeps the one-shot
+        # behaviour its stage assertions were written against.
+        self._continue_listening = False
+        self._gibberish_turn = 0
         self._catalog = catalog
         self._gateway = gateway
         self._memory = memory
         self._prompt_resources_dir = prompt_resources_dir
         self._prompt_override_dir = prompt_override_dir
+        self._prewarm = prewarm
         if settings is not None:
             self._read_settings(settings)
         self._states = PipelineStateMachine(
@@ -631,6 +672,7 @@ class Pipeline:
         # coming back through the speakers and is dropped; a hotkey or a typed
         # command ignores it, since neither can be an echo.
         self._echo_guard = not settings.voice.tts.interrupt_on_speech
+        self._continue_listening = settings.voice.wake.continue_listening
 
     # ------------------------------------------------------------------
     # wiring
@@ -647,6 +689,7 @@ class Pipeline:
             return
         self._subscriptions = [
             self._bus.subscribe(WakeWordDetected, self._on_wake_word, weak=False),
+            self._bus.subscribe(SpeechStarted, self._on_speech_started, weak=False),
             self._bus.subscribe(SpeechEnded, self._on_speech_ended, weak=False),
             self._bus.subscribe(CancelRequested, self._on_cancel_requested, weak=False),
         ]
@@ -751,6 +794,10 @@ class Pipeline:
             self._states.enter(PipelineState.LISTENING, session_id=session.session_id)
             self._sync_assistant_state(PipelineState.LISTENING)
         _log.info("сессия %s открыта (%s)", session.session_id, session.trace.source)
+        # The phrase is coming; warm the recogniser now so its cold model load
+        # overlaps the seconds the user spends speaking rather than the
+        # transcribe step that follows.
+        self._warm_stt_async()
         return session.session_id
 
     def submit_audio(self, audio: AudioBuffer | None) -> str:
@@ -776,8 +823,15 @@ class Pipeline:
                 self._states.enter(PipelineState.TRANSCRIBING, session_id=session.session_id)
                 self._sync_assistant_state(PipelineState.TRANSCRIBING)
         if message:
-            self._speak_detached(message)
+            self._speak_detached(message, request_id=session.session_id)
             return ""
+        # The phrase is now being transcribed on the session thread. While the STT
+        # worker is busy, warm the voice (and the model, in a mode that will ask
+        # it) in parallel, so the first word of the answer does not also pay the
+        # engine's cold start — the two cold loads overlap the transcription
+        # instead of running after it. Best-effort: a slow or failed warm must
+        # never hold up or break the answer path.
+        self._prewarm_async(session.mode)
         self._runner(lambda: self._run_detached(session))
         return session.session_id
 
@@ -822,6 +876,59 @@ class Pipeline:
         with self._lock:
             return self._cancel_locked(reason=reason or CANCEL_REASON, publish=False)
 
+    def _prewarm_async(self, mode: NluMode) -> None:
+        """Warm the answer path off-thread while the phrase is still transcribing.
+
+        The composition root supplies the ``prewarm`` hook (see
+        :func:`~ayris.core.pipeline_app.install_pipeline`): it loads the TTS voice
+        and, for a mode that may ask the model, starts the LLM worker. Both are
+        cold-start costs that otherwise land *after* recognition, in series with
+        it; firing them here runs them during STT instead. The hook is run on a
+        daemon thread and every failure is swallowed — a prewarm that cannot keep
+        up is a missed optimisation, not a broken turn.
+        """
+        prewarm = self._prewarm
+        if prewarm is None:
+            return
+
+        def run() -> None:
+            try:
+                prewarm(mode)
+            except Exception:
+                _log.debug("прогрев перед ответом не удался", exc_info=True)
+
+        threading.Thread(target=run, name="ayris-prewarm", daemon=True).start()
+
+    def _warm_stt_async(self) -> None:
+        """Start the STT model loading the instant the assistant is activated.
+
+        The recognition model's cold load (0.3-1.0 s on a warm disk, more after
+        an idle unload emptied the slot) otherwise lands at TRANSCRIBING, in
+        series after the phrase. Firing it here — at the wake word or Push-to-Talk
+        — overlaps it with the seconds the user spends speaking, so the first
+        command after a launch or an idle unload does not wait for it. Only an
+        offline-capable mode warms a local model: online-only STT needs none.
+        Best-effort on a daemon thread; a source without ``warm`` (the text-only
+        test pipeline) is a no-op.
+        """
+        stt = self._stt
+        if stt is None:
+            return
+        warm = getattr(stt, "warm", None)
+        if not callable(warm):
+            return
+        settings = self._settings
+        if settings is not None and settings.voice.stt.mode == "online":
+            return
+
+        def run() -> None:
+            try:
+                warm()
+            except Exception:
+                _log.debug("прогрев STT на активации не удался", exc_info=True)
+
+        threading.Thread(target=run, name="ayris-stt-warm", daemon=True).start()
+
     # ------------------------------------------------------------------
     # event handlers
     # ------------------------------------------------------------------
@@ -830,14 +937,42 @@ class Pipeline:
         source = SOURCE_PTT if event.phrase == _PTT_PHRASE else event.phrase
         self.activate(source=source, phrase=event.phrase)
 
+    def _on_speech_started(self, _event: SpeechStarted) -> None:
+        """Speech began — stop waiting for an onset, start bounding the phrase.
+
+        The listening deadline measures how long Ayris waits for the user to
+        *start* talking (``voice.wake.listen_window_sec``). Once the onset
+        arrives the phrase itself is bounded by the recording deadline instead,
+        which is as long as a whole utterance — otherwise a slow start on a short
+        window would cut the phrase off mid-sentence. :meth:`_on_speech_ended`
+        keeps the same LISTENING→RECORDING fallback for a phrase reported with no
+        onset first, so a test that publishes only ``SpeechEnded`` still works.
+        """
+        with self._lock:
+            session = self._session
+            if session is None:
+                return
+            if self._states.state is PipelineState.LISTENING:
+                self._states.enter(PipelineState.RECORDING, session_id=session.session_id)
+                self._sync_assistant_state(PipelineState.RECORDING)
+
     def _on_speech_ended(self, event: SpeechEnded) -> None:
         """A phrase finished. Fetch its audio and start recognising.
 
-        A rejected segment — too little speech to be a phrase — ends the session
-        with «не расслышала» rather than leaving it listening: the user has
-        stopped talking, so the window would only make them wait for a timeout.
+        A rejected segment — too little speech to be a phrase — is almost always
+        a false onset: the tail of the wake word, a cough or a chair, firing in
+        the first moment after activation before the user has begun their
+        command. Ending the session there would print «Не расслышала» and close
+        the door before they spoke a word. So a rejection re-opens the listening
+        window instead of failing, up to :data:`_MAX_FALSE_ONSET_REARMS` times,
+        after which it is left to time out — which stays silent for a wake word
+        and only speaks for PTT. ``_on_speech_started`` has usually moved the
+        session to RECORDING by now (the onset was confirmed), so the re-arm
+        comes from either RECORDING or LISTENING; a text pass has no window and
+        fails as before.
         """
         message = ""
+        rearm = False
         with self._lock:
             session = self._session
             if session is None:
@@ -846,11 +981,30 @@ class Pipeline:
                 self._states.enter(PipelineState.RECORDING, session_id=session.session_id)
                 self._sync_assistant_state(PipelineState.RECORDING)
             if event.reason == _REJECTED_REASON:
-                message = self._finish_locked(
-                    session, ExecutionResult.ERROR, speak=NOT_HEARD_MESSAGE, error=event.reason
-                )
+                if not session.from_text and session.false_onset_rearms < _MAX_FALSE_ONSET_REARMS:
+                    session.false_onset_rearms += 1
+                    _log.debug(
+                        "ложный онсет (%s), окно прослушивания переоткрыто (%d/%d)",
+                        event.reason,
+                        session.false_onset_rearms,
+                        _MAX_FALSE_ONSET_REARMS,
+                    )
+                    # Back to LISTENING re-arms the window's deadline, so the user
+                    # gets a fresh chance to start the command. The loop cannot
+                    # run away: the counter caps it, and past the cap the window
+                    # just times out.
+                    self._states.enter(PipelineState.LISTENING, session_id=session.session_id)
+                    self._sync_assistant_state(PipelineState.LISTENING)
+                    rearm = True
+                else:
+                    message = self._finish_locked(
+                        session, ExecutionResult.ERROR, speak=NOT_HEARD_MESSAGE, error=event.reason
+                    )
+        if rearm:
+            # Keep waiting: no audio pulled, no submit — just the open window.
+            return
         if message:
-            self._speak_detached(message)
+            self._speak_detached(message, request_id=session.session_id)
             return
         source = self._phrase_source
         self.submit_audio(source() if source is not None else None)
@@ -890,7 +1044,7 @@ class Pipeline:
                 error=f"timeout in {state.value}",
             )
         if message:
-            self._speak_detached(message)
+            self._speak_detached(message, request_id=session.session_id)
 
     # ------------------------------------------------------------------
     # session bookkeeping, all under the lock
@@ -938,6 +1092,10 @@ class Pipeline:
         if self._session is session:
             self._session = None
         trace = session.trace
+        # Decide the follow-up re-arm from the state as it is now, before the
+        # ``speak`` block below can backfill ``trace.answer`` on a failure path:
+        # only a pass that succeeded and actually said something continues.
+        should_continue = self._should_continue(session, outcome)
         if trace.outcome is ExecutionResult.OK:
             trace.outcome = outcome
         if error and not trace.error:
@@ -950,7 +1108,41 @@ class Pipeline:
         self._states.to_idle(detail=speak or error)
         self._sync_assistant_state(PipelineState.IDLE, failure=error if speak else "")
         self._record(session)
+        if should_continue:
+            self._arm_follow_up_locked()
         return speak
+
+    def _should_continue(self, session: _Session, outcome: ExecutionResult) -> bool:
+        """Whether to re-open the microphone after this session, for a dialogue.
+
+        Only when the user asked for it (``voice.wake.continue_listening``), the
+        pass ran a voice command to a clean, spoken answer: a typed or dry-run
+        session never opens the mic, a failure or a silent command does not keep
+        it open to loop on noise, and without a voice to answer with there is no
+        conversation to continue.
+        """
+        return (
+            self._continue_listening
+            and outcome is ExecutionResult.OK
+            and bool(session.trace.answer)
+            and not session.from_text
+            and not session.dry_run
+            and self._tts is not None
+        )
+
+    def _arm_follow_up_locked(self) -> None:
+        """Re-open a listening window after an answer, under the lock.
+
+        A fresh :data:`SOURCE_FOLLOWUP` session, so the user can keep talking
+        without the wake word. The window is the same ``listen_window_sec`` as a
+        wake activation, and one that closes with nobody speaking times out
+        silently (:meth:`_on_timeout`), which is what ends the conversation —
+        each turn needs a real utterance, so this cannot spin on its own.
+        """
+        session = self._begin_locked(source=SOURCE_FOLLOWUP)
+        self._states.enter(PipelineState.LISTENING, session_id=session.session_id)
+        self._sync_assistant_state(PipelineState.LISTENING)
+        _log.info("сессия %s открыта (диалог продолжается)", session.session_id)
 
     def _record(self, session: _Session) -> None:
         """Write the trace to the log, the ring buffer and ``history``."""
@@ -1241,6 +1433,7 @@ class Pipeline:
         """
         self._maybe_reset_memory(session)
         self._instant_intercept(session)
+        self._intercept_gibberish(session)
         if self._want_nlu(session):
             decision = self._llm_understand(session)
             if decision is not None and decision.resolved:
@@ -1250,6 +1443,27 @@ class Pipeline:
                 self._fail(session, NOT_MATCHED_MESSAGE, outcome=ExecutionResult.UNMATCHED)
                 raise _Stop(ExecutionResult.UNMATCHED)
         self._llm_chat(session)
+
+    def _intercept_gibberish(self, session: _Session) -> None:
+        """Answer an obvious keyboard mash with one short line, before the model.
+
+        A run of keys like «фывп» is not a question, and a small local model
+        turns it into a long «уточните запрос». :func:`looks_like_gibberish` is
+        deliberately narrow — only unpronounceable noise, never a real short word
+        or a reaction like «нишево», which the chat prompt handles — so the quip
+        here does not steal anything a model could have answered. Skipped on a
+        dry run, which reports what *would* match without speaking. Raises
+        :class:`_Stop` when it answered.
+        """
+        if session.dry_run or not looks_like_gibberish(session.text):
+            return
+        quip = GIBBERISH_QUIPS[self._gibberish_turn % len(GIBBERISH_QUIPS)]
+        self._gibberish_turn += 1
+        session.trace.intent = session.trace.intent or "chat:gibberish"
+        session.trace.match_source = _SOURCE_LLM
+        self._respond(session, quip)
+        self._done(session, ExecutionResult.OK)
+        raise _Stop(ExecutionResult.OK)
 
     def _want_nlu(self, session: _Session) -> bool:
         """Should the model parse this phrase into a command (JSON-NLU)?
@@ -1339,6 +1553,9 @@ class Pipeline:
         """
         trace = session.trace
         client = self._llm
+        if not session.dry_run and self._agent_enabled():
+            self._run_agent(session)
+            return
         cards = list(self._catalog()) if self._catalog is not None else []
         with trace.stage(Stage.LLM):
             response = self._complete(session, client, kind="chat", cards=cards)
@@ -1363,10 +1580,137 @@ class Pipeline:
         outcome = ExecutionResult.OK if client.configured else ExecutionResult.ERROR
         if not client.configured:
             trace.error = trace.error or "llm not configured"
-        self._respond(session, answer)
+        self._respond(session, answer, failed=not client.configured)
         self._remember(session, answer)
         self._done(session, outcome)
         raise _Stop(outcome)
+
+    def _agent_enabled(self) -> bool:
+        """Whether this turn runs as an autonomous agent, not a single reply.
+
+        Only with the toggle on, a tool-capable cloud provider and a configured
+        model: the shipped local model does not tool-call, so the agent would
+        otherwise spin without ever acting. Capable on-device providers can join
+        this gate later — that is the hook left for an offline agent.
+        """
+        settings = self._settings
+        if settings is None or not settings.ai.agent_mode:
+            return False
+        if self._gateway is None:
+            return False
+        return is_cloud_provider(settings.ai.provider) and self._llm.configured
+
+    def _run_agent(self, session: _Session) -> None:
+        """Agent turn: the model drives built-in actions over several steps.
+
+        The loop lives in :func:`~ayris.nlu.llm.agent.run_agent`; here it is wired
+        to the real model, the registry gateway (so rights and the dangerous
+        confirmation of tasks 39/40 still apply to every action) and the bus, where
+        each step is mirrored as :class:`AgentStepStarted`/:class:`AgentStepFinished`
+        for the chat step log. Cancellation is cooperative; an empty answer is an
+        honest «не поняла», as in plain chat.
+        """
+        settings = self._settings
+        gateway = self._gateway
+        if settings is None or gateway is None:  # guarded by _agent_enabled
+            self._fail(session, NOT_MATCHED_MESSAGE, outcome=ExecutionResult.UNMATCHED)
+            raise _Stop(ExecutionResult.UNMATCHED)
+        active_settings: Settings = settings
+        active_gateway: RegistryGateway = gateway
+        trace = session.trace
+        trace.intent = trace.intent or _SOURCE_LLM
+        trace.match_source = _SOURCE_LLM
+        history = list(self._chat_prompt(session, active_settings))
+        tools = list(active_gateway.action_tools())
+
+        def complete(messages: Sequence[LlmMessage], specs: Sequence[LlmTool]) -> LlmResponse:
+            try:
+                return self._llm.complete(
+                    messages,
+                    specs,
+                    temperature=active_settings.ai.temperature,
+                    max_tokens=active_settings.ai.max_tokens,
+                    cancel=lambda: session.cancelled,
+                )
+            except LlmError:
+                raise
+            except Exception as exc:
+                raise LlmError(f"llm request failed: {exc!r}") from exc
+
+        def execute(name: str, arguments: Mapping[str, Any]) -> ActionReply:
+            reply = active_gateway.run_action(name, arguments, request_id=session.session_id)
+            trace.action = trace.action or name
+            return reply
+
+        def on_step_start(index: int, tool: str, arguments: Mapping[str, Any]) -> None:
+            self._bus.publish(
+                AgentStepStarted(
+                    step=index,
+                    tool=tool,
+                    args_preview=self._mask_preview(arguments),
+                    request_id=session.session_id,
+                )
+            )
+
+        def on_step(index: int, step: AgentStep) -> None:
+            self._bus.publish(
+                AgentStepFinished(
+                    step=index,
+                    tool=step.tool,
+                    ok=step.ok,
+                    result_preview=step.result[:200],
+                    request_id=session.session_id,
+                )
+            )
+
+        with trace.stage(Stage.LLM):
+            outcome = run_agent(
+                history,
+                tools,
+                complete=complete,
+                execute=execute,
+                max_steps=active_settings.ai.agent_max_steps,
+                cancel=lambda: session.cancelled,
+                on_step_start=on_step_start,
+                on_step=on_step,
+            )
+        self._bus.publish(
+            AgentTurnFinished(
+                steps=len(outcome.steps),
+                answer=outcome.answer,
+                stop_reason=outcome.stop_reason,
+                request_id=session.session_id,
+            )
+        )
+        self._check(session)
+        answer = outcome.answer.strip()
+        if not answer:
+            self._fail(session, NOT_MATCHED_MESSAGE, outcome=ExecutionResult.UNMATCHED)
+            raise _Stop(ExecutionResult.UNMATCHED)
+        self._respond(session, answer)
+        self._remember(session, answer)
+        self._done(session, ExecutionResult.OK)
+        raise _Stop(ExecutionResult.OK)
+
+    @staticmethod
+    def _mask_preview(arguments: Mapping[str, Any]) -> dict[str, Any]:
+        """Best-effort redaction of a step's arguments for the bus preview.
+
+        The audit trail masks the validated params properly (task 19); this is only
+        the on-bus preview, so it redacts by key hint and clips long values — a
+        token must not reach the DevTools log that mirrors the bus.
+        """
+        hints = ("pass", "token", "secret", "key", "pin", "credential")
+        preview: dict[str, Any] = {}
+        for key, value in arguments.items():
+            lowered = str(key).casefold()
+            if any(hint in lowered for hint in hints):
+                preview[key] = "***"
+            elif isinstance(value, str) and len(value) > 120:
+                preview[key] = value[:120] + "…"
+            else:
+                preview[key] = value
+        return preview
 
     def _route_command(self, session: _Session, decision: NluDecision) -> None:
         """Wire a model-picked command into the trace like the matcher would.
@@ -1624,14 +1968,25 @@ class Pipeline:
 
     # -- stage: answering ----------------------------------------------
 
-    def _respond(self, session: _Session, text: str) -> None:
-        """Say ``text`` and wait for it, so barge-in has something to interrupt."""
+    def _respond(self, session: _Session, text: str, *, failed: bool = False) -> None:
+        """Say ``text`` and wait for it, so barge-in has something to interrupt.
+
+        ``failed`` marks an answer that is really a failure dressed as a reply —
+        the hint a model that is not configured returns — so the chat can colour
+        it as an error even though it reaches the user through the answer path.
+        """
         if not text:
             return
         trace = session.trace
         trace.answer = text
         self._enter(session, PipelineState.RESPONDING)
         output = self._tts
+        # Announce before synthesis, and whether or not there is a voice at all:
+        # the window shows the answer from this event, so a silent or broken TTS
+        # costs the user the sound and nothing else.
+        self._announce(
+            text, failed=failed, spoken=output is not None, request_id=session.session_id
+        )
         if output is None:
             return
         try:
@@ -1646,14 +2001,45 @@ class Pipeline:
         finally:
             session.speech = None
 
-    def _speak_detached(self, text: str) -> None:
+    def _announce(
+        self,
+        text: str,
+        *,
+        failed: bool = False,
+        spoken: bool = True,
+        request_id: str = "",
+    ) -> None:
+        """Publish what Ayris has to say, independently of saying it.
+
+        One event, :class:`AssistantReplied`, for both halves of the answer path
+        — a real reply and a «не получилось» — so that a consumer showing text
+        never has to infer it from :class:`TtsStarted` and never misses the
+        failures, which are not spoken through a session at all.
+        """
+        if not text:
+            return
+        self._bus.publish(
+            AssistantReplied(
+                text=text,
+                failed=failed,
+                spoken=spoken,
+                request_id=request_id,
+            )
+        )
+
+    def _speak_detached(self, text: str, *, failed: bool = True, request_id: str = "") -> None:
         """Say something that belongs to no session — a failure, a timeout.
 
         Fire-and-forget, and serialised by its own gate so that two failures in a
-        row do not overlap in the speakers.
+        row do not overlap in the speakers. Announced on the bus first: this is
+        the only channel a failure message has, so it must not be lost with the
+        voice.
         """
+        if not text:
+            return
         output = self._tts
-        if output is None or not text:
+        self._announce(text, failed=failed, spoken=output is not None, request_id=request_id)
+        if output is None:
             return
         with self._speak_gate:
             try:
@@ -1720,7 +2106,14 @@ class Pipeline:
                 return
             message = self._finish_locked(session, outcome, speak=speak, error=error)
         if message:
-            self._speak_detached(message)
+            # A cancel is not a failure: «отменила» is Ayris answering, and the
+            # chat should colour it as such. Everything else that reaches here
+            # with something to say got there because the pass did not work.
+            self._speak_detached(
+                message,
+                failed=outcome is not ExecutionResult.CANCELLED,
+                request_id=session.session_id,
+            )
 
     def _publish_cancel(self, session: _Session) -> None:
         """Announce a voice cancel, once the session is already closed.
@@ -1787,6 +2180,12 @@ _PTT_PHRASE: Final = "<ptt>"
 
 #: ``SpeechEnded.reason`` for a segment the segmenter threw away.
 _REJECTED_REASON: Final = "too_short"
+
+#: How many false onsets (wake-word tail or noise, segments shorter than
+#: ``min_speech_ms``) may re-open the listening window within one session before
+#: it is left to time out. Enough to swallow the activation's own tail and a
+#: stray cough without letting constant noise spin the session forever.
+_MAX_FALSE_ONSET_REARMS: Final = 3
 
 #: What the history records for a question the user aborted.
 CANCELLED_MESSAGE: Final = "Отменено."

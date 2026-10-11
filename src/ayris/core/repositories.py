@@ -340,12 +340,13 @@ class CommandRepository(_Repository):
         Uses ``ulower`` rather than ``LIKE``: SQLite's own case folding is
         ASCII-only, so a plain ``LIKE`` would not match "свет" against "Свет".
         """
-        pattern = f"%{text.lower()}%"
+        escaped = text.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
         rows = self._db.query_all(
             f"""
             SELECT {self._COLUMNS} FROM commands
              WHERE profile_id = ?
-               AND (ulower(name) LIKE ? OR ulower(description) LIKE ?)
+               AND (ulower(name) LIKE ? ESCAPE '\\' OR ulower(description) LIKE ? ESCAPE '\\')
              ORDER BY priority DESC, name
             """,
             (profile_id, pattern, pattern),
@@ -1265,9 +1266,11 @@ class ClipboardRepository(_Repository):
             conditions.append("pinned = 1")
         if query:
             # ulower, like CommandRepository.search: SQLite folds ASCII only, so a
-            # plain LIKE would not match «пароль» against «Пароль».
-            conditions.append("ulower(content) LIKE ?")
-            params.append(f"%{query.lower()}%")
+            # plain LIKE would not match «пароль» against «Пароль». Escape %/_ so a
+            # query that contains them matches literally rather than as wildcards.
+            escaped = query.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append("ulower(content) LIKE ? ESCAPE '\\'")
+            params.append(f"%{escaped}%")
         if conditions:
             sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY ts DESC, id DESC LIMIT ?"
