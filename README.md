@@ -1,5 +1,9 @@
 # Ayris
 
+[![CI](https://github.com/Mirakll/Ayris-ai/actions/workflows/ci.yml/badge.svg)](https://github.com/Mirakll/Ayris-ai/actions/workflows/ci.yml)
+[![Nightly](https://github.com/Mirakll/Ayris-ai/actions/workflows/nightly.yml/badge.svg)](https://github.com/Mirakll/Ayris-ai/actions/workflows/nightly.yml)
+[![coverage](https://img.shields.io/badge/coverage-84%25-brightgreen)](https://github.com/Mirakll/Ayris-ai/actions/workflows/nightly.yml)
+
 Голосовой помощник для Windows 11. Русскоязычный интерфейс, офлайн-first
 распознавание и синтез речи с облачными фоллбеками, движок макросов в стиле
 VoiceAttack и оверлей.
