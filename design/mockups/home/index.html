@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AYRIS — витрина дизайна главного экрана</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0e0b16; --panel:#171225; --border:#2a2340; --text:#ECE7F6; --muted:#948AAC;
+    --accent:#9B6DFF; --font:"Inter","Segoe UI",Arial,sans-serif;
+    /* размеры «экрана приложения» для масштабирования превью */
+    --shot-w:1280px; --shot-h:720px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{font-family:var(--font);background:
+      radial-gradient(1200px 700px at 80% -10%, #241a3f 0%, transparent 60%),
+      radial-gradient(1000px 600px at -10% 110%, #1a2740 0%, transparent 55%),
+      var(--bg);
+    color:var(--text); min-height:100vh; padding:40px clamp(20px,4vw,64px) 80px;}
+  header{max-width:1400px;margin:0 auto 32px;}
+  h1{font-size:30px;font-weight:700;letter-spacing:1px;}
+  h1 .a{color:var(--accent);}
+  .sub{color:var(--muted);font-size:14px;margin-top:8px;max-width:760px;line-height:1.5;}
+  .grid{max-width:1400px;margin:0 auto;display:grid;gap:24px;
+    grid-template-columns:repeat(auto-fill,minmax(340px,1fr));}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:18px;overflow:hidden;
+    text-decoration:none;color:inherit;display:flex;flex-direction:column;
+    box-shadow:0 12px 34px rgba(0,0,0,.42);transition:.2s transform,.2s box-shadow,.2s border-color;}
+  .card:hover{transform:translateY(-4px);box-shadow:0 20px 50px rgba(0,0,0,.55);border-color:var(--accent);}
+  .thumb{position:relative;width:100%;aspect-ratio:16/9;overflow:hidden;background:#000;}
+  .thumb iframe{position:absolute;top:0;left:0;width:var(--shot-w);height:var(--shot-h);
+    border:0;transform-origin:top left;pointer-events:none;}
+  .thumb .veil{position:absolute;inset:0;z-index:2;} /* перехватывает клики, чтобы работал переход по карточке */
+  .meta{padding:14px 16px;display:flex;align-items:baseline;gap:10px;}
+  .num{font-size:12px;font-weight:700;color:var(--accent);letter-spacing:1px;}
+  .name{font-size:15px;font-weight:600;}
+  .tag{margin-left:auto;font-size:12px;color:var(--muted);}
+  .card.base{border-color:#3a5cff55;}
+  .card.base:hover{border-color:#6d8cff;}
+  footer{max-width:1400px;margin:40px auto 0;color:var(--muted);font-size:12px;}
+  code{background:#00000040;padding:2px 6px;border-radius:6px;color:#c9bff0;}
+</style>
+</head>
+<body>
+  <header>
+    <h1><span class="a">AYRIS</span> — витрина дизайна главного экрана</h1>
+    <p class="sub">Веб-копия текущего экрана и 10 тёмных вариантов оформления. Каждая карточка — живой предпросмотр
+      со сферой; клик открывает вариант целиком. Обязательные элементы во всех: название AYRIS, часы, сфера, диалог
+      с «Привет, чем помочь?», гамбургер настроек и переключатель режимов.</p>
+  </header>
+
+  <div class="grid" id="grid"></div>
+
+  <footer>Сервер: <code>python -m http.server 8778 --directory design/mockups/home</code> · открыть: <code>http://localhost:8778/</code></footer>
+
+<script>
+  const ITEMS = [
+    { file:'00-base.html',               num:'00', name:'Веб-копия (эталон)', tag:'dark purple', base:true },
+    { file:'01-glass-depth.html',        num:'01', name:'Стеклянная глубина',  tag:'единое стекло' },
+    { file:'03-neon-cyber.html',         num:'03', name:'Неоновый кибер',       tag:'cyan / magenta' },
+    { file:'09-synthwave.html',          num:'09', name:'Ретро / Synthwave',    tag:'retrowave' },
+  ];
+  const grid = document.getElementById('grid');
+  function scaleOf(thumb){ return thumb.clientWidth / 1280; }
+  function build(){
+    grid.innerHTML = '';
+    ITEMS.forEach((it)=>{
+      const a = document.createElement('a');
+      a.className = 'card' + (it.base ? ' base' : '');
+      a.href = it.file; a.target = '_blank'; a.rel = 'noopener';
+      a.innerHTML = `
+        <div class="thumb">
+          <iframe title="${it.name}"></iframe>
+          <div class="veil"></div>
+        </div>
+        <div class="meta">
+          <span class="num">${it.num}</span>
+          <span class="name">${it.name}</span>
+          <span class="tag">${it.tag}</span>
+        </div>`;
+      grid.appendChild(a);
+      const thumb = a.querySelector('.thumb');
+      a.querySelector('iframe').style.transform = 'scale(' + scaleOf(thumb) + ')';
+    });
+  }
+  build();
+  // Живые превью грузим ПОСЛЕДОВАТЕЛЬНО: каждая сфера — отдельный WebGL-контекст,
+  // десяток разом упирается в лимит контекстов браузера и роняет часть в чёрное.
+  // Ждём загрузку страницы + прогрев, затем следующую; сфера сама замораживается.
+  const frames = [...document.querySelectorAll('.card iframe')];
+  let idx = 0;
+  function loadNext(){
+    if (idx >= ITEMS.length) return;
+    const f = frames[idx]; const file = ITEMS[idx].file; idx++;
+    f.addEventListener('load', () => setTimeout(loadNext, 800), { once:true });
+    f.src = file;
+  }
+  loadNext();
+  addEventListener('resize', ()=>{
+    document.querySelectorAll('.thumb').forEach(t=>{
+      const f=t.querySelector('iframe'); if(f) f.style.transform='scale('+scaleOf(t)+')';
+    });
+  });
+</script>
+</body>
+</html>

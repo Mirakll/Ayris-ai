@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AYRIS // VOICE OS — Modular Rack</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600&family=Oswald:wght@500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --rack:#121316; --rack-deep:#0b0c0e; --rail:#191b1f;
+  --panel-1:#22262b; --panel-2:#2a2f35; --panel-edge:#141619; --panel-hi:rgba(255,255,255,.07);
+  --silk:#e7e3da; --engrave:#9aa0a6; --engrave-dim:#6b7075;
+  --yellow:#f2c14e; --red:#e5533c; --teal:#3fbfa6; --blue:#4a8fe7; --magenta:#c85cc8;
+  --led-red:#ff4d4d; --led-green:#51e05a; --amber:#ffb03a;
+  --ff-label:'Barlow Condensed','Oswald',sans-serif;
+  --ff-head:'Oswald','Barlow Condensed',sans-serif;
+  --ff-mono:'Space Mono','IBM Plex Mono',monospace;
+  --ff-ui:'Inter',system-ui,sans-serif;
+  --emboss:0 1px 0 rgba(0,0,0,.55),0 -1px 0 rgba(255,255,255,.05);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:var(--ff-ui); color:var(--silk); -webkit-font-smoothing:antialiased;
+  min-height:100vh; display:flex; align-items:center; justify-content:center; padding:16px;
+  background:radial-gradient(130% 100% at 50% 0%, #1b1d21 0%, #0d0e10 55%, #070708 100%);
+}
+/* ===== РЭК (окно) ===== */
+.rack{
+  width:min(1200px,100%); height:min(760px,calc(100vh - 32px));
+  position:relative; display:flex; flex-direction:column;
+  background:linear-gradient(180deg,#15171a,#101114); border-radius:16px;
+  padding:10px; gap:0;
+  box-shadow:0 40px 90px -30px rgba(0,0,0,.85),0 0 0 1px #000,inset 0 1px 0 rgba(255,255,255,.04);
+}
+/* боковые рельсы рэка с монтажными отверстиями */
+.rack::before,.rack::after{
+  content:""; position:absolute; top:10px; bottom:10px; width:14px; z-index:4; pointer-events:none;
+  background:
+    radial-gradient(circle at 50% 0,rgba(0,0,0,.6) 2.6px,transparent 3px) 0 7px/14px 34px repeat-y,
+    linear-gradient(90deg,#0c0d0f,#1d2024 45%,#15171a);
+  border-radius:5px; box-shadow:inset 0 0 0 1px rgba(0,0,0,.6),inset 1px 0 0 rgba(255,255,255,.05);
+}
+.rack::before{left:10px}
+.rack::after{right:10px}
+/* ===== Верхняя планка (хром окна + бренд) ===== */
+.rail{
+  flex:0 0 auto; height:46px; margin:0 16px 10px; position:relative; z-index:5;
+  display:flex; align-items:center; gap:14px; padding:0 14px;
+  border-radius:9px; -webkit-app-region:drag;
+  background:linear-gradient(180deg,#2b3036,#1c2024); border:1px solid var(--panel-edge);
+  box-shadow:var(--emboss),inset 0 1px 0 rgba(255,255,255,.08),inset 0 -3px 7px rgba(0,0,0,.5);
+}
+.rail .plug-row{display:flex;gap:7px;margin-left:4px}
+.rail-brand{display:flex;align-items:baseline;gap:9px}
+.rail-brand b{font-family:var(--ff-head);font-weight:700;font-size:19px;letter-spacing:.14em;color:var(--silk);text-shadow:var(--emboss)}
+.rail-brand b i{color:var(--yellow);font-style:normal}
+.rail-brand span{font-family:var(--ff-label);font-weight:500;font-size:12px;letter-spacing:.34em;color:var(--engrave)}
+.rail .sep{width:1px;height:22px;background:linear-gradient(#0000,rgba(0,0,0,.6),#0000)}
+.rail .tag{font-family:var(--ff-mono);font-size:9.5px;letter-spacing:.14em;color:var(--engrave-dim);text-transform:uppercase}
+.spacer{flex:1}
+/* кнопки окна */
+.win-btns{display:flex;gap:8px;-webkit-app-region:no-drag}
+.win-btn{
+  width:30px;height:30px;border:1px solid var(--panel-edge);border-radius:7px;cursor:pointer;
+  background:linear-gradient(180deg,#30353b,#20242a);color:var(--engrave);
+  display:grid;place-items:center;font-size:15px;font-family:var(--ff-ui);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 1px 2px rgba(0,0,0,.5);transition:.15s;
+}
+.win-btn:hover{color:var(--silk);transform:translateY(-1px)}
+.win-btn.close:hover{background:linear-gradient(180deg,#e5533c,#c23c28);color:#fff;border-color:#7a2114}
+.win-btn.fs:hover{color:var(--teal)}
+/* ===== Панель-модуль ===== */
+.panel{
+  position:relative; border-radius:9px; padding:13px 15px 14px; min-height:0; overflow:hidden;
+  background:
+    radial-gradient(140% 120% at 50% -10%,rgba(255,255,255,.07),transparent 55%),
+    linear-gradient(177deg,var(--panel-2),var(--panel-1) 58%,#1d2127);
+  border:1px solid var(--panel-edge);
+  box-shadow:inset 0 1px 0 var(--panel-hi),inset 0 -4px 10px rgba(0,0,0,.5),0 3px 8px rgba(0,0,0,.4);
+}
+/* брашированный металл */
+.panel>.brush{position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:.5;
+  background:repeating-linear-gradient(93deg,rgba(255,255,255,.03) 0 1px,transparent 1px 3px);mix-blend-mode:overlay}
+/* винты по углам */
+.screw{position:absolute;width:12px;height:12px;border-radius:50%;z-index:3;
+  background:radial-gradient(circle at 34% 28%,#51575e,#262a2f 62%,#15181b);
+  box-shadow:inset 0 0 0 1px rgba(0,0,0,.55),inset 0 1px 1px rgba(255,255,255,.2),0 1px 1px rgba(0,0,0,.5)}
+.screw::before,.screw::after{content:"";position:absolute;left:50%;top:50%;background:rgba(0,0,0,.6);border-radius:1px;box-shadow:0 1px 0 rgba(255,255,255,.07)}
+.screw::before{width:7px;height:1.6px;transform:translate(-50%,-50%) rotate(var(--sr,22deg))}
+.screw::after{width:1.6px;height:7px;transform:translate(-50%,-50%) rotate(var(--sr,22deg))}
+.screw.tl{top:6px;left:6px}.screw.tr{top:6px;right:6px}.screw.bl{bottom:6px;left:6px}.screw.br{bottom:6px;right:6px}
+/* шелкография: заголовки/подписи */
+.silk{font-family:var(--ff-label);font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--silk);text-shadow:var(--emboss)}
+.mod-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.mod-head .silk{font-size:12.5px}
+.mod-head .ln{flex:1;height:1px;background:linear-gradient(90deg,rgba(255,255,255,.12),transparent);box-shadow:0 1px 0 rgba(0,0,0,.5)}
+.mod-head .idx{font-family:var(--ff-mono);font-size:9px;color:var(--engrave-dim);letter-spacing:.1em}
+.engrave{font-family:var(--ff-label);letter-spacing:.16em;text-transform:uppercase;color:var(--engrave);text-shadow:0 1px 0 rgba(0,0,0,.5)}
+.mono{font-family:var(--ff-mono)}
+/* ===== Ручка (knob) ===== */
+.knob-wrap{display:flex;flex-direction:column;align-items:center;gap:5px;user-select:none}
+.knob{position:relative;width:var(--ks,52px);height:var(--ks,52px);cursor: grab;touch-action:none}
+.knob:active{cursor:grabbing}
+.knob .ticks{position:absolute;inset:-6px;pointer-events:none}
+.knob .body{position:absolute;inset:0;border-radius:50%;
+  background:radial-gradient(circle at 50% 32%,#464c53,#262a30 58%,#15181c);
+  box-shadow:inset 0 2px 3px rgba(255,255,255,.14),inset 0 -4px 7px rgba(0,0,0,.6),0 3px 6px rgba(0,0,0,.55)}
+.knob .body::after{content:"";position:absolute;inset:22%;border-radius:50%;background:radial-gradient(circle at 50% 35%,#30353b,#1b1e22);box-shadow:inset 0 1px 2px rgba(255,255,255,.1),inset 0 -2px 3px rgba(0,0,0,.6)}
+.knob .dial{position:absolute;inset:0;transform:rotate(var(--rot,-135deg));transition:transform .08s linear}
+.knob .dial::after{content:"";position:absolute;left:50%;top:7%;width:3px;height:30%;margin-left:-1.5px;border-radius:2px;
+  background:linear-gradient(var(--knc,var(--yellow)),#fff8);box-shadow:0 0 6px var(--knc,var(--yellow));z-index:2}
+.knob-wrap small{font-family:var(--ff-label);font-weight:600;font-size:9.5px;letter-spacing:.14em;color:var(--engrave);text-transform:uppercase}
+/* ===== Патч-джек ===== */
+.jack{width:19px;height:19px;border-radius:50%;position:relative;flex:0 0 auto;
+  background:radial-gradient(circle at 50% 38%,#3a3f45,#1a1d21 70%);
+  box-shadow:inset 0 0 0 2px #0d0f12,inset 0 2px 3px rgba(0,0,0,.8),0 1px 0 rgba(255,255,255,.08)}
+.jack::after{content:"";position:absolute;inset:5px;border-radius:50%;background:radial-gradient(circle at 50% 40%,#1a1d20,#060708);box-shadow:inset 0 1px 2px rgba(0,0,0,.9)}
+.jack.lit::after{background:radial-gradient(circle at 50% 40%,#243b38,#0a1413);box-shadow:inset 0 0 5px var(--teal)}
+.jk{display:flex;flex-direction:column;align-items:center;gap:3px}
+.jk small{font-family:var(--ff-label);font-size:8.5px;letter-spacing:.12em;color:var(--engrave-dim)}
+/* ===== LED ===== */
+.led{width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:#2a2d31;box-shadow:inset 0 0 0 1px rgba(0,0,0,.6),inset 0 1px 1px rgba(255,255,255,.1)}
+.led.on{background:radial-gradient(circle at 40% 35%,#fff,var(--lc,var(--led-green)));box-shadow:0 0 7px var(--lc,var(--led-green)),0 0 2px #fff}
+.led.g{--lc:var(--led-green)}.led.r{--lc:var(--led-red)}.led.a{--lc:var(--amber)}.led.y{--lc:var(--yellow)}.led.b{--lc:var(--blue)}.led.t{--lc:var(--teal)}
+@keyframes blip{0%,100%{opacity:1}50%{opacity:.45}}
+.led.pulse{animation:blip 2.4s ease-in-out infinite}
+/* ===== Тумблер ===== */
+.toggle{width:46px;height:24px;border-radius:13px;position:relative;cursor:pointer;flex:0 0 auto;
+  background:linear-gradient(180deg,#15171a,#23272c);box-shadow:inset 0 2px 4px rgba(0,0,0,.7),inset 0 -1px 0 rgba(255,255,255,.06);border:1px solid #0d0f12}
+.toggle .lv{position:absolute;top:2px;left:2px;width:20px;height:18px;border-radius:9px;transition:left .18s cubic-bezier(.5,1.6,.4,1);
+  background:linear-gradient(180deg,#50565d,#2b3036);box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 2px 3px rgba(0,0,0,.6)}
+.toggle.on{background:linear-gradient(180deg,#14312c,#1c4b43)}
+.toggle.on .lv{left:24px;background:linear-gradient(180deg,#7fe8d6,#2fae99)}
+/* ===== Металлические кнопки / пэды ===== */
+.pad{position:relative;border:1px solid var(--panel-edge);border-radius:8px;cursor:pointer;
+  background:linear-gradient(180deg,#30353c,#1f2329);color:var(--silk);font-family:var(--ff-label);
+  letter-spacing:.1em;text-transform:uppercase;display:flex;align-items:center;gap:8px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1),inset 0 -3px 6px rgba(0,0,0,.45),0 2px 4px rgba(0,0,0,.45);
+  transition:transform .1s,box-shadow .12s,color .12s}
+.pad:hover{transform:translateY(-1px);color:#fff}
+.pad:active{transform:translateY(1px);box-shadow:inset 0 2px 5px rgba(0,0,0,.7)}
+.pad svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8}
+.pad .badge{position:absolute;top:-6px;right:-6px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;
+  background:radial-gradient(circle at 40% 35%,#ff9a8f,var(--red));color:#2a0d08;font-family:var(--ff-mono);
+  font-size:10px;font-weight:700;display:grid;place-items:center;box-shadow:0 0 8px rgba(229,83,60,.7),inset 0 1px 0 rgba(255,255,255,.4)}
+/* кнопка-«транспорт» (большая, с кольцом-LED) */
+.tbtn{flex:1;min-height:48px;border-radius:9px;cursor:pointer;position:relative;overflow:hidden;
+  border:1px solid var(--panel-edge);font-family:var(--ff-head);font-weight:600;font-size:15px;letter-spacing:.16em;
+  text-transform:uppercase;color:var(--silk);display:flex;align-items:center;justify-content:center;gap:10px;
+  background:linear-gradient(180deg,#2d333a,#1e2228);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1),inset 0 -4px 9px rgba(0,0,0,.5),0 3px 6px rgba(0,0,0,.45);transition:.14s}
+.tbtn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.9}
+.tbtn::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--ac,var(--teal));box-shadow:0 0 12px var(--ac,var(--teal))}
+.tbtn:hover{transform:translateY(-1px);color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 0 18px -4px var(--ac,var(--teal)),0 4px 8px rgba(0,0,0,.5)}
+.tbtn:active{transform:translateY(1px)}
+.tbtn.run{--ac:var(--led-green)}.tbtn.chat{--ac:var(--blue)}
+/* ===== LCD / рекесс-экран ===== */
+.lcd{position:relative;border-radius:7px;background:linear-gradient(180deg,#0a1512,#0c110f);
+  border:1px solid #05100d;box-shadow:inset 0 2px 8px rgba(0,0,0,.9),inset 0 0 0 1px rgba(63,191,166,.08);overflow:hidden}
+.lcd::after{content:"";position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.25) 0 1px,transparent 1px 3px);opacity:.5}
+.lcd .glow{position:absolute;inset:0;pointer-events:none;background:radial-gradient(80% 60% at 50% 40%,rgba(63,191,166,.1),transparent 70%)}
+/* ===== Раскладка рэка ===== */
+.body{position:relative;flex:1;min-height:0;margin:0 16px 6px;z-index:2}
+.grid{display:flex;flex-direction:column;gap:11px;height:100%}
+.row{display:flex;gap:11px;min-height:0}
+.rA{flex:0 0 auto;height:246px}
+.rB{flex:0 0 auto;height:150px}
+.rC{flex:1;min-height:112px}
+.rD{flex:0 0 auto;height:74px}
+#m-identity{width:286px;flex:0 0 auto;display:flex;flex-direction:column}
+#m-scope{flex:1;min-width:0;display:flex;flex-direction:column}
+#m-system{width:246px;flex:0 0 auto;display:flex;flex-direction:column}
+#m-weather{width:156px;flex:0 0 auto;display:flex;flex-direction:column}
+#m-rate{width:208px;flex:0 0 auto;display:flex;flex-direction:column}
+#m-player{flex:1;min-width:0;display:flex;flex-direction:column}
+#m-quick{width:252px;flex:0 0 auto}
+#m-log{flex:1;min-width:0;display:flex;flex-direction:column}
+#m-transport{width:300px;flex:0 0 auto;display:flex;flex-direction:column}
+#m-uplink{flex:1}
+/* кабели поверх панелей */
+.cables{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:6;overflow:visible}
+/* ===== IDENTITY ===== */
+.id-mark{line-height:1;margin:2px 0 2px}
+.id-mark b{font-family:var(--ff-head);font-weight:700;font-size:40px;letter-spacing:.06em;color:var(--silk);text-shadow:0 2px 0 rgba(0,0,0,.6),0 -1px 0 rgba(255,255,255,.07)}
+.id-mark .accent{display:inline-block;width:34px;height:4px;border-radius:2px;background:var(--yellow);box-shadow:0 0 10px var(--yellow);margin:7px 0 0}
+.id-sub{font-family:var(--ff-label);font-size:10.5px;letter-spacing:.3em;color:var(--engrave);margin-top:3px}
+.clockbox{margin-top:12px;padding:9px 12px 8px;display:flex;align-items:flex-end;justify-content:space-between}
+.clock{font-family:var(--ff-mono);font-weight:700;font-size:34px;line-height:.9;color:#ffd96b;text-shadow:0 0 12px rgba(255,185,60,.55);letter-spacing:.02em}
+.clock .cc{transition:opacity .15s}
+.clock-sub{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.clock-sub .engrave{font-size:9px;letter-spacing:.18em}
+.id-foot{margin-top:auto;display:flex;align-items:center;gap:9px}
+/* профиль / настройки / офлайн */
+.dropdown{position:relative;flex:1}
+.dropdown .sel{width:100%;display:flex;align-items:center;gap:7px;padding:7px 9px;border-radius:7px;cursor:pointer;
+  background:linear-gradient(180deg,#262b31,#1a1e23);border:1px solid var(--panel-edge);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.07),inset 0 -2px 4px rgba(0,0,0,.4)}
+.dropdown .sel b{font-family:var(--ff-ui);font-weight:600;font-size:12px;color:var(--silk);flex:1;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dropdown .sel .chev{color:var(--engrave);font-size:10px}
+.dropdown .sel small{font-family:var(--ff-label);font-size:8px;letter-spacing:.14em;color:var(--engrave-dim)}
+.icon-btn{width:38px;height:38px;flex:0 0 auto;border-radius:8px;cursor:pointer;display:grid;place-items:center;color:var(--engrave);
+  background:linear-gradient(180deg,#2a2f35,#1b1f24);border:1px solid var(--panel-edge);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 2px 4px rgba(0,0,0,.4);transition:.14s}
+.icon-btn:hover{color:var(--yellow);transform:translateY(-1px)}
+.icon-btn svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.7}
+.icon-btn.spin:hover svg{animation:sp 3s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.offline{display:flex;align-items:center;gap:6px;padding:4px 9px;border-radius:999px;opacity:.3;transition:.2s;
+  background:rgba(229,83,60,.08);border:1px solid rgba(229,83,60,.25)}
+.offline small{font-family:var(--ff-label);font-size:9px;letter-spacing:.2em;color:var(--red)}
+.offline.active{opacity:1;box-shadow:0 0 12px -3px var(--red)}
+/* ===== SCOPE ===== */
+.scope-row{flex:1;display:flex;gap:12px;min-height:0}
+.screen{flex:1;position:relative;border-radius:9px;min-width:0;
+  background:linear-gradient(180deg,#07140f,#040907);border:2px solid #060d0a;
+  box-shadow:inset 0 0 22px rgba(0,0,0,.9),inset 0 0 0 1px rgba(63,191,166,.1),0 1px 0 rgba(255,255,255,.05)}
+.screen canvas{position:absolute;inset:0;width:100%;height:100%;border-radius:7px}
+.screen .scan{position:absolute;inset:0;border-radius:7px;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,.22) 0 1px,transparent 1px 3px);opacity:.55}
+.screen .vig{position:absolute;inset:0;border-radius:7px;pointer-events:none;box-shadow:inset 0 0 40px rgba(0,0,0,.7)}
+.screen .corner{position:absolute;font-family:var(--ff-mono);font-size:9px;color:rgba(63,191,166,.6);letter-spacing:.1em;z-index:2}
+.screen .corner.tl{top:7px;left:9px}.screen .corner.tr{top:7px;right:9px}.screen .corner.bl{bottom:7px;left:9px}
+.scope-side{width:52px;flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:9px}
+/* VU-колонка */
+.vu{width:17px;flex:1;min-height:0;border-radius:5px;padding:3px;display:flex;flex-direction:column-reverse;gap:2px;
+  background:linear-gradient(180deg,#0b0d0f,#141719);border:1px solid #07090b;box-shadow:inset 0 2px 5px rgba(0,0,0,.8)}
+.vu .seg{flex:1;border-radius:1.5px;background:#1c2024;transition:background .12s,box-shadow .12s}
+.vu .seg.on{background:var(--sc,var(--led-green));box-shadow:0 0 5px var(--sc,var(--led-green))}
+.vu-cap{font-family:var(--ff-label);font-size:8px;letter-spacing:.1em;color:var(--engrave-dim)}
+/* статус + состояние */
+.scope-foot{margin-top:11px;display:flex;align-items:center;gap:12px}
+.status{flex:1;display:flex;align-items:center;gap:10px;padding:9px 13px;border-radius:7px;
+  background:linear-gradient(180deg,#0a1512,#0c110f);border:1px solid #05100d;box-shadow:inset 0 2px 7px rgba(0,0,0,.85)}
+.status .dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;background:radial-gradient(circle at 40% 35%,#fff,var(--teal));box-shadow:0 0 9px var(--teal)}
+.status.listen .dot{background:radial-gradient(circle at 40% 35%,#fff,var(--amber));box-shadow:0 0 9px var(--amber)}
+.status.think .dot{background:radial-gradient(circle at 40% 35%,#fff,var(--blue));box-shadow:0 0 9px var(--blue);animation:blip 1s linear infinite}
+.status.error .dot{background:radial-gradient(circle at 40% 35%,#fff,var(--red));box-shadow:0 0 9px var(--red)}
+.status b{font-family:var(--ff-ui);font-weight:600;font-size:14px;color:var(--silk)}
+.states{display:flex;gap:7px}
+.state{display:flex;flex-direction:column;align-items:center;gap:4px}
+.state small{font-family:var(--ff-label);font-size:8px;letter-spacing:.1em;color:var(--engrave-dim)}
+.state.act small{color:var(--silk)}
+.knob-cluster{display:flex;gap:14px;align-items:flex-start}
+/* ===== SYSTEM: LED-метры ===== */
+.meters{display:flex;flex-direction:column;gap:12px;flex:1;justify-content:center}
+.meter .mlabel{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px}
+.meter .mlabel .silk{font-size:11px}
+.meter .mlabel b{font-family:var(--ff-mono);font-size:13px;color:#ffd96b;text-shadow:0 0 6px rgba(255,185,60,.4)}
+.bar{display:flex;gap:2px;height:16px;padding:2.5px;border-radius:5px;
+  background:linear-gradient(180deg,#0b0d0f,#141719);border:1px solid #07090b;box-shadow:inset 0 2px 4px rgba(0,0,0,.8)}
+.bar .seg{flex:1;border-radius:1.5px;background:#1c2024;transition:background .18s,box-shadow .18s}
+.bar .seg.on{background:var(--led-green);box-shadow:0 0 5px var(--led-green)}
+.bar .seg.on.mid{background:var(--amber);box-shadow:0 0 5px var(--amber)}
+.bar .seg.on.hi{background:var(--led-red);box-shadow:0 0 5px var(--led-red)}
+.sys-foot{margin-top:11px;display:flex;align-items:center;justify-content:space-between}
+/* ===== WEATHER ===== */
+.wx{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:4px;text-align:center}
+.wx .sun{width:40px;height:40px;margin-bottom:2px}
+.wx .temp{font-family:var(--ff-mono);font-weight:700;font-size:30px;color:var(--silk);line-height:1}
+.wx .cond{font-family:var(--ff-label);font-size:12px;letter-spacing:.18em;color:var(--amber);text-transform:uppercase}
+.wx .meta{font-family:var(--ff-mono);font-size:9.5px;color:var(--engrave)}
+/* ===== RATE ===== */
+.rate{flex:1;display:flex;flex-direction:column;gap:7px;justify-content:center}
+.rate .pair{display:flex;align-items:baseline;gap:8px}
+.rate .pair .silk{font-size:13px}
+.rate .big{font-family:var(--ff-mono);font-weight:700;font-size:26px;color:var(--silk);line-height:1}
+.rate .delta{font-family:var(--ff-mono);font-size:12px;display:inline-flex;align-items:center;gap:3px}
+.rate .delta.down{color:var(--red)}.rate .delta.up{color:var(--teal)}
+.spark{width:100%;height:30px;display:block}
+/* ===== PLAYER ===== */
+.player{flex:1;display:flex;gap:13px;align-items:center;min-height:0}
+.cover{width:70px;height:70px;flex:0 0 auto;border-radius:7px;position:relative;overflow:hidden;
+  background:linear-gradient(135deg,#c85cc8,#4a8fe7 55%,#3fbfa6);box-shadow:inset 0 0 0 1px rgba(255,255,255,.15),0 3px 8px rgba(0,0,0,.5)}
+.cover::after{content:"";position:absolute;inset:0;background:radial-gradient(circle at 70% 25%,rgba(255,255,255,.35),transparent 55%)}
+.cover .disc{position:absolute;inset:24% ;border-radius:50%;background:repeating-radial-gradient(#1a1d20 0 2px,#0e1012 2px 4px);box-shadow:inset 0 0 0 1px rgba(255,255,255,.1)}
+.player-mid{flex:1;min-width:0;display:flex;flex-direction:column;gap:7px}
+.player .title{font-family:var(--ff-ui);font-weight:600;font-size:14px;color:var(--silk);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.player .artist{font-family:var(--ff-label);font-size:10.5px;letter-spacing:.14em;color:var(--engrave);text-transform:uppercase}
+.scrub{display:flex;align-items:center;gap:9px}
+.track{flex:1;height:16px;position:relative;cursor:pointer}
+.track .rail2{position:absolute;top:50%;left:0;right:0;height:5px;transform:translateY(-50%);border-radius:3px;background:linear-gradient(180deg,#0a0c0e,#1a1d20);box-shadow:inset 0 1px 3px rgba(0,0,0,.9)}
+.track .fill{position:absolute;top:50%;left:0;height:5px;transform:translateY(-50%);border-radius:3px;background:linear-gradient(90deg,#2fae99,#7fe8d6);box-shadow:0 0 8px rgba(63,191,166,.6)}
+.track .cap{position:absolute;top:50%;width:12px;height:22px;transform:translate(-50%,-50%);border-radius:3px;
+  background:linear-gradient(180deg,#5a616a,#2b3036);box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 2px 4px rgba(0,0,0,.6)}
+.track .cap::after{content:"";position:absolute;left:50%;top:3px;bottom:3px;width:1.5px;transform:translateX(-50%);background:rgba(0,0,0,.5)}
+.player .tt{font-family:var(--ff-mono);font-size:9.5px;color:var(--engrave)}
+.transport-btns{display:flex;gap:8px}
+.tp{width:34px;height:30px;border-radius:7px}
+.tp.play{width:42px;color:var(--teal)}
+/* ===== QUICK ACTIONS ===== */
+.quick-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;flex:1}
+.qpad{flex-direction:column;justify-content:center;gap:6px;padding:8px;font-size:10px;letter-spacing:.1em;position:relative}
+.qpad svg{width:20px;height:20px}
+.qpad .led{position:absolute;top:7px;right:7px}
+/* ===== TRANSPORT ===== */
+.tp-rows{flex:1;display:flex;flex-direction:column;gap:11px}
+.tp-main{display:flex;gap:10px;flex:1}
+.tp-master{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-top:3px}
+.tp-wake{display:flex;align-items:center;gap:8px}
+.tp-wake small{font-family:var(--ff-label);font-size:10px;letter-spacing:.16em;color:var(--engrave)}
+/* ===== LOG / SEQ ===== */
+.log-screen{flex:1;min-height:0;border-radius:8px;padding:4px;position:relative;
+  background:linear-gradient(180deg,#0a1512,#0b0f0d);border:1px solid #05100d;box-shadow:inset 0 2px 10px rgba(0,0,0,.85)}
+.log-scroll{position:absolute;inset:4px;overflow-y:auto;padding:7px 9px;display:flex;flex-direction:column;gap:9px}
+.log-scroll::-webkit-scrollbar{width:7px}
+.log-scroll::-webkit-scrollbar-thumb{background:#2a2f35;border-radius:4px}
+.msg{display:flex;gap:9px;align-items:flex-start}
+.msg .step{font-family:var(--ff-mono);font-size:9px;color:var(--engrave-dim);padding-top:3px;min-width:16px}
+.msg .who{font-family:var(--ff-label);font-weight:600;font-size:10px;letter-spacing:.1em;text-transform:uppercase;padding:2px 7px;border-radius:4px;flex:0 0 auto;min-width:50px;text-align:center}
+.msg.you .who{color:#bcd6ff;background:rgba(74,143,231,.14);box-shadow:inset 0 0 0 1px rgba(74,143,231,.3)}
+.msg.ayr .who{color:#aef0e4;background:rgba(63,191,166,.14);box-shadow:inset 0 0 0 1px rgba(63,191,166,.3)}
+.msg .body{flex:1;min-width:0}
+.msg .time{font-family:var(--ff-mono);font-size:9px;color:var(--engrave-dim);margin-left:7px}
+.msg .text{font-family:var(--ff-ui);font-size:13px;line-height:1.45;color:#dcdfe2;margin-top:2px}
+.msg.ayr .text{color:#eef1f0}
+/* ===== UPLINK (ввод) ===== */
+#m-uplink .panel-in{display:flex;align-items:center;gap:12px;height:100%}
+.mode-sw{display:flex;flex-direction:column;align-items:center;gap:5px;cursor:pointer;flex:0 0 auto;user-select:none}
+.mode-sw .glyph{width:48px;height:38px;border-radius:8px;display:grid;place-items:center;font-family:var(--ff-mono);font-weight:700;font-size:17px;color:var(--teal);
+  background:linear-gradient(180deg,#262b31,#171b1f);border:1px solid var(--panel-edge);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),inset 0 -2px 5px rgba(0,0,0,.5);transition:.15s}
+.mode-sw.code .glyph{color:var(--magenta);box-shadow:inset 0 0 10px rgba(200,92,200,.3),inset 0 1px 0 rgba(255,255,255,.08)}
+.mode-sw small{font-family:var(--ff-label);font-size:8.5px;letter-spacing:.14em;color:var(--engrave)}
+.field{flex:1;display:flex;align-items:center;gap:10px;height:46px;padding:0 8px 0 16px;border-radius:10px;
+  background:linear-gradient(180deg,#0a1512,#0c110f);border:1px solid #05100d;box-shadow:inset 0 2px 8px rgba(0,0,0,.85),inset 0 0 0 1px rgba(63,191,166,.07)}
+.field input{flex:1;background:none;border:none;outline:none;color:var(--silk);font-family:var(--ff-ui);font-size:14.5px}
+.field input::placeholder{color:#5c6a66}
+.round{width:40px;height:40px;flex:0 0 auto;border-radius:50%;cursor:pointer;display:grid;place-items:center;color:var(--silk);
+  background:linear-gradient(180deg,#30353c,#1d2127);border:1px solid var(--panel-edge);box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 2px 4px rgba(0,0,0,.5);transition:.14s}
+.round svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.9}
+.round:hover{transform:translateY(-1px)}
+.round.mic.on{color:#2a1206;background:radial-gradient(circle at 45% 35%,#ffd38f,var(--amber));box-shadow:0 0 16px -2px var(--amber)}
+.round.send{color:#06201b;background:radial-gradient(circle at 45% 35%,#8ff0df,var(--teal));box-shadow:0 0 14px -3px var(--teal)}
+.cables path{stroke-linecap:round;fill:none}
+.cables circle{filter:drop-shadow(0 1px 2px rgba(0,0,0,.7))}
+:focus-visible{outline:2px solid var(--yellow);outline-offset:2px}
+@media (max-width:980px){
+  .rack{height:auto;min-height:min(760px,calc(100vh - 32px))}
+  .id-mark b{font-size:32px}.clock{font-size:28px}
+}
+@media (max-width:720px){
+  .row{flex-wrap:wrap}
+  #m-identity,#m-system,#m-weather,#m-rate,#m-player,#m-quick,#m-transport{width:100%}
+}
+</style>
+</head>
+<body>
+<div class="rack" id="rack">
+  <!-- Верхняя планка рэка: бренд, питание, кнопки окна -->
+  <div class="rail">
+    <div class="plug-row"><span class="led g on pulse" title="Питание"></span></div>
+    <div class="rail-brand"><b>AYRIS<i> //</i></b><span>VOICE OS</span></div>
+    <span class="sep"></span>
+    <span class="tag">Modular Rack · голосовой пульт</span>
+    <span class="spacer"></span>
+    <div class="tag" style="display:flex;align-items:center;gap:6px"><span class="led t on"></span>44.1 KHZ · RT</div>
+    <div class="win-btns">
+      <div class="win-btn" id="win-min" title="Свернуть">–</div>
+      <div class="win-btn fs" id="win-fs" title="Полный экран">⤢</div>
+      <div class="win-btn close" id="win-close" title="Закрыть">✕</div>
+    </div>
+  </div>
+  <div class="body">
+    <svg class="cables" id="cables"></svg>
+    <div class="grid">
+      <div class="row rA">
+        <!-- ===== M01 IDENTITY ===== -->
+        <section class="panel" id="m-identity">
+          <div class="brush"></div>
+          <div class="mod-head"><span class="silk">IDENTITY</span><span class="ln"></span><span class="idx">M01</span></div>
+          <div class="id-mark"><b>AYRIS</b><div class="accent"></div></div>
+          <div class="id-sub">AYRIS ASSISTANT · VOICE OS</div>
+          <div class="lcd clockbox">
+            <div class="glow"></div>
+            <div class="clock" id="clock">00<span class="cc">:</span>00</div>
+            <div class="clock-sub">
+              <span class="engrave mono" id="date">—</span>
+              <div style="display:flex;align-items:center;gap:5px"><span class="led g on pulse"></span><small class="engrave">СЕТЬ</small></div>
+            </div>
+          </div>
+          <div style="margin-top:auto;display:flex;flex-direction:column;gap:9px">
+            <div style="display:flex;align-items:center;gap:9px">
+              <div class="dropdown" id="profile">
+                <div class="sel"><small>ПРОФИЛЬ</small><b id="profile-name">По умолчанию</b><span class="chev">▾</span></div>
+              </div>
+              <div class="icon-btn spin" id="btn-settings" title="Настройки" tabindex="0" role="button" aria-label="Настройки">
+                <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:9px">
+              <div class="offline" id="offline"><span class="led r"></span><small>ОФЛАЙН</small></div>
+              <span class="spacer"></span>
+              <div class="jk"><span class="jack" data-jack="clk"></span><small>CLK</small></div>
+            </div>
+          </div>
+        </section>
+        <!-- ===== M02 SCOPE (герой состояния) ===== -->
+        <section class="panel" id="m-scope">
+          <div class="brush"></div>
+          <div class="mod-head"><span class="silk">Scope // State</span><span class="ln"></span><span class="idx">M02</span></div>
+          <div class="scope-row">
+            <div class="screen">
+              <canvas id="scope"></canvas>
+              <div class="scan"></div>
+              <div class="vig"></div>
+              <span class="corner tl">AYRIS-OSC</span>
+              <span class="corner tr" id="scope-mode">IDLE</span>
+              <span class="corner bl">x1.0 · 2ms/div</span>
+            </div>
+            <div class="scope-side">
+              <small class="vu-cap">VU</small>
+              <div class="vu" id="vu"></div>
+              <small class="vu-cap">dB</small>
+            </div>
+          </div>
+          <div class="scope-foot">
+            <div class="status" id="status"><span class="dot"></span><b id="status-text">Привет, чем помочь?</b></div>
+            <div class="states" id="states">
+              <div class="state" data-st="idle"><span class="led g"></span><small>IDLE</small></div>
+              <div class="state" data-st="listen"><span class="led a"></span><small>LISTEN</small></div>
+              <div class="state" data-st="think"><span class="led b"></span><small>THINK</small></div>
+              <div class="state" data-st="error"><span class="led r"></span><small>ERR</small></div>
+            </div>
+            <div class="knob-cluster">
+              <div class="knob-wrap"><div class="knob" data-knob="gain" data-val="0.62" style="--knc:var(--teal);--ks:48px"></div><small>GAIN</small></div>
+              <div class="knob-wrap"><div class="knob" data-knob="focus" data-val="0.4" style="--knc:var(--yellow);--ks:48px"></div><small>FOCUS</small></div>
+            </div>
+            <div class="jk"><span class="jack" data-jack="sync"></span><small>SYNC</small></div>
+            <div class="jk"><span class="jack" data-jack="sout"></span><small>OUT</small></div>
+          </div>
+        </section>
+        <!-- ===== M03 SYSTEM ===== -->
+        <section class="panel" id="m-system">
+          <div class="brush"></div>
+          <div class="mod-head"><span class="silk">System</span><span class="ln"></span><span class="idx">M03</span></div>
+          <div class="meters">
+            <div class="meter" data-meter="cpu">
+              <div class="mlabel"><span class="silk">CPU</span><b data-val>32%</b></div>
+              <div class="bar" data-bar></div>
+            </div>
+            <div class="meter" data-meter="ram">
+              <div class="mlabel"><span class="silk">RAM</span><b data-val>58%</b></div>
+              <div class="bar" data-bar></div>
+            </div>
+            <div class="meter" data-meter="gpu">
+              <div class="mlabel"><span class="silk">GPU</span><b data-val>21%</b></div>
+              <div class="bar" data-bar></div>
+            </div>
+          </div>
+          <div class="sys-foot">
+            <div class="knob-wrap"><div class="knob" data-knob="trim" data-val="0.5" style="--knc:var(--blue);--ks:40px"></div><small>LOAD</small></div>
+            <div class="jk"><span class="jack" data-jack="sysin"></span><small>IN</small></div>
+            <div style="display:flex;gap:5px;align-items:center"><span class="led g on"></span><span class="led a on"></span><span class="led g on"></span></div>
+          </div>
+        </section>
+      </div>
+      <div class="row rB">
+        <!-- ===== M04 WEATHER ===== -->
+        <section class="panel" id="m-weather">
+          <div class="brush"></div>
+          <div class="mod-head"><span class="silk">WX</span><span class="ln"></span><span class="idx">M04</span></div>
+          <div class="wx">
+            <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="#f2c14e" stroke-width="1.8" stroke-linecap="round" style="animation:sp 26s linear infinite">
+              <circle cx="12" cy="12" r="4.2" fill="rgba(242,193,78,.25)"/>
+              <path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/>
+            </svg>
+            <div class="temp">+18°</div>
+            <div class="cond">Ясно</div>
+            <div class="meta">Москва · ↓12°</div>
+          </div>
+        </section>
+        <!-- ===== M05 RATE ===== -->
+        <section class="panel" id="m-rate">
+          <div class="brush"></div>
+          <div class="mod-head"><span class="silk">Rate</span><span class="ln"></span><span class="idx">M05</span></div>
+          <div class="rate">
+            <div class="pair"><span class="silk">USD/EUR</span><span class="delta down">▼0.91%</span></div>
+            <div style="display:flex;align-items:baseline;gap:6px"><span class="big">0.90</span><span class="engrave" style="font-size:16px">€</span></div>
+            <svg class="spark" id="spark" viewBox="0 0 200 30" preserveAspectRatio="none"></svg>
+          </div>
+        </section>
+        <!-- ===== M06 PLAYER ===== -->
+        <section class="panel" id="m-player">
+          <div class="brush"></div>
+          <div class="mod-head"><span class="silk">Player</span><span class="ln"></span><span class="idx">M06</span></div>
+          <div class="player">
+            <div class="cover"><div class="disc"></div></div>
+            <div class="player-mid">
+              <div><div class="title">Midnight Drive</div><div class="artist">The Midnight</div></div>
+              <div class="scrub">
+                <span class="tt" id="t-cur">1:12</span>
+                <div class="track" id="track"><div class="rail2"></div><div class="fill" id="p-fill" style="width:32%"></div><div class="cap" id="p-cap" style="left:32%"></div></div>
+                <span class="tt" id="t-dur">3:48</span>
+              </div>
+              <div class="transport-btns">
+                <div class="pad tp" id="pp-prev" title="Назад" style="justify-content:center;font-size:14px">⏮</div>
+                <div class="pad tp play" id="pp-play" title="Пуск/пауза" style="justify-content:center;font-size:16px">⏸</div>
+                <div class="pad tp" id="pp-next" title="Вперёд" style="justify-content:center;font-size:14px">⏭</div>
+                <span class="spacer"></span>
+                <div class="jk"><span class="jack" data-jack="pout"></span><small>OUT</small></div>
+              </div>
+            </div>
+          </div>
+        </section>
+        <!-- ===== M07 QUICK ACTIONS ===== -->
+        <section class="panel" id="m-quick">
+          <div class="brush"></div>
+          <div class="mod-head"><span class="silk">Quick</span><span class="ln"></span><span class="idx">M07</span></div>
+          <div class="quick-grid">
+            <div class="pad qpad" tabindex="0" role="button">
+              <svg viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6h.01M4 12h.01M4 18h.01"/></svg>
+              <span>Задачи</span><span class="badge">3</span>
+            </div>
+            <div class="pad qpad" tabindex="0" role="button">
+              <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+              <span>Календарь</span>
+            </div>
+            <div class="pad qpad" tabindex="0" role="button">
+              <svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+              <span>Уведомления</span><span class="led a on"></span>
+            </div>
+            <div class="pad qpad" tabindex="0" role="button">
+              <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h4"/></svg>
+              <span>Заметки</span>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="row rC">
+        <!-- ===== M08 LOG / SEQ (диалог) ===== -->
+        <section class="panel" id="m-log">
+          <div class="brush"></div>
+          <div class="mod-head"><span class="silk">Log // Seq</span><span class="ln"></span>
+            <div class="jk" style="flex-direction:row;gap:5px;align-items:center"><span class="jack" data-jack="trig" style="width:14px;height:14px"></span><small>TRIG</small></div>
+            <span class="idx">M08</span></div>
+          <div class="log-screen">
+            <div class="log-scroll" id="log">
+              <div class="msg you"><span class="step">01</span><div class="who">Вы</div><div class="body"><span class="time">09:24</span><div class="text">Поставь таймер на 10 минут и включи фокус-плейлист.</div></div></div>
+              <div class="msg ayr"><span class="step">02</span><div class="who">Айрис</div><div class="body"><span class="time">09:24</span><div class="text">Готово. Таймер на 10 минут пошёл, включаю «Midnight Drive».</div></div></div>
+              <div class="msg you"><span class="step">03</span><div class="who">Вы</div><div class="body"><span class="time">09:25</span><div class="text">Какая сегодня погода?</div></div></div>
+              <div class="msg ayr"><span class="step">04</span><div class="who">Айрис</div><div class="body"><span class="time">09:25</span><div class="text">Сейчас +18°, ясно. Ветер слабый — отличный день для прогулки.</div></div></div>
+            </div>
+          </div>
+        </section>
+        <!-- ===== M09 TRANSPORT ===== -->
+        <section class="panel" id="m-transport">
+          <div class="brush"></div>
+          <div class="mod-head"><span class="silk">Transport</span><span class="ln"></span><span class="idx">M09</span></div>
+          <div class="tp-rows">
+            <div class="tp-main">
+              <div class="tbtn chat" id="btn-chat" tabindex="0" role="button">
+                <svg viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-11.9 7.6L3 21l1.9-6.1A8.4 8.4 0 1 1 21 11.5z"/></svg>Чат</div>
+              <div class="tbtn run" id="btn-run" tabindex="0" role="button">
+                <svg viewBox="0 0 24 24"><path d="M12 2v9"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></svg>Запуск</div>
+            </div>
+            <div class="tp-master">
+              <div class="tp-wake"><div class="toggle on" id="wake" tabindex="0" role="switch" aria-checked="true"><div class="lv"></div></div><small>Активация · «Айрис»</small></div>
+              <div class="knob-wrap"><div class="knob" data-knob="master" data-val="0.7" style="--knc:var(--magenta);--ks:40px"></div><small>MASTER</small></div>
+            </div>
+            <div class="tp-master" style="margin-top:1px">
+              <div class="jk" style="flex-direction:row;gap:6px;align-items:center"><span class="jack" data-jack="gate"></span><small class="engrave" style="font-size:9px">GATE OUT</small></div>
+              <div style="display:flex;gap:5px;align-items:center"><span class="led g on"></span><small class="engrave" style="font-size:9px">ГОТОВ</small></div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="row rD">
+        <!-- ===== M10 UPLINK (ввод) ===== -->
+        <section class="panel" id="m-uplink">
+          <div class="brush"></div>
+          <div class="panel-in">
+            <div class="mode-sw" id="mode" tabindex="0" role="button" title="Режим: команда / код">
+              <div class="glyph">&lt;/&gt;</div>
+              <small id="mode-cap">КОМАНДА</small>
+            </div>
+            <div class="jk"><span class="jack" data-jack="uout"></span><small>CV</small></div>
+            <div class="field">
+              <input id="input" type="text" placeholder="Чем могу помочь сегодня?" autocomplete="off" aria-label="Поле ввода">
+              <div class="round mic" id="mic" title="Микрофон" tabindex="0" role="button" aria-label="Микрофон">
+                <svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4"/></svg>
+              </div>
+            </div>
+            <div class="round send" id="send" title="Отправить" tabindex="0" role="button" aria-label="Отправить">
+              <svg viewBox="0 0 24 24"><path d="M12 20V5M5 12l7-7 7 7"/></svg>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+const $=(s,c)=>(c||document).querySelector(s);
+const $$=(s,c)=>[...(c||document).querySelectorAll(s)];
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+const S={state:'idle',gain:0.62,level:0.2};
+window.__S=S;
+// Винты во все панели
+$$('.panel').forEach(p=>{['tl','tr','bl','br'].forEach(pos=>{
+  const s=document.createElement('i'); s.className='screw '+pos;
+  s.style.setProperty('--sr',(Math.random()*60-30).toFixed(1)+'deg'); p.appendChild(s);
+});});
+// Ручки: кольцо тиков + указатель + перетаскивание/клавиатура
+const knobRot=v=>-135+clamp(v,0,1)*270;
+$$('.knob').forEach(k=>{
+  let val=parseFloat(k.dataset.val||'0.5');
+  const ns='http://www.w3.org/2000/svg';
+  const svg=document.createElementNS(ns,'svg'); svg.setAttribute('class','ticks'); svg.setAttribute('viewBox','0 0 100 100');
+  for(let i=0;i<=10;i++){const a=(-135+i*27)*Math.PI/180;
+    const ln=document.createElementNS(ns,'line');
+    ln.setAttribute('x1',(50+Math.cos(a)*46).toFixed(1));ln.setAttribute('y1',(50+Math.sin(a)*46).toFixed(1));
+    ln.setAttribute('x2',(50+Math.cos(a)*39).toFixed(1));ln.setAttribute('y2',(50+Math.sin(a)*39).toFixed(1));
+    ln.setAttribute('stroke',i%5===0?'rgba(231,227,218,.75)':'rgba(154,160,166,.4)');
+    ln.setAttribute('stroke-width',i%5===0?'2.2':'1.2');ln.setAttribute('stroke-linecap','round');svg.appendChild(ln);}
+  const body=document.createElement('div');body.className='body';
+  const dial=document.createElement('div');dial.className='dial';
+  k.append(svg,body,dial);
+  const apply=()=>{k.style.setProperty('--rot',knobRot(val).toFixed(1)+'deg');k.setAttribute('aria-valuenow',Math.round(val*100));if(k.dataset.knob==='gain')S.gain=val;};
+  apply();
+  let drag=false,sy=0,sv=0;
+  k.addEventListener('pointerdown',e=>{drag=true;sy=e.clientY;sv=val;k.setPointerCapture(e.pointerId);e.preventDefault();});
+  k.addEventListener('pointermove',e=>{if(!drag)return;val=clamp(sv+(sy-e.clientY)/160,0,1);k.dataset.val=val.toFixed(3);apply();});
+  k.addEventListener('pointerup',()=>{drag=false;});
+  k.addEventListener('pointercancel',()=>{drag=false;});
+  k.setAttribute('tabindex','0');k.setAttribute('role','slider');k.setAttribute('aria-valuemin','0');k.setAttribute('aria-valuemax','100');
+  k.addEventListener('keydown',e=>{if(['ArrowUp','ArrowRight'].includes(e.key)){val=clamp(val+0.05,0,1);apply();e.preventDefault();}else if(['ArrowDown','ArrowLeft'].includes(e.key)){val=clamp(val-0.05,0,1);apply();e.preventDefault();}});
+});
+// Часы HH:mm + мигающая секунда + дата
+const clockEl=$('#clock'),ccEl=$('.cc',clockEl),dateEl=$('#date');
+const months=['янв','фев','мар','апр','мая','июн','июл','авг','сен','окт','ноя','дек'];
+const wd=['ВС','ПН','ВТ','СР','ЧТ','ПТ','СБ'];
+function tick(){const d=new Date();
+  clockEl.childNodes[0].nodeValue=String(d.getHours()).padStart(2,'0');
+  clockEl.childNodes[2].nodeValue=String(d.getMinutes()).padStart(2,'0');
+  ccEl.style.opacity=d.getSeconds()%2?'0.3':'1';
+  dateEl.textContent=wd[d.getDay()]+' '+d.getDate()+' '+months[d.getMonth()];}
+tick(); setInterval(tick,1000);
+// LED-метры CPU / RAM / GPU
+const base={cpu:0.32,ram:0.58,gpu:0.21};
+const meters=$$('.meter').map(m=>{const bar=$('[data-bar]',m),N=22;
+  for(let i=0;i<N;i++){const s=document.createElement('span');s.className='seg';bar.appendChild(s);}
+  const key=m.dataset.meter;return{segs:$$('.seg',bar),val:$('[data-val]',m),N,key,cur:base[key],tgt:base[key]};});
+function paintBar(mt){const lit=Math.round(mt.cur*mt.N);
+  mt.segs.forEach((s,i)=>{s.classList.toggle('on',i<lit);
+    s.classList.toggle('mid',i>=mt.N*0.6&&i<mt.N*0.85);s.classList.toggle('hi',i>=mt.N*0.85);});
+  mt.val.textContent=Math.round(mt.cur*100)+'%';}
+function stepMeters(){meters.forEach(mt=>{
+  if(Math.random()<0.55)mt.tgt=clamp(base[mt.key]+(Math.random()*0.3-0.14),0.05,0.97);
+  mt.cur+=(mt.tgt-mt.cur)*0.28;paintBar(mt);});}
+meters.forEach(paintBar); setInterval(stepMeters,900);
+// Спарклайн курса (RATE)
+(function(){const sp=$('#spark');if(!sp)return;const ns='http://www.w3.org/2000/svg';
+  const pts=[];for(let i=0;i<40;i++)pts.push(16+Math.sin(i*0.55)*5-i*0.04+Math.random()*4);
+  const d=pts.map((y,i)=>(i?'L':'M')+(i/39*200).toFixed(1)+' '+y.toFixed(1)).join(' ');
+  const area=document.createElementNS(ns,'path');area.setAttribute('d',d+' L200 30 L0 30 Z');area.setAttribute('fill','rgba(229,83,60,.12)');
+  const path=document.createElementNS(ns,'path');path.setAttribute('d',d);path.setAttribute('fill','none');
+  path.setAttribute('stroke','#e5533c');path.setAttribute('stroke-width','1.6');path.setAttribute('stroke-linejoin','round');
+  sp.append(area,path);})();
+// VU-метр: колонка сегментов (зелёный → янтарь → красный)
+const vuEl=$('#vu'),VN=18,vuSegs=[];
+for(let i=0;i<VN;i++){const s=document.createElement('div');s.className='seg';
+  s.style.setProperty('--sc', i>VN*0.82?'var(--led-red)':(i>VN*0.6?'var(--amber)':'var(--led-green)'));
+  vuEl.appendChild(s);vuSegs.push(s);}
+// Осциллограф состояния (canvas 2D, с послесвечением-glow)
+const cvs=$('#scope'),ctx=cvs.getContext('2d');
+let CW=0,CH=0;const DPR=Math.min(2,window.devicePixelRatio||1);
+function sizeScope(){const r=cvs.getBoundingClientRect();CW=r.width;CH=r.height;
+  cvs.width=Math.max(1,Math.round(CW*DPR));cvs.height=Math.max(1,Math.round(CH*DPR));
+  ctx.setTransform(DPR,0,0,DPR,0,0);}
+sizeScope();
+let t=0,aEnv=0.22,lvl=0,_last=0,_lit=-1,_run=true;
+const ampFor=s=>s==='listen'?0.6:s==='think'?0.32:s==='error'?0.07:0.22;
+function draw(ts){
+  requestAnimationFrame(draw);
+  if(!_run||(ts-_last)<33)return; _last=ts;
+  t+=0.033;
+  const target=ampFor(S.state)*(0.55+S.gain*0.8);
+  aEnv+=(target-aEnv)*0.06;
+  ctx.clearRect(0,0,CW,CH);
+  ctx.lineWidth=1;ctx.strokeStyle='rgba(63,191,166,.09)';
+  for(let x=0;x<=CW+1;x+=CW/10){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,CH);ctx.stroke();}
+  for(let y=0;y<=CH+1;y+=CH/6){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(CW,y);ctx.stroke();}
+  ctx.strokeStyle='rgba(63,191,166,.2)';ctx.beginPath();ctx.moveTo(0,CH/2);ctx.lineTo(CW,CH/2);ctx.stroke();
+  const col=S.state==='error'?'#e5533c':(S.state==='listen'?'#ffd36b':'#51e05a');
+  ctx.lineWidth=2;ctx.strokeStyle=col;ctx.shadowBlur=8;ctx.shadowColor=col;ctx.beginPath();
+  let peak=0;const sweep=(t*0.25)%1;
+  for(let i=0;i<=CW;i+=2){const p=i/CW;let y;
+    if(S.state==='think'){const env=Math.exp(-Math.pow(p-sweep,2)*55);y=Math.sin(p*42+t*7)*env*1.1;}
+    else if(S.state==='error'){y=(Math.random()*2-1)*(Math.random()<0.07?1:0.04);}
+    else{y=Math.sin(p*12+t*2)*0.6+Math.sin(p*27-t*3)*0.28+Math.sin(p*5+t*1.1)*0.4;
+      if(S.state==='listen')y+=(Math.random()*2-1)*0.45;}
+    y*=aEnv;peak=Math.max(peak,Math.abs(y));
+    const yy=CH/2-y*CH*0.42;if(i===0)ctx.moveTo(i,yy);else ctx.lineTo(i,yy);}
+  ctx.stroke();ctx.shadowBlur=0;
+  if(S.state!=='error'){ctx.fillStyle='rgba(200,255,245,.18)';ctx.fillRect(sweep*CW,0,1.5,CH);}
+  lvl+=(clamp(peak*1.5,0,1)-lvl)*0.2;S.level=lvl;
+  const lit=Math.round(lvl*VN);
+  if(lit!==_lit){_lit=lit;vuSegs.forEach((s,i)=>s.classList.toggle('on',i<lit));}
+}
+requestAnimationFrame(draw);
+document.addEventListener('visibilitychange',()=>{_run=!document.hidden;_last=0;});
+// Патч-кабели: изогнутые цветные провода между джеками (с провисанием)
+const cablesSvg=$('#cables'),bodyEl=$('.body');
+const PAIRS=[['clk','sync','#f2c14e'],['sout','sysin','#3fbfa6'],['uout','trig','#4a8fe7'],['pout','gate','#c85cc8'],['gate','trig','#e5533c']];
+const used=new Set();PAIRS.forEach(p=>{used.add(p[0]);used.add(p[1]);});
+used.forEach(id=>{const el=document.querySelector('.jack[data-jack="'+id+'"]');if(el)el.classList.add('lit');});
+function jc(id){const el=document.querySelector('.jack[data-jack="'+id+'"]');if(!el)return null;
+  const r=el.getBoundingClientRect(),b=bodyEl.getBoundingClientRect();
+  return{x:r.left-b.left+r.width/2,y:r.top-b.top+r.height/2};}
+function routeCables(){
+  while(cablesSvg.firstChild)cablesSvg.removeChild(cablesSvg.firstChild);
+  const ns='http://www.w3.org/2000/svg';
+  PAIRS.forEach(([a,b2,c])=>{const p1=jc(a),p2=jc(b2);if(!p1||!p2)return;
+    const dx=p2.x-p1.x,sag=Math.max(24,Math.hypot(dx,p2.y-p1.y)*0.26),my=Math.max(p1.y,p2.y)+sag;
+    const d='M'+p1.x+' '+p1.y+' C'+(p1.x+dx*0.33)+' '+my+' '+(p1.x+dx*0.66)+' '+my+' '+p2.x+' '+p2.y;
+    const mk=(st,w,o)=>{const pt=document.createElementNS(ns,'path');pt.setAttribute('d',d);pt.setAttribute('stroke',st);pt.setAttribute('stroke-width',w);if(o)pt.setAttribute('transform','translate(0,1.5)');cablesSvg.appendChild(pt);};
+    mk('rgba(0,0,0,.45)',6,1);mk(c,3.4,0);mk('rgba(255,255,255,.28)',1,0);
+    [p1,p2].forEach(p=>{const cc=document.createElementNS(ns,'circle');cc.setAttribute('cx',p.x);cc.setAttribute('cy',p.y);cc.setAttribute('r',4.5);cc.setAttribute('fill',c);cablesSvg.appendChild(cc);});
+  });
+}
+routeCables();
+let _rz;window.addEventListener('resize',()=>{clearTimeout(_rz);_rz=setTimeout(()=>{sizeScope();routeCables();},150);});
+// Статус ассистента + состояние
+const statusTexts={idle:'Привет, чем помочь?',listen:'Слушаю…',think:'Думаю…',error:'Что-то пошло не так'};
+const statusEl=$('#status'),statusText=$('#status-text'),scopeMode=$('#scope-mode'),stateEls=$$('#states .state');
+function setStatus(st){S.state=st;statusEl.className='status '+(st==='idle'?'':st);
+  statusText.textContent=statusTexts[st]||statusTexts.idle;
+  scopeMode.textContent={idle:'IDLE',listen:'LISTEN',think:'THINK',error:'ERROR'}[st]||'IDLE';
+  stateEls.forEach(e=>{const on=e.dataset.st===st;e.classList.toggle('act',on);$('.led',e).classList.toggle('on',on);});}
+setStatus('idle');
+// Лог диалога
+const log=$('#log');let step=4;
+const hhmm=()=>{const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');};
+function addMsg(role,text){step++;const m=document.createElement('div');m.className='msg '+(role==='you'?'you':'ayr');
+  m.innerHTML='<span class="step">'+String(step).padStart(2,'0')+'</span><div class="who">'+(role==='you'?'Вы':'Айрис')+'</div><div class="body"><span class="time">'+hhmm()+'</span><div class="text"></div></div>';
+  m.querySelector('.text').textContent=text;log.appendChild(m);log.scrollTop=log.scrollHeight;return m;}
+const replies=['Секунду, уточню и вернусь с ответом.','Готово — выполнила. Что-нибудь ещё?','Поняла, включаю.','Нашла пару вариантов. Показать?'];
+function respond(){setStatus('think');
+  setTimeout(()=>{addMsg('ayr',replies[Math.floor(Math.random()*replies.length)]);setStatus('idle');},1100);}
+const input=$('#input');
+function send(){const v=input.value.trim();if(!v)return;addMsg('you',v);input.value='';respond();}
+$('#send').addEventListener('click',send);
+input.addEventListener('keydown',e=>{if(e.key==='Enter')send();});
+input.addEventListener('focus',()=>{if(S.state==='idle')setStatus('idle');});
+// Микрофон
+const mic=$('#mic');let listening=false;
+mic.addEventListener('click',()=>{listening=!listening;mic.classList.toggle('on',listening);setStatus(listening?'listen':'idle');});
+// Режим команда/код
+const mode=$('#mode'),modeCap=$('#mode-cap');let codeMode=false;
+mode.addEventListener('click',()=>{codeMode=!codeMode;mode.classList.toggle('code',codeMode);
+  modeCap.textContent=codeMode?'КОД':'КОМАНДА';
+  input.placeholder=codeMode?'Вставьте код или команду…':'Чем могу помочь сегодня?';});
+// Индикатор офлайна (по умолчанию выключен)
+const offline=$('#offline');
+function setOffline(v){offline.classList.toggle('active',!!v);$('.led',offline).classList.toggle('on',!!v);}
+// Тумблер активации (wake word)
+const wake=$('#wake');
+wake.addEventListener('click',()=>{const on=wake.classList.toggle('on');wake.setAttribute('aria-checked',String(on));});
+// Профиль (клик — следующий)
+const profiles=['По умолчанию','Работа','Дом','Игры'];let pi=0;const pname=$('#profile-name');
+$('#profile').addEventListener('click',()=>{pi=(pi+1)%profiles.length;pname.textContent=profiles[pi];});
+// Вспышка статуса для кнопок
+let flashTimer;function flash(msg){statusText.textContent=msg;clearTimeout(flashTimer);flashTimer=setTimeout(()=>setStatus(S.state),1500);}
+$('#btn-settings').addEventListener('click',()=>flash('Открываю настройки…'));
+$('#btn-chat').addEventListener('click',()=>{input.focus();flash('Чат активен');});
+$('#btn-run').addEventListener('click',()=>flash('Запуск Айрис…'));
+// Кнопки окна
+$('#win-min').addEventListener('click',()=>{const r=$('#rack');r.style.transition='transform .25s,opacity .25s';r.style.transform='scale(.965)';r.style.opacity='.55';setTimeout(()=>{r.style.transform='';r.style.opacity='';},320);});
+$('#win-fs').addEventListener('click',()=>{try{if(!document.fullscreenElement)document.documentElement.requestFullscreen();else document.exitFullscreen();}catch(e){}});
+$('#win-close').addEventListener('click',()=>{const r=$('#rack');r.style.transition='transform .3s,opacity .3s';r.style.opacity='0';r.style.transform='scale(.97)';setTimeout(()=>{r.style.opacity='';r.style.transform='';},460);});
+// Мини-плеер
+const pfill=$('#p-fill'),pcap=$('#p-cap'),tcur=$('#t-cur'),track=$('#track'),ppPlay=$('#pp-play');
+let dur=228,pos=72,playing=true;
+const fmt=s=>{s=Math.max(0,Math.round(s));return Math.floor(s/60)+':'+String(s%60).padStart(2,'0');};
+function paintPlayer(){const pct=clamp(pos/dur,0,1)*100;pfill.style.width=pct+'%';pcap.style.left=pct+'%';tcur.textContent=fmt(pos);}
+paintPlayer();
+setInterval(()=>{if(playing){pos+=1;if(pos>dur)pos=0;paintPlayer();}},1000);
+ppPlay.addEventListener('click',()=>{playing=!playing;ppPlay.textContent=playing?'⏸':'▶';});
+$('#pp-prev').addEventListener('click',()=>{pos=0;paintPlayer();});
+$('#pp-next').addEventListener('click',()=>{pos=Math.max(0,dur-4);paintPlayer();});
+track.addEventListener('click',e=>{const r=track.getBoundingClientRect();pos=clamp((e.clientX-r.left)/r.width,0,1)*dur;paintPlayer();});
+// Доступность: Enter/Space для кнопочных элементов
+$$('[role="button"],[role="switch"]').forEach(el=>el.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();el.click();}}));
+// Демо-API (из консоли): ayris.setStatus('listen'|'think'|'error'|'idle'); ayris.setOffline(true)
+window.ayris={setStatus,setOffline,addMsg};
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+<div class="sptitle">ИИ / LLM</div>
+<div class="spsub">Распознавание фраз языковой моделью: режим, поставщик, ключи и модели, параметры генерации, память диалога, промпты и пробный запрос.</div>
+
+<div class="sgroup"><div class="gh">Режим распознавания</div>
+  <div class="srow col"><div class="lbl"><div class="t">Как Айрис понимает фразы</div><div class="d">От режима зависит, участвует ли языковая модель.</div></div><div class="ctl"><div class="seg"><button>Команды</button><button class="active">Гибрид</button><button>Только ИИ</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Только команды</div><div class="d">Айрис выполняет только заготовленные команды и честно сообщает, когда фразу не удалось сопоставить. Модель не используется.</div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Гибрид</div><div class="d">Сначала подбирается команда из библиотеки; если ничего не совпало, фраза уходит модели.</div></div><div class="ctl"><span class="badge2 ok">выбрано</span></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Только ИИ</div><div class="d">Любая фраза уходит модели; ответ озвучивается.</div></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>В режиме «Только ИИ» заготовленные команды не срабатывают напрямую — всё решает модель.</div>
+</div>
+
+<div class="sgroup"><div class="gh">Языковая модель</div>
+  <div class="srow"><div class="lbl"><div class="t">Поставщик</div><div class="d">Облачный сервис или локальный движок. Ключи облака хранятся в диспетчере Windows.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Ollama (локально)</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Ollama (локально)</button><button>LM Studio (локально)</button><button>llama.cpp (в процессе)</button><button>OpenAI</button><button>Anthropic · Claude</button><button>OpenRouter</button><button>DeepSeek</button><button>GigaChat · Сбер</button><button>YandexGPT</button><button>Свой OpenAI-совместимый</button></div></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Адрес сервера</div><div class="d">Локальный сервер (Ollama, LM Studio) или базовый URL OpenAI-совместимого API.</div></div><div class="ctl"><input class="ti full" value="http://127.0.0.1:11434" placeholder="http://127.0.0.1:11434"></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Модель</div><div class="d">Название модели у поставщика. Проверка ниже подтянет список прямо с сервера.</div></div><div class="ctl"><input class="ti full" value="qwen2.5:7b-instruct" placeholder="qwen2.5:7b-instruct"></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Модели с сервера</div><div class="d">Выберите из того, что вернул сервис при проверке.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>qwen2.5:7b-instruct</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">qwen2.5:7b-instruct</button><button>llama3.2:3b</button><button>gemma2:2b</button><button>phi3:mini</button></div></div></div></div>
+</div>
+<div class="sgroup"><div class="gh">Ключ облачного сервиса</div>
+  <div class="srow"><div class="lbl"><div class="t">Имя записи</div><div class="d">Латиница, например openai. Ключ хранится в диспетчере учётных данных Windows, а не в config.toml.</div></div><div class="ctl"><input class="ti" value="openai" placeholder="openai"></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Ключ</div><div class="d">Вставьте ключ — он сохранится в хранилище Windows и больше не показывается.</div></div><div class="ctl"><input class="ti mono full" type="password" placeholder="Вставьте ключ"></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Запись ключа</div><div class="d">Сохраните ключ в хранилище Windows или удалите существующий.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Сохранить</button><button class="btn">Удалить</button><span class="badge2 ok">Запись «openai»: ключ сохранён.</span></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Проверка</div>
+  <div class="srow"><div class="lbl"><div class="t">Проверка связи</div><div class="d">Проверяет ключ или соединение и подтягивает список моделей. Сеть — в фоне.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Проверить ключ</button><span class="badge2 ok">Проверка прошла успешно.</span></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Рекомендованные модели</div>
+  <div class="srow"><div class="lbl"><div class="t">Qwen2.5 1.5B Instruct</div><div class="d">≈ 0.9 ГБ · шустрая, для команд и коротких ответов</div></div><div class="ctl"><div class="sbtns"><span class="badge2 ok">влезет</span><button class="btn sm">Загрузить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Gemma 2 2B</div><div class="d">≈ 1.6 ГБ · хороший баланс для слабого железа</div></div><div class="ctl"><div class="sbtns"><span class="badge2 ok">влезет</span><button class="btn sm">Загрузить</button></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Qwen2.5 7B Instruct</div><div class="d">≈ 4.7 ГБ · умнее, но требовательна к памяти · впритык</div></div><div class="ctl"><div class="sbtns" style="width:100%"><div class="pbar"><i style="width:62%"></i></div><span class="badge2">Загружаю «qwen2.5:7b»… 62%</span><button class="btn sm">Отмена</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Gemma 2 9B</div><div class="d">≈ 5.4 ГБ · самая способная из списка</div></div><div class="ctl"><div class="sbtns"><span class="badge2">не влезет</span><button class="btn sm">Загрузить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Статус каталога</div><div class="d">Загрузка по имени доступна только для Ollama.</div></div><div class="ctl"><span class="badge2">Загрузка доступна только для Ollama.</span></div></div>
+</div>
+
+<div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Изменения вступят в силу после перезапуска: языковая модель.<button class="btn sm">Перезапустить</button></div>
+<div class="sgroup"><div class="gh">Параметры генерации</div>
+  <div class="srow"><div class="lbl"><div class="t">Температура</div><div class="d">Разброс ответов: 0 — предсказуемо, 200 — максимально разнообразно (шкала 0–2 ×100).</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="200" value="70" data-unit=""><span class="sval">70</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Лимит ответа</div><div class="d">Максимум токенов в ответе модели. Больше — длиннее и дороже.</div></div><div class="ctl"><div class="slider"><input type="range" min="64" max="32768" value="1024" data-unit=" ток."><span class="sval">1024 ток.</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Таймаут</div><div class="d">Сколько секунд ждать ответ модели, прежде чем прервать запрос.</div></div><div class="ctl"><div class="slider"><input type="range" min="2" max="300" value="30" data-unit=" с"><span class="sval">30 с</span></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">История диалога</div>
+  <div class="srow"><div class="lbl"><div class="t">Сколько помнить</div><div class="d">Сколько последних реплик держать в контексте. 0 — не помнить ничего.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="100" value="10" data-unit=" реплик"><span class="sval">10 реплик</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Когда сворачивать</div><div class="d">После скольких реплик сворачивать историю в краткий пересказ. 0 — никогда; иначе не меньше длины истории.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="500" value="30" data-unit=" реплик"><span class="sval">30 реплик</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Сброс истории</div><div class="d">Забыть текущий разговор с моделью. На заготовленные команды не влияет.</div></div><div class="ctl"><button class="btn danger">Очистить историю диалога</button></div></div>
+</div>
+<div class="sgroup"><div class="gh">Промпт свободного разговора</div>
+  <div class="srow col"><div class="lbl"><div class="t">Текст промпта</div><div class="d">Ваша «персона» для чата. Ниже — итоговый промпт с шаблоном поведения.</div></div><div class="ctl"><textarea class="ta" placeholder="Опишите характер и манеру Айрис…">Ты — Айрис, доброжелательный голосовой помощник. Отвечай кратко, по-русски, тёплым живым тоном. Не выдумывай факты; если не знаешь — честно скажи.</textarea></div></div>
+  <div class="sbtns"><span class="badge2">≈ 48 токенов</span><button class="btn">Сбросить к дефолту</button></div>
+  <div class="srow col"><div class="lbl"><div class="t">Итоговый промпт для модели</div></div><div class="ctl"><textarea class="ta ro" readonly>Ты — Айрис, доброжелательный голосовой помощник. Отвечай кратко, по-русски, тёплым живым тоном. Не выдумывай факты; если не знаешь — честно скажи.
+
+[автоматически добавляются: текущее время, профиль пользователя и правила озвучки]</textarea></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Промпт разбора команд</div>
+  <div class="srow col"><div class="lbl"><div class="t">Текст промпта</div><div class="d">Инструкция для распознавания команд. В предпросмотр подставляется список команд.</div></div><div class="ctl"><textarea class="ta" placeholder="Инструкция для разбора команд…">Определи, какой команде из списка соответствует фраза пользователя. Верни только идентификатор команды и параметры. Если совпадения нет — верни «нет».</textarea></div></div>
+  <div class="sbtns"><span class="badge2">≈ 36 токенов</span><button class="btn">Сбросить к дефолту</button></div>
+  <div class="srow col"><div class="lbl"><div class="t">Итоговый промпт для модели</div></div><div class="ctl"><textarea class="ta ro" readonly>Определи, какой команде из списка соответствует фраза пользователя. Верни только идентификатор команды и параметры. Если совпадения нет — верни «нет».
+
+Доступные команды:
+— «погода» · узнать погоду
+— «таймер» · поставить таймер на N минут
+— «музыка» · включить или выключить музыку</textarea></div></div>
+</div>
+<div class="sgroup"><div class="gh">Спросить у модели</div>
+  <div class="srow col"><div class="lbl"><div class="t">Вопрос модели</div><div class="d">Разовый запрос с текущими настройками: ответ, время и токены. Историю диалога не затрагивает.</div></div><div class="ctl"><input class="ti full" placeholder="Спросите модель, чтобы проверить настройки…"></div></div>
+  <div class="sbtns"><button class="btn primary">Спросить</button></div>
+  <div class="srow col"><div class="lbl"><div class="t">Ответ модели</div></div><div class="ctl"><textarea class="ta ro" readonly placeholder="Ответ появится здесь.">Привет! Я Айрис. Готова помочь — просто спросите.</textarea></div></div>
+  <div class="sbtns"><span class="badge2 ok">первый токен 0.4 с · всего 1.8 с · ≈120 токенов</span></div>
+</div>

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ru"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>AYRIS</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --background:#16131F;--surface:#1C1830;--surface-hi:#29223C;--border:#2E2742;
+  --accent:#9B6DFF;--accent-hover:#B092FF;--on-accent:#140D22;--text:#ECE7F6;--text-2:#C3BAD9;--muted:#948AAC;
+  --glass:rgba(31,26,52,0.55);--glass-hi:rgba(58,48,86,0.42);
+  --glass-line:rgba(255,255,255,0.10);--glass-line-soft:rgba(255,255,255,0.055);
+  --accent-glow:rgba(155,109,255,0.45);
+  --r-lg:20px;--r-xl:26px;--sp-md:12px;--sp-lg:16px;--sp-xl:24px;--ctl:36px;
+  --font:"Inter","Segoe UI",Arial,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{height:100%;}
+body{font-family:var(--font);color:var(--text);overflow:hidden;
+  background:
+    radial-gradient(1100px 820px at 82% 16%, rgba(155,109,255,0.22), transparent 58%),
+    radial-gradient(900px 760px at 96% 92%, rgba(82,168,240,0.15), transparent 55%),
+    radial-gradient(760px 680px at 46% 74%, rgba(120,84,220,0.12), transparent 60%),
+    linear-gradient(135deg,#14111d 0%,#17131f 46%,#110d19 100%);}
+/* плавающие световые пятна — самый дальний слой; сильнее размыты (depth-of-field) */
+body::before,body::after{content:"";position:fixed;border-radius:50%;filter:blur(96px);z-index:0;pointer-events:none;}
+body::before{width:500px;height:500px;left:28%;top:-180px;
+  background:radial-gradient(circle,rgba(155,109,255,0.30),transparent 70%);animation:drift1 19s ease-in-out infinite;}
+body::after{width:600px;height:600px;right:-220px;bottom:-200px;
+  background:radial-gradient(circle,rgba(82,168,240,0.22),transparent 70%);animation:drift2 23s ease-in-out infinite;}
+@keyframes drift1{0%,100%{transform:translate(0,0);}50%{transform:translate(80px,60px);}}
+@keyframes drift2{0%,100%{transform:translate(0,0);}50%{transform:translate(-90px,-50px);}}
+
+/* тень-опора под окном: статичная, отрывает плиту от фона (глубина, без парения) */
+.slab-shadow{position:fixed;left:9%;right:9%;top:14%;bottom:7%;z-index:0;pointer-events:none;
+  border-radius:40px;filter:blur(64px);opacity:.8;
+  background:radial-gradient(60% 55% at 50% 60%,rgba(0,0,0,0.5),transparent 72%);}
+/* передняя рамка-виньетка: центр «выступает», края уходят в тень → кадр глубже */
+.vignette{position:fixed;inset:0;z-index:4;pointer-events:none;
+  background:radial-gradient(130% 120% at 50% 42%,transparent 55%,rgba(10,7,18,0.42) 100%);}
+
+/* объём стекла без бликов-полос: мягкий свет сверху (выпуклость плиты) и
+   затемнение всех четырёх углов (ambient occlusion). Рисуется ПОД контентом —
+   текст и кнопки не затрагиваются, легибельность сохранена. */
+.app::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(125% 72% at 50% -12%,rgba(255,255,255,0.11),transparent 56%);
+  mix-blend-mode:screen;}
+.app::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(56% 46% at 0% 0%,rgba(0,0,0,0.26),transparent 62%),
+    radial-gradient(56% 46% at 100% 0%,rgba(0,0,0,0.24),transparent 62%),
+    radial-gradient(66% 56% at 0% 100%,rgba(0,0,0,0.34),transparent 64%),
+    radial-gradient(66% 56% at 100% 100%,rgba(0,0,0,0.34),transparent 64%);
+  mix-blend-mode:multiply;}
+
+/* передний план не в фокусе (depth-of-field): мягкие световые пятна «у камеры» —
+   отделяют ближний план от дальнего, кадр обретает третье измерение. */
+.fg-bokeh{position:fixed;inset:0;z-index:3;pointer-events:none;}
+.fg-bokeh::before,.fg-bokeh::after{content:"";position:absolute;border-radius:50%;filter:blur(34px);}
+.fg-bokeh::before{width:170px;height:170px;left:-56px;bottom:9%;
+  background:radial-gradient(circle,rgba(155,109,255,0.20),transparent 70%);}
+.fg-bokeh::after{width:120px;height:120px;left:16%;top:-52px;
+  background:radial-gradient(circle,rgba(82,168,240,0.15),transparent 70%);}
+
+/* микрозерно на стекле: гасит бандинг градиентов, добавляет тактильную поверхность */
+.grain{position:fixed;inset:0;z-index:3;pointer-events:none;opacity:.05;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='150' height='150'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+
+/* единое окно-стекло: толстая СТАТИЧНАЯ плита, стоит ровно. Глубина — слоями:
+   дальний размытый фон → тень-опора → фаска толщины → утопленные/поднятые зоны.
+   Ни наклона, ни парения. */
+.app{position:fixed;inset:16px;z-index:1;display:grid;grid-template-columns:56fr 44fr;
+  border-radius:var(--r-xl);overflow:hidden;isolation:isolate;
+  border:1px solid var(--glass-line);
+  background:linear-gradient(150deg,rgba(40,33,64,0.52),rgba(24,20,36,0.5) 60%,rgba(18,15,26,0.55));
+  backdrop-filter:blur(30px) saturate(150%);-webkit-backdrop-filter:blur(30px) saturate(150%);
+  box-shadow:
+    0 2px 6px rgba(0,0,0,0.26),
+    0 26px 60px -22px rgba(0,0,0,0.6),
+    0 70px 150px -55px rgba(0,0,0,0.8),
+    inset 0 1.5px 0 rgba(255,255,255,0.18),
+    inset 0 -1px 0 rgba(0,0,0,0.38),
+    inset 0 0 0 1px rgba(255,255,255,0.05),
+    inset 0 0 160px -40px rgba(155,109,255,0.14);}
+.app>*{position:relative;z-index:1;}
+
+/* ── Витрина со сферой ── */
+.showcase{position:relative;padding:var(--sp-xl);display:grid;grid-template-rows:auto 1fr auto;overflow:hidden;
+  box-shadow:inset 0 0 100px -34px rgba(0,0,0,0.6),inset 0 2px 0 rgba(255,255,255,0.05),inset -18px 0 44px -34px rgba(0,0,0,0.55);}
+.brand{position:relative;z-index:2;justify-self:start;display:flex;flex-direction:column;align-items:center;}
+.brand .word{font-size:28px;font-weight:700;letter-spacing:3px;color:var(--text);text-shadow:0 0 24px rgba(155,109,255,0.45);}
+.brand .clock{font-size:14px;font-weight:500;letter-spacing:2px;color:var(--text-2);margin-top:6px;text-shadow:0 0 10px rgba(155,109,255,0.7),0 0 22px rgba(155,109,255,0.4);}
+.stage{position:relative;margin:0 calc(var(--sp-xl)*-1);}
+.stage iframe{position:absolute;inset:0;width:100%;height:100%;border:0;}
+/* тёмный контактный след прямо под шаром (paint под iframe) — сфера обретает опору на полу витрины */
+.stage::before{content:"";position:absolute;left:50%;bottom:8%;width:46%;height:9%;transform:translateX(-50%);
+  background:radial-gradient(50% 100% at 50% 100%,rgba(0,0,0,0.5),transparent 70%);filter:blur(15px);pointer-events:none;}
+/* мягкое «сиденье» под сферой — отблеск на полу витрины, шар обретает опору */
+.stage::after{content:"";position:absolute;left:50%;bottom:9%;width:58%;height:20%;transform:translateX(-50%);
+  background:radial-gradient(50% 100% at 50% 100%,rgba(120,150,240,0.16),transparent 72%);filter:blur(20px);pointer-events:none;}
+.sc-foot{display:flex;align-items:center;position:relative;z-index:2;}
+.sc-foot .cap{flex:1;text-align:center;font-size:12px;letter-spacing:4px;color:var(--muted);}
+.ghost{width:36px;height:36px;display:grid;place-items:center;border:0;background:transparent;color:var(--muted);font-size:20px;border-radius:12px;cursor:pointer;transition:.2s;}
+.ghost:hover{background:rgba(255,255,255,0.06);color:var(--text-2);}
+.foot-spacer{width:36px;height:36px;}
+
+/* ── Диалог: та же плоскость стекла, лёгкий тон; шов-грань отделяет её от витрины ── */
+.dialog{position:relative;padding:var(--sp-xl);display:grid;grid-template-rows:auto 1fr auto;gap:var(--sp-md);min-width:0;
+  background:linear-gradient(180deg,rgba(255,255,255,0.03),transparent 42%);
+  box-shadow:inset 1px 0 0 rgba(255,255,255,0.07),inset 16px 0 44px -30px rgba(0,0,0,0.6),inset 0 20px 44px -36px rgba(0,0,0,0.5);}
+.dialog::before{content:"";position:absolute;inset:0;pointer-events:none;
+  background:radial-gradient(120% 60% at 100% 0%,rgba(155,109,255,0.10),transparent 55%);}
+.dialog>*{position:relative;z-index:1;}
+.bar{display:flex;align-items:center;gap:8px;}
+.bar .tb{width:36px;height:36px;display:grid;place-items:center;border:0;background:transparent;color:var(--text-2);font-size:23px;border-radius:12px;cursor:pointer;transition:.2s;}
+.bar .tb:hover{background:rgba(255,255,255,0.07);color:var(--text);}
+.bar .tb.close{color:var(--accent);font-size:20px;}
+.bar .tb.close:hover{background:rgba(155,109,255,0.16);}
+.bar .grow{flex:1;}
+.prof{display:flex;flex-direction:column;align-items:center;gap:2px;}
+.profile{background:transparent;border:0;color:var(--text);font-weight:500;font-size:14px;cursor:pointer;transition:.2s;}
+.profile:hover{color:var(--accent-hover);}
+.offline{font-size:12px;color:var(--muted);}
+
+/* режимы — по центру, компактно */
+.modes{justify-self:center;display:inline-flex;gap:6px;}
+.modes .pill{flex:0 0 auto;padding:7px 16px;border:1px solid transparent;background:transparent;color:var(--text-2);border-radius:999px;font-size:12px;cursor:pointer;transition:.2s;}
+.modes .pill:hover{color:var(--text);background:rgba(255,255,255,0.05);}
+.modes .pill.active{color:var(--text);text-shadow:0 0 12px rgba(155,109,255,0.7),0 0 22px rgba(155,109,255,0.4);}
+.body{position:relative;display:grid;place-items:center;}
+/* мягкий световой «пьедестал» за приветствием — контент отделяется от плоскости */
+.body::before{content:"";position:absolute;width:300px;height:300px;border-radius:50%;pointer-events:none;
+  background:radial-gradient(circle,rgba(155,109,255,0.11),transparent 68%);filter:blur(26px);}
+.empty{position:relative;display:flex;flex-direction:column;align-items:center;gap:16px;}
+.avatar{width:56px;height:56px;filter:drop-shadow(0 6px 20px rgba(155,109,255,0.4));}
+.status{font-size:28px;font-weight:700;color:var(--text);text-align:center;text-shadow:0 2px 30px rgba(0,0,0,0.4);}
+.input{border-radius:20px;padding:6px 8px 10px;display:grid;gap:2px;
+  background:linear-gradient(160deg,rgba(58,48,86,0.5),rgba(28,24,48,0.42));
+  border:1px solid var(--glass-line);box-shadow:inset 0 1px 0 rgba(255,255,255,0.12),0 18px 40px -18px rgba(0,0,0,0.7),0 4px 10px -6px rgba(0,0,0,0.5);transition:.2s;}
+.input:focus-within{border-color:rgba(155,109,255,0.55);box-shadow:0 0 0 3px rgba(155,109,255,0.18),inset 0 1px 0 rgba(255,255,255,0.12);}
+.input .field{background:transparent;border:0;outline:0;color:var(--text);font-size:15px;font-family:var(--font);padding:6px;}
+.input .field::placeholder{color:var(--muted);}
+.input .ctrls{display:flex;align-items:center;gap:4px;}
+.input .ctrls .grow{flex:1;}
+.ig{width:36px;height:36px;display:grid;place-items:center;border:0;background:transparent;color:var(--text-2);border-radius:12px;cursor:pointer;transition:.2s;}
+.ig:hover{background:rgba(255,255,255,0.08);color:var(--text);}
+.ig.code{font-weight:600;}
+.send{width:36px;height:36px;display:grid;place-items:center;border:0;cursor:pointer;color:var(--on-accent);border-radius:12px;transition:.2s;
+  background:linear-gradient(180deg,var(--accent-hover),var(--accent));box-shadow:0 8px 20px -6px var(--accent-glow),inset 0 1px 0 rgba(255,255,255,0.35);}
+.send:hover{filter:brightness(1.08);}
+.send:active{transform:translateY(1px);}
+.icon{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round;}
+</style></head><body>
+<div class="slab-shadow"></div>
+<div class="app">
+  <section class="showcase">
+    <div class="brand"><div class="word">AYRIS</div><div class="clock" id="clock">00:00</div></div>
+    <div class="stage"><iframe src="_sphere.html#a=5236a6&b=52a8f0&e=b7ccf2&bg=transparent" title="Сфера"></iframe></div>
+    <div class="sc-foot"><button class="ghost">⤢</button><div class="cap">A Y R I S &nbsp; A S S I S T A N T</div><div class="foot-spacer"></div></div>
+  </section>
+  <section class="dialog">
+    <div class="bar">
+      <button class="tb" title="Настройки">≡</button><span class="grow"></span>
+      <div class="prof"><button class="profile">По умолчанию&nbsp; ▾</button><span class="offline">Офлайн</span></div>
+      <span class="grow"></span>
+      <button class="tb">–</button><button class="tb close">✕</button>
+    </div>
+    <div class="body"><div class="empty">
+      <svg class="avatar" viewBox="0 0 100 100"><defs><linearGradient id="tri" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#C6B8E8" stop-opacity="0.7"/><stop offset="1" stop-color="#9E8FC7" stop-opacity="0.58"/></linearGradient></defs>
+        <path d="M50 18 L82 74 L18 74 Z" fill="url(#tri)" stroke="#B4A6D9" stroke-opacity="0.66" stroke-width="6" stroke-linejoin="round"/></svg>
+      <div class="status">Привет, чем помочь?</div></div></div>
+    <div class="input"><input class="field" type="text" placeholder="Чем могу помочь сегодня?">
+      <div class="ctrls"><button class="ig code">&lt;/&gt;</button><span class="grow"></span>
+        <button class="ig"><svg class="icon" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6"/></svg></button>
+        <button class="send"><svg class="icon" viewBox="0 0 24 24" style="stroke:var(--on-accent)"><path d="M12 20V5M6 11l6-6 6 6"/></svg></button></div></div>
+  </section>
+</div>
+<div class="fg-bokeh"></div>
+<div class="grain"></div>
+<div class="vignette"></div>
+<script>
+  const pad=n=>String(n).padStart(2,'0');
+  function tick(){const d=new Date();document.getElementById('clock').textContent=pad(d.getHours())+':'+pad(d.getMinutes());}
+  tick();setInterval(tick,1000);
+  const frame=document.querySelector('.stage iframe');
+  // dev: SimpleHTTP не шлёт ETag/Cache-Control → iframe берёт _sphere.html из
+  // кэша и правки не видны; перезагружаем со свежим ?v, сохранив #hash.
+  { const _h = frame.src.split('#')[1] || ''; frame.src = '_sphere.html?v=' + Date.now() + '#' + _h; }
+  document.querySelectorAll('[data-mode]').forEach(btn=>btn.addEventListener('click',()=>{
+    document.querySelectorAll('[data-mode]').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    try{frame.contentWindow.setMode(btn.dataset.mode);}catch(e){}
+  }));
+</script>
+
+</body></html>
