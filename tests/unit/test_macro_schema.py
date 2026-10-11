@@ -744,7 +744,7 @@ class TestValidation:
             name="К",
             actions=[
                 ActionBlock(type="SetVolume", params={}),
-                ActionBlock(type="Say", params={"text": "готово"}),
+                ActionBlock(type="RunShell", params={"command": "echo"}),
                 ActionBlock(type="SetVolume", params={"level": "тихо"}),
             ],
         )
@@ -789,10 +789,12 @@ class TestValidation:
         self, registry: ActionRegistry
     ) -> None:
         """A file made in a newer build still opens, with a note next to the block."""
-        command = CommandModel(name="К", actions=[ActionBlock(type="Say", params={"text": "да"})])
+        command = CommandModel(
+            name="К", actions=[ActionBlock(type="RunShell", params={"command": "echo"})]
+        )
         report = validate_command(command, registry=registry)
-        assert [problem.message for problem in report.warnings if problem.block == "Say"] == [
-            "действие «Say» описано в ТЗ, но эта сборка его ещё не умеет"
+        assert [problem.message for problem in report.warnings if problem.block == "RunShell"] == [
+            "действие «RunShell» описано в ТЗ, но эта сборка его ещё не умеет"
         ]
 
     def test_without_a_registry_nothing_is_said_about_block_types(self) -> None:

@@ -681,8 +681,10 @@ class TestShutdown:
 
 
 class TestRegistry:
-    """Planning rules only. Some worker modules arrive in later tasks, so a plan
-    that has to contain all four is built with ``include_unavailable``."""
+    """Planning rules only. TTS synthesis runs in the GUI process, so the plan
+    never includes a TTS worker; some other worker modules arrive in later tasks,
+    so a plan that must list the remaining types is built with
+    ``include_unavailable``."""
 
     def test_every_kind_has_a_type_and_a_label(self):
         assert {entry.kind for entry in WORKER_TYPES} == set(WorkerKind)
@@ -715,7 +717,7 @@ class TestRegistry:
 
     def test_the_default_plan_starts_the_local_workers(self):
         plan = plan_workers(Settings(), include_unavailable=True)
-        assert [planned.spec.name for planned in plan] == ["audio", "stt", "tts", "llm"]
+        assert [planned.spec.name for planned in plan] == ["audio", "stt", "llm"]
         assert plan.eco_mode is False
         assert plan.deferred == (), "with eco mode off everything needed starts up front"
         assert plan.by_kind(WorkerKind.AUDIO) is not None
@@ -747,16 +749,28 @@ class TestRegistry:
         assert stt.autostart is False
         assert "экономии" in stt.reason
 
-    def test_a_cloud_voice_does_not_preload_a_synthesiser(self):
-        plan = plan_workers(
-            settings_with(
-                {"performance": {"eco_mode": True}, "voice": {"tts": {"engine": "yandex"}}}
-            ),
-            include_unavailable=True,
-        )
-        tts = plan.by_kind(WorkerKind.TTS)
-        assert tts is not None
-        assert tts.autostart is False
+    def test_tts_is_never_planned_because_synthesis_is_in_process(self):
+        """Speech synthesis runs in the GUI process through the in-process
+        TtsRouter, so no TTS worker is ever planned — not for a local engine, not
+        for a cloud one, and not in either eco state. The «tts» type stays
+        registered as a model category; it is just never a running process."""
+        for engine in ("piper", "silero", "yandex"):
+            for eco in (False, True):
+                plan = plan_workers(
+                    settings_with(
+                        {
+                            "performance": {"eco_mode": eco},
+                            "voice": {"tts": {"engine": engine}},
+                        }
+                    ),
+                    include_unavailable=True,
+                )
+                assert plan.by_kind(WorkerKind.TTS) is None, (engine, eco)
+                names = [planned.spec.name for planned in plan]
+                assert "tts" not in names, (engine, eco)
+        # The worker type is still registered — the model manager and onboarding
+        # treat «tts» as a category of models, not a process to start.
+        assert worker_type(WorkerKind.TTS) is not None
 
     def test_no_llm_worker_when_nothing_asks_a_model(self):
         plan = plan_workers(
@@ -799,6 +813,48 @@ class TestRegistry:
         assert audio is not None
         assert audio.spec.heartbeat_timeout == pytest.approx(3.0)
         assert audio.spec.restart_scope is RestartScope.AUDIO
+
+    def test_llm_spec_carries_model_path_and_local_knobs(self):
+        settings = settings_with(
+            {"ai": {"model_path": "C:/m/x.gguf", "n_ctx": 8192, "n_gpu_layers": 20}}
+        )
+        plan = plan_workers(settings, include_unavailable=True)
+        llm = plan.by_kind(WorkerKind.LLM)
+        assert llm is not None
+        extra = llm.spec.params["extra"]
+        assert extra["model_path"] == "C:/m/x.gguf"
+        assert extra["n_ctx"] == 8192
+        assert extra["n_gpu_layers"] == 20
+        # STT/TTS parity: the worker measures and unloads the model itself.
+        assert llm.spec.params["ram_limit_mb"] == settings.performance.ram_limit_mb
+        assert llm.spec.params["model_idle_sec"] == settings.performance.model_idle_sec
+        assert llm.spec.restart_scope is RestartScope.LLM
+
+    def test_llm_spec_search_dirs_cover_current_and_remembered_paths(self):
+        """The folders to recover a .gguf from: the current model's and every
+        remembered full path, so an empty or stale `model_path` is rescued from
+        where the user actually keeps models — not left to «не выбран файл»."""
+        settings = settings_with(
+            {
+                "ai": {
+                    "model_path": "D:/ayris-models/llm/current.gguf",
+                    "model_history": {
+                        "llamacpp": [
+                            "E:/other/old.gguf",
+                            "just-a-display-name",
+                        ]
+                    },
+                }
+            }
+        )
+        plan = plan_workers(settings, include_unavailable=True)
+        llm = plan.by_kind(WorkerKind.LLM)
+        assert llm is not None
+        dirs = {d.replace("\\", "/") for d in llm.spec.params["extra"]["model_search_dirs"]}
+        assert "D:/ayris-models/llm" in dirs
+        assert "E:/other" in dirs
+        # A bare display name is not a path and contributes no directory.
+        assert not any("display" in d for d in dirs)
 
     def test_no_credentials_are_copied_into_a_spec(self):
         """Only the name of a credential travels; the key stays in Windows."""

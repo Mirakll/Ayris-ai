@@ -49,6 +49,8 @@ UI-поток», а в тесте — детерминизм.
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 
@@ -61,6 +63,7 @@ from ayris.core.events import (
     ActionFailed,
     ActionFinished,
     ActionStarted,
+    AssistantReplied,
     CancelRequested,
     Event,
     EventBus,
@@ -68,16 +71,20 @@ from ayris.core.events import (
     ModeChanged,
     PipelineStateChanged,
     SpeechEnded,
+    SpeechStarted,
     TranscriptReady,
     WakeWordDetected,
 )
 from ayris.core.models import ExecutionResult, HistoryEntry
 from ayris.core.pipeline import (
+    _MAX_FALSE_ONSET_REARMS,
     ACTION_FAILED_MESSAGE,
     CANCEL_REASON_BARGE_IN,
+    GIBBERISH_QUIPS,
     NOT_HEARD_MESSAGE,
     NOT_MATCHED_MESSAGE,
     NOTHING_SAID_MESSAGE,
+    SOURCE_FOLLOWUP,
     SOURCE_PTT,
     SOURCE_TEXT,
     TIMEOUT_MESSAGE,
@@ -226,6 +233,13 @@ class FakeStt:
         self.error = error
         self.before = before
         self.heard: list[AudioBuffer] = []
+        self.warmed = 0
+        self.warm_event = threading.Event()
+
+    def warm(self) -> None:
+        """Record an activation-time model warm (task: warm STT on wake)."""
+        self.warmed += 1
+        self.warm_event.set()
 
     def transcribe(self, audio: AudioBuffer) -> TranscriptResult:
         self.heard.append(audio)
@@ -424,6 +438,10 @@ class Rig:
     def event_names(self) -> list[str]:
         """Имена всех событий прохода — «партитура» одного запроса."""
         return [event.name for event in self.events]
+
+    def replies(self) -> list[AssistantReplied]:
+        """События «Айрис отвечает» прохода, по порядку."""
+        return [event for event in self.events if isinstance(event, AssistantReplied)]
 
     def trace(self) -> TraceRecord:
         """Последний закрытый трейс."""
@@ -857,18 +875,88 @@ class TestModes:
         assert rig.trace().mode == NluMode.AI.value
 
 
+class TestGibberish:
+    """Клавиатурный мусор получает короткий отклик, минуя модель."""
+
+    def test_a_keyboard_mash_is_answered_without_the_model(self) -> None:
+        llm = FakeLlm()
+        rig = build(settings=ai_only(), llm=llm)
+
+        result = rig.pipeline.run_text("фывп")
+
+        assert result.ok
+        assert result.spoken in GIBBERISH_QUIPS
+        assert llm.prompts == []  # модель на шум не звали
+        assert rig.trace().intent == "chat:gibberish"
+
+    def test_a_real_reaction_still_reaches_the_model(self) -> None:
+        llm = FakeLlm()
+        rig = build(settings=ai_only(), llm=llm)
+
+        rig.pipeline.run_text("нишево")
+
+        assert llm.asked == "нишево"  # реплику-реакцию разбирает модель, не гейт
+
+    def test_quips_rotate_so_a_run_does_not_repeat(self) -> None:
+        llm = FakeLlm()
+        rig = build(settings=ai_only(), llm=llm)
+
+        first = rig.pipeline.run_text("фывп").spoken
+        second = rig.pipeline.run_text("asdf").spoken
+
+        assert first != second
+        assert llm.prompts == []
+
+    def test_a_typed_mash_in_commands_mode_is_untouched(self) -> None:
+        """«Только команды» без ИИ не трогаем — там мусор и так короткое «не нашла»."""
+        rig = build(settings=commands_only(), llm=FakeLlm())
+
+        result = rig.pipeline.run_text("фывп")
+
+        assert result.outcome is ExecutionResult.UNMATCHED
+        assert rig.tts.said == [NOT_MATCHED_MESSAGE]
+
+
 class TestSegment:
     """Фрагмент, которого нет, или который не стоило распознавать."""
 
-    def test_rejected_segment_ends_the_session(self) -> None:
+    def test_a_rejected_segment_re_opens_the_window(self) -> None:
+        """Короткий фрагмент после активации — ложный онсет (хвост слова или
+        шум), а не фраза: окно переоткрывается, а не закрывается «не расслышала»,
+        чтобы пользователь успел начать команду."""
         rig = build()
         rig.pipeline.attach()
 
         rig.wake()
         rig.spoke(duration_ms=90, reason="too_short")
 
-        assert rig.tts.said == [NOT_HEARD_MESSAGE]
+        assert rig.tts.said == []
         assert rig.stt.heard == []
+        assert rig.pipeline.state is PipelineState.LISTENING
+
+    def test_the_real_phrase_arrives_after_a_false_onset(self) -> None:
+        """После ложного онсета настоящая фраза в том же окне доходит до STT."""
+        rig = build()
+        rig.pipeline.attach()
+
+        rig.wake()
+        rig.spoke(duration_ms=90, reason="too_short")  # хвост слова активации
+        rig.spoke()  # а теперь — реальная команда
+
+        assert rig.actions.calls == 1
+        assert rig.pipeline.state is PipelineState.IDLE
+
+    def test_constant_noise_eventually_gives_up(self) -> None:
+        """Шум не крутит сессию вечно: после предела переоткрытий окно
+        закрывается — тихо для слова активации, с фразой для PTT."""
+        rig = build()
+        rig.pipeline.attach()
+
+        rig.wake()
+        for _ in range(_MAX_FALSE_ONSET_REARMS + 1):
+            rig.spoke(duration_ms=90, reason="too_short")
+
+        assert rig.tts.said == [NOT_HEARD_MESSAGE]
         assert rig.pipeline.state is PipelineState.IDLE
         assert rig.trace().error == "too_short"
 
@@ -1183,6 +1271,98 @@ class TestTimeouts:
         assert rig.scheduler.pending == (9.0,)
 
 
+class TestFollowUp:
+    """Диалог без повторного слова активации и начало речи как граница записи."""
+
+    @staticmethod
+    def _settings(**wake: object) -> Settings:
+        """«Только команды» плюс заданная настройка слова активации."""
+        return settings_with(ai={"fallback_to_llm": False}, voice={"wake": wake})
+
+    def test_a_spoken_answer_re_opens_the_window(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+        rig.pipeline.attach()
+
+        rig.voice_command()
+
+        assert rig.tts.said == ["Готово."]
+        assert rig.pipeline.state is PipelineState.LISTENING
+        assert rig.pipeline.session_id != ""
+        # Окно диалога — то же «ожидание начала речи», что и у слова активации.
+        assert rig.scheduler.pending == (6.0,)
+
+    def test_the_re_opened_window_is_a_follow_up_session(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+        rig.pipeline.attach()
+
+        rig.voice_command()
+
+        assert rig.pipeline.state is PipelineState.LISTENING
+        # Последний закрытый трейс — проход по слову активации; продолжение ещё открыто.
+        assert rig.trace().source == WAKE_PHRASE
+
+    def test_the_window_times_out_without_a_word(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+        rig.pipeline.attach()
+
+        rig.voice_command()
+        assert rig.scheduler.fire_all() == 1  # никто не заговорил — окно тихо закрылось
+
+        assert rig.tts.said == ["Готово."]  # ни одного «не расслышала»
+        assert rig.pipeline.state is PipelineState.IDLE
+        assert rig.trace().source == SOURCE_FOLLOWUP
+        assert rig.trace().outcome is ExecutionResult.TIMEOUT
+
+    def test_the_dialogue_continues_without_the_wake_word(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+        rig.pipeline.attach()
+
+        rig.voice_command()  # «айрис, …» → ответ, окно снова открыто
+        rig.spoke()  # вторая фраза — уже без слова активации
+
+        assert rig.actions.calls == 2
+        assert rig.pipeline.state is PipelineState.LISTENING
+
+    def test_it_stays_one_shot_when_switched_off(self) -> None:
+        rig = build(settings=self._settings(continue_listening=False))
+        rig.pipeline.attach()
+
+        rig.voice_command()
+
+        assert rig.pipeline.state is PipelineState.IDLE
+        assert rig.scheduler.pending == ()
+
+    def test_typed_entry_never_re_opens_the_window(self) -> None:
+        rig = build(settings=self._settings(continue_listening=True))
+
+        assert rig.pipeline.run_text(PHRASE).ok
+        assert rig.pipeline.state is PipelineState.IDLE
+        assert rig.scheduler.pending == ()
+
+    def test_speech_onset_moves_listening_to_recording(self) -> None:
+        rig = build()
+        rig.pipeline.attach()
+
+        rig.wake()
+        assert rig.pipeline.state is PipelineState.LISTENING
+
+        rig.bus.publish(SpeechStarted())
+
+        assert rig.pipeline.state is PipelineState.RECORDING
+        # Дедлайн ожидания начала речи снят: фразу ограничивает уже запись.
+        assert 6.0 not in rig.scheduler.pending
+
+    def test_a_phrase_with_no_onset_still_records(self) -> None:
+        """Старый ход — только SpeechEnded, без SpeechStarted — работает как прежде."""
+        rig = build()
+        rig.pipeline.attach()
+
+        rig.voice_command()
+
+        assert rig.actions.calls == 1
+        assert rig.pipeline.state is PipelineState.IDLE
+
+
 class TestStageErrors:
     """Ошибка любой стадии — фраза вслух, и пайплайн жив для следующей."""
 
@@ -1221,6 +1401,60 @@ class TestStageErrors:
         failures = [event for event in rig.events if isinstance(event, ActionFailed)]
         assert [event.error for event in failures] == ["volume driver missing"]
         assert rig.pipeline.state is PipelineState.IDLE
+
+    def test_a_spoken_answer_is_announced_before_the_voice(self) -> None:
+        """Ответ уходит на шину как ``AssistantReplied``, помеченный «озвучим»."""
+        rig = build()
+
+        rig.pipeline.run_text(PHRASE)
+
+        replies = rig.replies()
+        assert [(r.text, r.failed, r.spoken) for r in replies] == [("Готово.", False, True)]
+
+    def test_the_answer_reaches_the_bus_even_with_no_voice(self) -> None:
+        """Главный смысл правки: без TTS ответ всё равно виден через шину.
+
+        Раньше чат печатал ответ только по ``TtsStarted``, поэтому не поднявшийся
+        голос обеспечивал полное молчание окна. Теперь ответ объявляется до
+        синтеза и независимо от него — с пометкой, что озвучки не будет.
+        """
+        rig = build()
+        voiceless = pipeline_of(rig, matcher=library(), actions=rig.actions)
+
+        result = voiceless.run_text(PHRASE)
+
+        assert result.ok
+        assert rig.tts.said == []  # голоса нет
+        replies = rig.replies()
+        assert [(r.text, r.failed, r.spoken) for r in replies] == [("Готово.", False, False)]
+
+    def test_a_failure_is_announced_even_with_no_voice(self) -> None:
+        """Ошибка — единственный канал которой был голос — тоже доходит до окна."""
+        rig = build(settings=ai_only())
+        voiceless = pipeline_of(rig, matcher=library())
+
+        result = voiceless.run_text(UNKNOWN_PHRASE)
+
+        assert result.outcome is ExecutionResult.ERROR
+        assert rig.tts.said == []
+        replies = rig.replies()
+        assert len(replies) == 1
+        assert replies[0].text == NOT_CONFIGURED_MESSAGE
+        assert replies[0].failed is True
+        assert replies[0].spoken is False
+
+    def test_a_timeout_message_reaches_the_bus(self) -> None:
+        """Сообщение о тайм-ауте тоже объявляется, а не только озвучивается."""
+        rig = build()
+        rig.stt.before = rig.scheduler.fire_all
+
+        rig.pipeline.activate(source=SOURCE_PTT)
+        rig.pipeline.submit_audio(speech())
+
+        assert rig.tts.said == [TIMEOUT_MESSAGE]
+        replies = rig.replies()
+        assert [r.text for r in replies] == [TIMEOUT_MESSAGE]
+        assert replies[0].spoken is True
 
     def test_a_matched_command_without_a_runner_defers_to_the_dispatcher(self) -> None:
         """Без исполнителя пайплайн не выдумывает отказ.
@@ -1524,3 +1758,79 @@ class TestWiring:
         rig = build(settings=commands_only())
 
         assert repr(rig.pipeline) == "Pipeline(idle, mode=commands)"
+
+    def test_prewarm_fires_with_the_session_mode_during_transcription(self) -> None:
+        # The early-warm hook runs the instant the pass enters TRANSCRIBING, on a
+        # daemon thread, so it overlaps STT. It must be handed the session's mode
+        # (so the composition root can start the model only when a mode will ask
+        # it) and must not block or alter the pass.
+        rig = build()
+        warmed: list[NluMode] = []
+        fired = threading.Event()
+
+        def record(mode: NluMode) -> None:
+            warmed.append(mode)
+            fired.set()
+
+        pipeline = pipeline_of(
+            rig,
+            matcher=library(),
+            stt=rig.stt,
+            tts=rig.tts,
+            actions=rig.actions,
+            phrase_source=rig.phrases,
+            prewarm=record,
+        )
+
+        pipeline.activate(source=SOURCE_PTT)
+        pipeline.submit_audio(speech())
+
+        assert fired.wait(5.0)
+        assert warmed == [NluMode.HYBRID]
+        assert rig.tts.said == ["Готово."]
+
+    def test_prewarm_failure_does_not_break_the_pass(self) -> None:
+        rig = build()
+
+        def boom(_mode: NluMode) -> None:
+            raise RuntimeError("прогрев упал")
+
+        pipeline = pipeline_of(
+            rig,
+            matcher=library(),
+            stt=rig.stt,
+            tts=rig.tts,
+            actions=rig.actions,
+            phrase_source=rig.phrases,
+            prewarm=boom,
+        )
+
+        pipeline.activate(source=SOURCE_PTT)
+        pipeline.submit_audio(speech())
+
+        assert rig.tts.said == ["Готово."]
+        assert pipeline.state is PipelineState.IDLE
+
+
+def test_activation_warms_the_recogniser_so_the_cold_load_overlaps_speaking() -> None:
+    # Wake/PTT opens the session; the STT model warm must fire then, not at
+    # TRANSCRIBING, so its cold load overlaps the user speaking. The warm runs on
+    # a daemon thread, so wait on the stub's event with a generous bound.
+    stt = FakeStt()
+    rig = build(stt=stt)
+
+    rig.pipeline.activate(source="айрис")
+
+    assert stt.warm_event.wait(2.0), "STT warm was not triggered on activation"
+    assert stt.warmed >= 1
+
+
+def test_online_stt_is_not_warmed_on_activation() -> None:
+    # Online recognition uses no local model, so activation must not spin one up.
+    stt = FakeStt()
+    rig = build(settings=settings_with(voice={"stt": {"mode": "online"}}), stt=stt)
+
+    rig.pipeline.activate(source="айрис")
+
+    time.sleep(0.1)
+    assert stt.warmed == 0

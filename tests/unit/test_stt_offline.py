@@ -2233,3 +2233,29 @@ class TestRealEngines:
             assert result.real_time_factor < 1.0
         finally:
             engine.unload()
+
+
+def test_rms_dbfs_matches_audiobuffer_level() -> None:
+    """gigaam's waveform silence level equals AudioBuffer.rms_dbfs for the same PCM.
+
+    The engine now checks silence on the float32 waveform it already built; that
+    value must match the reference RMS so the SILENCE_DBFS decision never flips.
+    """
+    numpy = pytest.importorskip("numpy")
+    from ayris.audio.stt.base import AudioBuffer
+    from ayris.audio.stt.gigaam_engine import _rms_dbfs
+
+    blocks = [
+        bytes(640),  # digital silence -> -inf
+        array("h", [12000, -12000] * 400).tobytes(),  # loud
+        array("h", [i % 3000 - 1500 for i in range(1600)]).tobytes(),  # ramp
+        array("h", [200, -200] * 800).tobytes(),  # quiet, near the gate
+    ]
+    for pcm in blocks:
+        waveform = numpy.frombuffer(pcm, dtype="<i2").astype(numpy.float32) / 32768.0
+        reference = AudioBuffer(pcm=pcm, sample_rate=16000, channels=1).rms_dbfs()
+        got = _rms_dbfs(waveform, numpy=numpy)
+        if reference == float("-inf"):
+            assert got == float("-inf")
+        else:
+            assert got == pytest.approx(reference, abs=1e-6)

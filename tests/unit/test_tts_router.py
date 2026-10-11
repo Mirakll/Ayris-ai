@@ -36,13 +36,16 @@ import threading
 from array import array
 from collections.abc import Callable
 from time import monotonic
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 
 from ayris.audio.devices import PlaybackRequest, RawDevice
+from ayris.audio.tts.app_router import build_tts_router
 from ayris.audio.tts.base import AudioChunk, TtsEngine, TtsOptions, VoiceSpec
+from ayris.audio.tts.cache import PhraseCache
 from ayris.audio.tts.elevenlabs_engine import ElevenLabsTtsEngine
 from ayris.audio.tts.player import PlaybackReason, SpeechRequest, TtsPlayer
 from ayris.audio.tts.router import (
@@ -54,8 +57,11 @@ from ayris.audio.tts.router import (
     mode_from_config,
 )
 from ayris.audio.tts.service import connect_player
+from ayris.core.config import ConfigChanged as SettingsDiff
+from ayris.core.config import TtsConfig
 from ayris.core.errors import TtsError
 from ayris.core.events import (
+    ConfigChanged,
     EventBus,
     NotificationRequested,
     OnlineStatusChanged,
@@ -64,6 +70,7 @@ from ayris.core.secrets import SecretsStore, reset_secrets
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 pytestmark = pytest.mark.unit
 
@@ -827,6 +834,105 @@ class TestModes:
         assert backend.written
         router.close()
 
+    def test_warm_loads_the_local_voice_for_the_offline_first_modes(self) -> None:
+        # The local engine speaks the first answer offline, so warming it at start
+        # takes its cold load off the first reply's critical path.
+        for mode in (TtsMode.OFFLINE, TtsMode.LOCAL_FIRST):
+            pair = EnginePair()
+            router = pair.make_router(mode=mode)
+            router.warm()
+            thread = router._preload
+            assert thread is not None, mode
+            thread.join(TIMEOUT_S)
+            assert pair.local.loads >= 1, mode
+            router.close()
+
+    def test_warm_is_a_noop_in_auto_mode(self) -> None:
+        # Auto speaks through the cloud first; the local side is the *fallback*,
+        # warmed by preload(), not warm() — so warm() must not touch it here.
+        pair = EnginePair()
+        router = pair.make_router(mode=TtsMode.AUTO)
+        router.warm()
+        assert router._preload is None
+        assert pair.local.loads == 0
+        router.close()
+
+
+# ----------------------------------------------------------------------
+# phrase cache
+# ----------------------------------------------------------------------
+
+
+class TestPhraseCache:
+    """A short confirmation is synthesized once and read from disk after that."""
+
+    def _router(self, cache: PhraseCache, pair: EnginePair) -> TtsRouter:
+        """An offline router over ``pair`` whose cache keys by the fake voice."""
+        return pair.make_router(
+            mode=TtsMode.OFFLINE,
+            cloud=None,
+            cache=cache,
+            default_voice=VoiceSpec(engine="fake", voice_id="fake"),
+        )
+
+    def test_repeated_phrase_is_served_from_the_cache(self, tmp_path: Path) -> None:
+        cache = PhraseCache(tmp_path, limit_bytes=1024 * 1024)
+        pair = EnginePair()
+        router = self._router(cache, pair)
+
+        first = router.say("Готово.")
+        first.wait(TIMEOUT_S)
+        assert first.reason == PlaybackReason.COMPLETED
+        assert len(pair.local.requests) == 1
+        wait_until(lambda: cache.stats().entries == 1)
+
+        second = router.say("Готово.")
+        second.wait(TIMEOUT_S)
+        assert second.reason == PlaybackReason.COMPLETED
+        # The engine was not asked a second time: the audio came off the disk,
+        # and the phrase still reads as spoken by the voice that produced it.
+        assert len(pair.local.requests) == 1
+        assert second.engine == "fake"
+        assert cache.stats().hits == 1
+        router.close()
+
+    def test_multi_sentence_answer_is_not_cached(self, tmp_path: Path) -> None:
+        # sentence_pause is not part of the key, so a multi-sentence phrase is left
+        # out rather than risk serving a stale gap after the pause setting changes.
+        cache = PhraseCache(tmp_path, limit_bytes=1024 * 1024)
+        pair = EnginePair()
+        router = self._router(cache, pair)
+        handle = router.say("Первое предложение. Второе предложение.")
+        handle.wait(TIMEOUT_S)
+        assert handle.reason == PlaybackReason.COMPLETED
+        assert cache.stats().entries == 0
+        router.close()
+
+    def test_disabled_cache_always_synthesizes(self, tmp_path: Path) -> None:
+        cache = PhraseCache(tmp_path, limit_bytes=0)  # cache_size_mb = 0
+        pair = EnginePair()
+        router = self._router(cache, pair)
+        router.say("Готово.").wait(TIMEOUT_S)
+        router.say("Готово.").wait(TIMEOUT_S)
+        assert len(pair.local.requests) == 2
+        assert cache.stats().entries == 0
+        router.close()
+
+    def test_set_providers_empties_the_cache(self, tmp_path: Path) -> None:
+        cache = PhraseCache(tmp_path, limit_bytes=1024 * 1024)
+        pair = EnginePair()
+        router = self._router(cache, pair)
+        router.say("Готово.").wait(TIMEOUT_S)
+        wait_until(lambda: cache.stats().entries == 1)
+        router.set_providers(
+            cloud=None,
+            local=pair.make_local(),
+            mode=TtsMode.OFFLINE,
+            default_voice=VoiceSpec(engine="fake", voice_id="fake"),
+        )
+        assert cache.stats().entries == 0
+        router.close()
+
 
 # ----------------------------------------------------------------------
 # voice settings
@@ -1083,3 +1189,189 @@ class TestShutdown:
         handle.wait(TIMEOUT_S)
         assert handle.done
         router.close()
+
+
+# ----------------------------------------------------------------------
+# live engine/voice change
+# ----------------------------------------------------------------------
+
+
+class TestSetProviders:
+    """A live engine or voice change swaps the slots without a restart.
+
+    ``engine``/``voice`` are ``RestartScope.TTS``, which restarts the TTS
+    *worker* - but this router lives in the UI process and is both the preview
+    voice and the pipeline's voice, so it has to pick up a new engine in place.
+    Without that, «Прослушать» would keep speaking the voice captured at startup
+    even after the user switched engines, which is exactly the bug these tests
+    guard against.
+    """
+
+    def test_the_next_phrase_uses_the_newly_installed_engine(self) -> None:
+        """After the swap, the next phrase is synthesized by the new engine."""
+        pair = EnginePair()
+        first = FakeEngine()
+        second = FakeEngine()
+
+        router = pair.make_router(
+            mode=TtsMode.OFFLINE,
+            cloud=None,
+            local=lambda: _loaded(first),
+        )
+        router.say("Первое.").wait(TIMEOUT_S)
+        assert first.texts == ["Первое."]
+        assert second.loads == 0
+
+        router.set_providers(cloud=None, local=lambda: _loaded(second), mode=TtsMode.OFFLINE)
+        handle = router.say("Второе.")
+        handle.wait(TIMEOUT_S)
+        assert handle.reason == PlaybackReason.COMPLETED
+        assert second.texts == ["Второе."]
+        assert first.texts == ["Первое."], "старый движок больше ничего не произносит"
+        router.close()
+
+    def test_the_old_engine_is_unloaded_so_a_heavy_voice_frees_its_memory(self) -> None:
+        """Switching away from a loaded engine releases it there and then."""
+        pair = EnginePair()
+        first = FakeEngine()
+        second = FakeEngine()
+
+        router = pair.make_router(
+            mode=TtsMode.OFFLINE,
+            cloud=None,
+            local=lambda: _loaded(first),
+        )
+        router.say("Первое.").wait(TIMEOUT_S)
+        assert first.loads == 1
+        assert first.unloads == 0
+
+        router.set_providers(cloud=None, local=lambda: _loaded(second), mode=TtsMode.OFFLINE)
+        assert first.unloads == 1, "движок, который играл, выгружен при подмене слотов"
+        router.close()
+
+    def test_a_slot_never_built_is_not_loaded_by_the_swap(self) -> None:
+        """The new engine stays lazy: nothing loads until the next phrase."""
+        pair = EnginePair()
+        second = FakeEngine()
+        router = pair.make_router(
+            mode=TtsMode.OFFLINE,
+            cloud=None,
+            local=lambda: _loaded(FakeEngine()),
+        )
+        router.set_providers(cloud=None, local=lambda: _loaded(second), mode=TtsMode.OFFLINE)
+        assert second.loads == 0, "новый движок грузится лениво на первой фразе"
+        router.say("Фраза.").wait(TIMEOUT_S)
+        assert second.loads == 1
+        router.close()
+
+
+def _loaded(engine: FakeEngine) -> TtsEngine:
+    """Load ``engine`` with a bare voice, the way a real provider would."""
+    engine.load(VoiceSpec(engine="fake", voice_id="fake"), TtsOptions())
+    return engine
+
+
+# ----------------------------------------------------------------------
+# the application router rebuilds itself on a config change
+# ----------------------------------------------------------------------
+
+
+def _stub_app(bus: EventBus, tts: TtsConfig) -> SimpleNamespace:
+    """The slice of :class:`~ayris.core.app.AyrisApp` that the router reads."""
+    return SimpleNamespace(bus=bus, settings=SimpleNamespace(voice=SimpleNamespace(tts=tts)))
+
+
+def _config_changed(app: SimpleNamespace) -> ConfigChanged:
+    """A :class:`ConfigChanged` the handler can react to.
+
+    The handler reads ``app.settings.voice.tts`` live rather than the event
+    payload, so the diff itself can be empty - what matters is that the settings
+    object has already been mutated by the time the event is published.
+    """
+    return ConfigChanged(diff=SettingsDiff(changes=(), settings=app.settings))
+
+
+class TestAppRouterRebuild:
+    """``build_tts_router`` keeps the UI's router in step with the settings.
+
+    ``engine``/``voice``/``expressiveness`` are ``RestartScope.TTS`` - they
+    restart the worker, not this process - so the handler rebuilds the slots in
+    place when they change, and only nudges the live knobs when they do not.
+    """
+
+    def test_an_engine_change_rebuilds_the_slots(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Switching the engine swaps the providers rather than only the mode."""
+        rebuilt: list[tuple[object, object]] = []
+        orig = TtsRouter.set_providers
+
+        def spy(self: TtsRouter, **kwargs: object) -> None:
+            rebuilt.append((kwargs["cloud"], kwargs["local"]))
+            orig(self, cloud=kwargs["cloud"], local=kwargs["local"], mode=kwargs["mode"])  # type: ignore[arg-type]
+
+        monkeypatch.setattr(TtsRouter, "set_providers", spy)
+
+        bus = EventBus()
+        player = TtsPlayer(backend=FakeBackend())  # type: ignore[arg-type]
+        app = _stub_app(bus, TtsConfig(engine="piper", voice="ru_RU-irina-medium"))
+        _router, close = build_tts_router(app, player)  # type: ignore[arg-type]
+
+        app.settings.voice.tts = TtsConfig(engine="silero", voice="baya")
+        bus.publish(_config_changed(app))
+
+        assert len(rebuilt) == 1, "смена движка должна пересобрать слоты"
+        close()
+
+    def test_a_voice_change_rebuilds_the_slots(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A new voice on the same engine still needs the slot rebuilt."""
+        rebuilt: list[object] = []
+        monkeypatch.setattr(
+            TtsRouter, "set_providers", lambda _self, **kw: rebuilt.append(kw["local"])
+        )
+
+        bus = EventBus()
+        player = TtsPlayer(backend=FakeBackend())  # type: ignore[arg-type]
+        app = _stub_app(bus, TtsConfig(engine="silero", voice="baya"))
+        _router, close = build_tts_router(app, player)  # type: ignore[arg-type]
+
+        app.settings.voice.tts = TtsConfig(engine="silero", voice="aidar")
+        bus.publish(_config_changed(app))
+
+        assert len(rebuilt) == 1
+        close()
+
+    def test_a_live_knob_change_does_not_rebuild_the_slots(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Toggling ``cloud_fallback`` moves the mode, it does not reload engines."""
+        rebuilt: list[object] = []
+        modes: list[TtsMode] = []
+        monkeypatch.setattr(TtsRouter, "set_providers", lambda _self, **kw: rebuilt.append(kw))
+        monkeypatch.setattr(TtsRouter, "set_mode", lambda _self, mode: modes.append(mode))
+
+        bus = EventBus()
+        player = TtsPlayer(backend=FakeBackend())  # type: ignore[arg-type]
+        app = _stub_app(bus, TtsConfig(engine="silero", voice="baya", cloud_fallback=False))
+        _router, close = build_tts_router(app, player)  # type: ignore[arg-type]
+
+        app.settings.voice.tts = TtsConfig(engine="silero", voice="baya", cloud_fallback=True)
+        bus.publish(_config_changed(app))
+
+        assert rebuilt == [], "смена только резерва не трогает движки"
+        assert modes, "режим должен быть пересчитан под новый резерв"
+        close()
+
+    def test_closing_unsubscribes_the_handler(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """After ``close`` a config change no longer reaches the router."""
+        rebuilt: list[object] = []
+        monkeypatch.setattr(TtsRouter, "set_providers", lambda _self, **kw: rebuilt.append(kw))
+
+        bus = EventBus()
+        player = TtsPlayer(backend=FakeBackend())  # type: ignore[arg-type]
+        app = _stub_app(bus, TtsConfig(engine="piper", voice="ru_RU-irina-medium"))
+        _router, close = build_tts_router(app, player)  # type: ignore[arg-type]
+        close()
+
+        app.settings.voice.tts = TtsConfig(engine="silero", voice="baya")
+        bus.publish(_config_changed(app))
+
+        assert rebuilt == [], "закрытый роутер не должен реагировать на настройки"

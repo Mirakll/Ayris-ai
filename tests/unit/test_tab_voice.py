@@ -18,7 +18,9 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from ayris.audio.devices import DeviceDirection, RawDevice, list_devices
+from ayris.audio.tts.player import PlaybackReason
 from ayris.core.config import ConfigManager, RestartScope, dump_settings
+from ayris.core.errors import TtsError
 from ayris.core.secrets import SecretsStore
 from ayris.gui.tabs import tab_spec
 from ayris.gui.tabs.voice import VoiceServices, VoiceTab
@@ -245,6 +247,55 @@ def test_expressiveness_card_follows_the_engine(app: QApplication, manager: Conf
     tab.close()
 
 
+def test_switching_engine_coerces_a_foreign_voice(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    """A Silero speaker must not survive a switch to Piper.
+
+    Picking Piper while ``voice`` still names ``baya`` would make «Прослушать»
+    (and every answer) ask Piper for a ``baya.onnx`` it cannot have, so the box
+    and the saved voice snap to a voice Piper actually owns.
+    """
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("silero"))
+    baya = tts._voice_combo.findData("baya")
+    assert baya >= 0
+    tts._voice_combo.setCurrentIndex(baya)
+    tab.flush_pending()
+    assert manager.settings.voice.tts.voice == "baya"
+
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("piper"))
+    tab.flush_pending()
+    saved = manager.settings.voice.tts.voice
+    assert saved != "baya"
+    assert saved == tts._voice_combo.currentData()
+    assert saved in tts._owned_voices
+    tab.dispose()
+    tab.close()
+
+
+def test_a_cloud_engine_does_not_coerce_the_voice(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    """A cloud voice box is free text, so a foreign name is accepted as typed."""
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("silero"))
+    tts._voice_combo.setCurrentIndex(tts._voice_combo.findData("baya"))
+    tab.flush_pending()
+    assert manager.settings.voice.tts.voice == "baya"
+
+    tts._engine_combo.setCurrentIndex(tts._engine_combo.findData("openai"))
+    tab.flush_pending()
+    assert tts._owned_voices == set()
+    assert manager.settings.voice.tts.voice == "baya"
+    tab.dispose()
+    tab.close()
+
+
 def test_vad_slider_moves_the_meter_threshold(app: QApplication, manager: ConfigManager) -> None:
     tab = _make_tab(manager, ThemeManager(app))
     audio = tab._sections[3]
@@ -309,6 +360,54 @@ def test_test_buttons_enabled_when_services_provided(
     tab.close()
 
 
+def test_calibrate_enabled_by_the_live_worker(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # In the running app nobody injects audio_source; «Калибровать» then lights from
+    # the live audio worker and records through its ring buffer, not by opening the
+    # microphone a second time behind the worker that already owns it.
+    monkeypatch.setattr("ayris.audio.worker_source.time.sleep", lambda *_a, **_k: None)
+
+    class _AudioControl:
+        def __init__(self) -> None:
+            self.reads: list[float] = []
+
+        def status(self) -> tuple[WorkerSummary, ...]:
+            return ()
+
+        def restart_scope(self, scope: RestartScope, settings_reason: str = "") -> int:
+            return 0
+
+        def is_ready(self, name: str) -> bool:
+            return name == "audio"
+
+        def call_sync(
+            self, worker: str, method: str, params: dict[str, float] | None = None
+        ) -> object:
+            if method == "status":
+                return {"sample_rate": 16000}
+            self.reads.append((params or {})["ms"])
+            return {"pcm": b"\x00\x00" * 1600, "sample_rate": 16000}
+
+    control = _AudioControl()
+    set_active_worker_control(control)
+
+    tab = _make_tab(manager, ThemeManager(app))  # no audio_source injected
+    audio = tab._sections[3]
+    assert audio._calibrate_button.isEnabled()
+
+    factory = audio._calibration_factory()
+    assert factory is not None
+    from ayris.audio.calibration import CalibrationReport, run_calibration
+
+    report = run_calibration(factory(), base_gain=1.0)
+    assert isinstance(report, CalibrationReport)
+    # Тишина ~3000 мс, затем фраза ~5000 мс — два окна из буфера воркера.
+    assert [round(ms) for ms in control.reads] == [3000, 5000]
+    tab.dispose()
+    tab.close()
+
+
 def test_listen_falls_back_to_the_runtime_router(
     app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -318,6 +417,8 @@ def test_listen_falls_back_to_the_runtime_router(
     waited: list[float | None] = []
 
     class _Handle:
+        reason = PlaybackReason.COMPLETED
+
         def wait(self, timeout: float | None = None) -> bool:
             waited.append(timeout)
             return True
@@ -342,6 +443,104 @@ def test_listen_falls_back_to_the_runtime_router(
     service()  # call the resolved sample directly, skipping the worker thread
     assert router.previews == 1
     assert waited == [pytest.approx(30.0)]
+    tab.dispose()
+    tab.close()
+
+
+def test_listen_button_stays_live_after_a_preview(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # In the running app speak_sample is not injected, so the preview goes through
+    # the runtime router. _finish_listen must re-enable the button from that same
+    # source; gating it on services.speak_sample latched «Прослушать» off after the
+    # first play — it answered once, then went dead.
+    class _Router:
+        def preview(self) -> object:
+            return object()
+
+    monkeypatch.setattr("ayris.gui.tabs.voice_sections.tts.active_tts_router", lambda: _Router())
+
+    tab = _make_tab(manager, ThemeManager(app))  # no speak_sample injected
+    tts = tab._sections[1]
+    assert tts._listen_button.isEnabled()
+
+    tts._listen_button.setEnabled(False)  # as _listen() does while it speaks
+    tts._finish_listen()  # the worker finished; the button must come back
+    assert tts._listen_button.isEnabled()
+    tab.dispose()
+    tab.close()
+
+
+def test_preview_reports_a_failed_synthesis(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A missing or half-downloaded voice fails inside the player thread, where the
+    # error only reaches the log; the handle then reports ERROR. The preview must
+    # raise so «Прослушать» shows «Не удалось озвучить: …» instead of falling silent.
+    class _Handle:
+        reason = PlaybackReason.ERROR
+
+        def wait(self, timeout: float | None = None) -> bool:
+            return True
+
+    class _Router:
+        def preview(self) -> _Handle:
+            return _Handle()
+
+    monkeypatch.setattr("ayris.gui.tabs.voice_sections.tts.active_tts_router", lambda: _Router())
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+    with pytest.raises(TtsError) as excinfo:
+        tts._preview_through_router()
+    assert excinfo.value.user_message
+    tab.dispose()
+    tab.close()
+
+
+def test_preview_times_out_when_synthesis_hangs(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # wait() returning False means the synth never answered within the timeout; the
+    # preview must raise rather than report a success that never sounded.
+    class _Handle:
+        reason = PlaybackReason.COMPLETED
+
+        def wait(self, timeout: float | None = None) -> bool:
+            return False
+
+    class _Router:
+        def preview(self) -> _Handle:
+            return _Handle()
+
+    monkeypatch.setattr("ayris.gui.tabs.voice_sections.tts.active_tts_router", lambda: _Router())
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+    with pytest.raises(TtsError) as excinfo:
+        tts._preview_through_router()
+    assert excinfo.value.user_message
+    tab.dispose()
+    tab.close()
+
+
+def test_preview_stays_quiet_when_cancelled(
+    app: QApplication, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Clicking another voice cancels the running preview; a cancellation is not a
+    # failure, so the preview returns without raising and «Прослушать» stays calm.
+    class _Handle:
+        reason = PlaybackReason.CANCELLED
+
+        def wait(self, timeout: float | None = None) -> bool:
+            return True
+
+    class _Router:
+        def preview(self) -> _Handle:
+            return _Handle()
+
+    monkeypatch.setattr("ayris.gui.tabs.voice_sections.tts.active_tts_router", lambda: _Router())
+    tab = _make_tab(manager, ThemeManager(app))
+    tts = tab._sections[1]
+    tts._preview_through_router()  # must not raise
     tab.dispose()
     tab.close()
 
@@ -483,6 +682,53 @@ def test_calibration_recommendation_applied(app: QApplication, manager: ConfigMa
     assert settings.vad_threshold == pytest.approx(0.6)
     assert settings.silence_ms == 900
     assert settings.denoise == "spectral"
+    tab.dispose()
+    tab.close()
+
+
+def test_calibration_auto_applies_and_can_revert(app: QApplication, manager: ConfigManager) -> None:
+    from ayris.audio.calibration import CalibrationReport, Recommendation, Verdict
+    from ayris.audio.denoise import DenoiseMode
+
+    manager.apply(
+        {
+            "voice.audio_input.gain": 1.0,
+            "voice.audio_input.vad_threshold": 0.5,
+            "voice.audio_input.noise_floor_db": -45.0,
+            "voice.audio_input.silence_ms": 700,
+            "voice.audio_input.denoise": "off",
+        }
+    )
+    tab = _make_tab(manager, ThemeManager(app))
+    audio = tab._sections[3]
+
+    report = CalibrationReport(
+        verdict=Verdict.GOOD,
+        recommended=Recommendation(
+            gain=2.5,
+            vad_threshold=0.6,
+            noise_floor_db=-42.0,
+            silence_ms=900,
+            denoise=DenoiseMode.SPECTRAL,
+        ),
+    )
+    # No dialog: the recommendation is applied straight away, and «Вернуть
+    # прежние значения» appears so the user can still undo it.
+    audio._on_calibrated(report)
+    applied = manager.settings.voice.audio_input
+    assert applied.gain == pytest.approx(2.5)
+    assert applied.vad_threshold == pytest.approx(0.6)
+    assert applied.denoise == "spectral"
+    assert not audio._undo_button.isHidden()
+    assert "применены" in audio._calibrate_status.text().lower()
+
+    audio._revert_recommendation()
+    reverted = manager.settings.voice.audio_input
+    assert reverted.gain == pytest.approx(1.0)
+    assert reverted.vad_threshold == pytest.approx(0.5)
+    assert reverted.denoise == "off"
+    assert audio._undo_button.isHidden()
+    assert "прежние" in audio._calibrate_status.text().lower()
     tab.dispose()
     tab.close()
 

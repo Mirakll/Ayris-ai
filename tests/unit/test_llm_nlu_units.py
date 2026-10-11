@@ -35,6 +35,7 @@ from ayris.nlu.llm.prompts import (
     COMMANDS_PLACEHOLDER,
     build_chat_prompt,
     build_nlu_prompt,
+    clear_template_cache,
     load_template,
 )
 from ayris.nlu.llm.tools import (
@@ -347,6 +348,22 @@ def test_build_chat_prompt_joins_persona_and_template(tmp_path: Path) -> None:
     assert build_chat_prompt("   ", resources_dir=tmp_path) == "Правила чата."
 
 
+def test_template_is_cached_in_memory_until_cleared(tmp_path: Path) -> None:
+    """Шаблон читается с диска раз, затем из памяти; сброс заставляет перечитать."""
+    clear_template_cache()
+    chat = tmp_path / "chat.txt"
+    chat.write_text("первый", encoding="utf-8")
+    assert load_template("chat", resources_dir=tmp_path) == "первый"
+
+    # Файл изменился, но кэш держит прежний текст — диск повторно не читается.
+    chat.write_text("второй", encoding="utf-8")
+    assert load_template("chat", resources_dir=tmp_path) == "первый"
+
+    # Явный сброс (смена настроек/профиля) — следующий вызов видит правку.
+    clear_template_cache()
+    assert load_template("chat", resources_dir=tmp_path) == "второй"
+
+
 # --- tools: каталог команд, инструменты, шлюз реестра ----------------------
 
 
@@ -417,10 +434,20 @@ def test_action_reply_as_tool_result(reply: ActionReply, expected: str) -> None:
 class _Result:
     """Заглушка ExecutionResult: реестр отдаёт ровно то, что нужно run_action."""
 
-    def __init__(self, *, ok: bool = True, message_ru: str = "ок", detail: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        ok: bool = True,
+        message_ru: str = "ок",
+        detail: str = "",
+        value: object = None,
+        data: dict[str, object] | None = None,
+    ) -> None:
         self.ok = ok
         self.message_ru = message_ru
         self.detail = detail
+        self.value = value
+        self.data = data if data is not None else {}
 
 
 class _FakeRegistry:

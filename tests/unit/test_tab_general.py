@@ -137,6 +137,27 @@ def test_priority_and_thread_pool_choices_reach_config(
     tab.close()
 
 
+def test_llm_thread_slider_tracks_cores_and_reaches_config(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    """The LLM pool slider must open past the old cap of 2 up to the CPU cores."""
+    from ayris.gui.tabs.general import _LLM_THREAD_MAX
+
+    tab = _make_tab(manager, ThemeManager(app))
+
+    field = tab._bindings["performance.llm_threads"].widget
+    assert _LLM_THREAD_MAX >= 2
+    assert field.slider.maximum() == _LLM_THREAD_MAX
+    assert field.spin_box.maximum() == _LLM_THREAD_MAX
+
+    field.setValue(_LLM_THREAD_MAX)
+    tab.flush_pending()
+    assert manager.settings.performance.llm_threads == _LLM_THREAD_MAX
+    assert RestartScope.LLM in manager.pending_restarts
+    tab.dispose()
+    tab.close()
+
+
 def test_realtime_priority_reverts_when_declined(app: QApplication, manager: ConfigManager) -> None:
     tab = _make_tab(manager, ThemeManager(app))
     tab._confirm_realtime = lambda: False  # type: ignore[method-assign]

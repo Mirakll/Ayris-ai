@@ -657,6 +657,26 @@ class TestSoundDeviceBackend:
         assert devices[1].default_output is True
         assert devices[1].default_sample_rate == 48000.0
 
+    def test_wdm_ks_variants_are_dropped_keeping_real_indices(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # PortAudio lists the same microphone under every host API; the WDM-KS
+        # copy cannot be opened the way Ayris captures, so it must not reach the
+        # device list — while the survivors keep their original PortAudio index,
+        # which is what a stream is opened by.
+        sd = _FakeSd(
+            devices=[
+                {"name": "Микрофон", "hostapi": 0, "max_input_channels": 1},
+                {"name": "Микрофон", "hostapi": 1, "max_input_channels": 2},
+                {"name": "Микрофон", "hostapi": 2, "max_input_channels": 2},
+            ],
+            host_apis=[{"name": "MME"}, {"name": "Windows WDM-KS"}, {"name": "Windows WASAPI"}],
+            default_device=(0, -1),
+        )
+        devices = _backend_with(monkeypatch, sd).raw_devices()
+        assert [d.host_api for d in devices] == ["MME", "Windows WASAPI"]
+        assert [d.index for d in devices] == [0, 2]
+
     def test_a_missing_name_and_host_api_get_defaults(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

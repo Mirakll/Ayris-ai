@@ -1438,6 +1438,33 @@ class TestCatalogLayout:
         assert Path(resolved).is_file()
         assert Path(resolved).stem == phrase.text.replace(" ", "_")
 
+    def test_a_missing_variant_does_not_sink_the_others(self, tmp_path: Path) -> None:
+        """One variant without a model is dropped, not fatal for the rest.
+
+        A user adds a pronunciation variant in the settings window before a model
+        is trained for it; openWakeWord keys on a file per variant, so the extra
+        phrase has nowhere to resolve.  It must be skipped, not take the whole
+        load - and with it the detector, the microphone and the wake test - down.
+        """
+        models_dir = self._installed(tmp_path)
+        phrases = (WakePhrase("hey jarvis"), WakePhrase("никогда не обучали"))
+
+        resolved = OpenWakeWordEngine()._resolve_all(phrases, models_dir)
+
+        assert set(resolved) == {"hey jarvis"}
+        assert Path(resolved["hey jarvis"]).stem == "hey_jarvis"
+
+    def test_no_variant_resolves_raises_with_the_folder(self, tmp_path: Path) -> None:
+        """When not one variant resolves the message still says where to look."""
+        models_dir = tmp_path / "wake"
+        models_dir.mkdir()
+        phrases = (WakePhrase("айрис"), WakePhrase("аирис"))
+
+        with pytest.raises(WakeWordError) as excinfo:
+            OpenWakeWordEngine()._resolve_all(phrases, models_dir)
+
+        assert str(models_dir) in excinfo.value.user_message
+
 
 @pytest.mark.models
 class TestRealEngines:

@@ -21,11 +21,13 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from pathlib import Path
 from typing import Any, ClassVar
 
 import httpx
 import pytest
 
+from ayris.core.config import Settings
 from ayris.core.connectivity import ConnectivityMonitor
 from ayris.core.errors import LlmAuthError, LlmError, LlmQuotaError
 from ayris.core.events import EventBus, NotificationRequested, OnlineStatusChanged
@@ -42,12 +44,13 @@ from ayris.nlu.llm.base import (
     LlmTextDelta,
     LlmTool,
 )
-from ayris.nlu.llm.cloud import OpenAiCompatibleClient
-from ayris.nlu.llm.factory import create_llm_client, is_local_provider
+from ayris.nlu.llm.cloud import CloudLlmClient, OpenAiCompatibleClient
+from ayris.nlu.llm.factory import _resolve_gguf_path, create_llm_client, is_local_provider
 from ayris.nlu.llm.llamacpp_client import (
     DEFAULT_TEMPERATURE,
     LlamaCppLlmClient,
     LlamaCppOptions,
+    _fold_system_into_user,
 )
 from ayris.nlu.llm.lmstudio_client import LmStudioLlmClient
 from ayris.nlu.llm.ollama_client import OllamaLlmClient, OllamaPullProgress
@@ -108,7 +111,9 @@ class OllamaRecorder:
     Routes ``/api/version`` (reachability), ``/api/tags`` (model list), ``/api/chat``
     (the NDJSON answer stream) and ``/api/pull`` (download progress), each answered
     from bytes handed in at construction. With ``raise_on_version`` the reachability
-    ping fails like a refused connection — that is how «Ollama не запущена» is proven.
+    ping fails like a refused connection — that is how «Ollama не запущена» is proven;
+    with ``version_status`` it answers non-2xx, standing in for a proxy or a wrong
+    service on the port, which must read as «down» too rather than an internet error.
     """
 
     def __init__(
@@ -118,12 +123,14 @@ class OllamaRecorder:
         chat: bytes = b"",
         pull: bytes = b"",
         raise_on_version: bool = False,
+        version_status: int = 200,
     ) -> None:
         self.requests: list[httpx.Request] = []
         self._tags = tags if tags is not None else {"models": [{"name": "llama3.2:1b"}]}
         self._chat = chat
         self._pull = pull
         self._raise_on_version = raise_on_version
+        self._version_status = version_status
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -131,6 +138,8 @@ class OllamaRecorder:
         if path.endswith("/api/version"):
             if self._raise_on_version:
                 raise httpx.ConnectError("connection refused", request=request)
+            if not (200 <= self._version_status < 300):
+                return httpx.Response(self._version_status, json={"error": "down"})
             return httpx.Response(200, json={"version": "0.4.7"})
         if path.endswith("/api/tags"):
             return httpx.Response(200, json=self._tags)
@@ -312,6 +321,17 @@ class TestOllama:
         assert "ollama serve" in message
         client.close()
 
+    def test_non_2xx_version_reads_as_down_not_as_internet(self) -> None:
+        # A proxy that intercepts the loopback address answers 503 for it; that is
+        # «down», and must never surface as the branded «проверьте интернет».
+        client = ollama_client(OllamaRecorder(version_status=503))
+        with pytest.raises(LlmError) as excinfo:
+            client.list_models()
+        message = excinfo.value.user_message
+        assert "не запущена" in message
+        assert "интернет" not in message
+        client.close()
+
     def test_list_models_reads_the_tags(self) -> None:
         recorder = OllamaRecorder(
             tags={"models": [{"name": "llama3.2:1b"}, {"name": "qwen2.5:7b"}]}
@@ -421,6 +441,39 @@ class TestLmStudio:
         assert client.list_models() == ("local-a", "local-b")
         assert recorder.last.url.path.endswith("/v1/models")
         client.close()
+
+
+class TestLocalDirectConnection:
+    """Local servers must not route their loopback traffic through a proxy.
+
+    An outbound proxy in ``HTTP(S)_PROXY`` (Happ, Xray, a corporate gateway)
+    intercepts ``127.0.0.1`` and answers for a server it cannot reach, so a
+    stopped Ollama reads as a 5xx that the retry path spells «проверьте
+    интернет» — the exact sentence the local clients are meant to avoid. The
+    guard is ``trust_env=False`` on the built client, so the fix is to pin that
+    flag: False for the local servers, True for the cloud whose traffic really
+    does leave the machine.
+    """
+
+    def _trust_env_of(self, client: LlmClient) -> bool:
+        assert isinstance(client, CloudLlmClient)
+        http = client._require_client()  # the flag under test lives on the built client
+        try:
+            return bool(http.trust_env)
+        finally:
+            client.close()
+
+    def test_ollama_ignores_environment_proxies(self) -> None:
+        client = create_llm_client("ollama", base_url="http://127.0.0.1:11434")
+        assert self._trust_env_of(client) is False
+
+    def test_lmstudio_ignores_environment_proxies(self) -> None:
+        client = create_llm_client("lmstudio", base_url="http://127.0.0.1:1234/v1")
+        assert self._trust_env_of(client) is False
+
+    def test_cloud_provider_still_honours_environment_proxies(self) -> None:
+        client = create_llm_client("openai", api_key="k")
+        assert self._trust_env_of(client) is True
 
 
 class TestCatalogue:
@@ -545,6 +598,34 @@ class RaisingChatModel:
         stream: bool,
     ) -> Iterator[Mapping[str, Any]]:
         raise RuntimeError("llama kernel died")
+
+
+class SystemRejectingChatModel:
+    """Mimics a Gemma-2 chat template: refuses a system role at call time.
+
+    The real llama.cpp applies the Jinja template synchronously inside
+    ``create_chat_completion`` — so a «System role not supported» raise happens
+    before any chunk is yielded, which is exactly what lets the client fold and
+    retry. This fake reproduces that timing (a plain ``return``/``raise``, not a
+    generator) and records every call so a test can see the retry.
+    """
+
+    def __init__(self, chunks: tuple[Mapping[str, Any], ...]) -> None:
+        self._chunks = chunks
+        self.calls: list[dict[str, Any]] = []
+
+    def create_chat_completion(
+        self,
+        *,
+        messages: Sequence[JsonObject],
+        temperature: float,
+        max_tokens: int | None,
+        stream: bool,
+    ) -> Iterator[Mapping[str, Any]]:
+        self.calls.append({"messages": [dict(m) for m in messages]})
+        if any(m.get("role") == "system" for m in messages):
+            raise ValueError("System role not supported")
+        return iter(self._chunks)
 
 
 def text_chunk(content: str) -> dict[str, Any]:
@@ -699,6 +780,204 @@ class TestLlamaCpp:
         client = self._client(handle, ram_limit_mb=2048, requires_ram_mb=8000)
         with pytest.raises(LlmError):
             list(client.stream([LlmMessage.user("привет")]))
+
+
+class TestResolveGgufPath:
+    """The fallback that keeps «не выбран файл модели» from showing when a model
+    is really on disk: an empty or stale ``model_path`` is recovered from the
+    folders the user has kept models in, preferring the configured model's file.
+    """
+
+    @staticmethod
+    def _empty_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Point the profile's models dir at an empty folder, so only the
+        explicitly passed ``search_dirs`` can supply a replacement. Also stub the
+        persisted config to an empty one, so the self-heal reading ``config.toml``
+        does not reach the real user config during the test.
+        """
+        profile = tmp_path / "profile_models"
+        profile.mkdir()
+
+        class _Paths:
+            llm_models_dir = profile
+
+        monkeypatch.setattr("ayris.core.paths.get_paths", lambda: _Paths())
+        monkeypatch.setattr("ayris.core.config.get_settings", lambda: Settings(), raising=False)
+
+    def test_honest_path_is_returned_unchanged(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._empty_profile(monkeypatch, tmp_path)
+        model = tmp_path / "real.gguf"
+        model.write_bytes(b"x")
+        assert _resolve_gguf_path(str(model)) == str(model)
+
+    def test_empty_path_recovers_from_search_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._empty_profile(monkeypatch, tmp_path)
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "a-model.gguf").write_bytes(b"x")
+        assert _resolve_gguf_path("", search_dirs=[str(store)]) == str(store / "a-model.gguf")
+
+    def test_stale_path_recovers_from_search_dir(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._empty_profile(monkeypatch, tmp_path)
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "a-model.gguf").write_bytes(b"x")
+        missing = str(tmp_path / "gone" / "x.gguf")
+        assert _resolve_gguf_path(missing, search_dirs=[str(store)]) == str(store / "a-model.gguf")
+
+    def test_prefer_wins_over_alphabetical_order(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._empty_profile(monkeypatch, tmp_path)
+        store = tmp_path / "store"
+        store.mkdir()
+        # «Big-27B» sorts first but is not what the config asked for.
+        (store / "Big-27B.gguf").write_bytes(b"x")
+        (store / "Vikhr-Qwen-2.5-1.5b.gguf").write_bytes(b"x")
+        picked = _resolve_gguf_path("", search_dirs=[str(store)], prefer="Vikhr-Qwen-2.5-1.5b")
+        assert picked == str(store / "Vikhr-Qwen-2.5-1.5b.gguf")
+
+    def test_falls_back_to_first_when_prefer_matches_nothing(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._empty_profile(monkeypatch, tmp_path)
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "only.gguf").write_bytes(b"x")
+        assert _resolve_gguf_path("", search_dirs=[str(store)], prefer="absent") == str(
+            store / "only.gguf"
+        )
+
+    def test_empty_stays_empty_when_nothing_installed(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._empty_profile(monkeypatch, tmp_path)
+        assert _resolve_gguf_path("", search_dirs=[str(tmp_path / "nowhere")]) == ""
+
+    def test_profile_dir_is_searched_before_the_user_dirs(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        profile = tmp_path / "profile_models"
+        profile.mkdir()
+        (profile / "installed.gguf").write_bytes(b"x")
+
+        class _Paths:
+            llm_models_dir = profile
+
+        monkeypatch.setattr("ayris.core.paths.get_paths", lambda: _Paths())
+        monkeypatch.setattr("ayris.core.config.get_settings", lambda: Settings(), raising=False)
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "elsewhere.gguf").write_bytes(b"x")
+        assert _resolve_gguf_path("", search_dirs=[str(store)]) == str(profile / "installed.gguf")
+
+    def test_self_heals_from_persisted_config_when_bootstrap_is_empty(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The last-resort net: a worker spawned with defaults (empty path, no
+        search dirs, the schema's default model name) still recovers the user's
+        model, because the config on disk names it and where it lives."""
+        profile = tmp_path / "profile_models"
+        profile.mkdir()
+
+        class _Paths:
+            llm_models_dir = profile
+
+        monkeypatch.setattr("ayris.core.paths.get_paths", lambda: _Paths())
+        store = tmp_path / "store"
+        store.mkdir()
+        (store / "Big-27B.gguf").write_bytes(b"x")
+        wanted = store / "Vikhr-Qwen-2.5-1.5b.gguf"
+        wanted.write_bytes(b"x")
+        persisted = Settings.model_validate(
+            {
+                "ai": {
+                    "provider": "llamacpp",
+                    "model": "Vikhr-Qwen-2.5-1.5b",
+                    "model_path": str(wanted),
+                }
+            }
+        )
+        monkeypatch.setattr("ayris.core.config.get_settings", lambda: persisted, raising=False)
+        # Bootstrap handed pure defaults: empty path, no dirs, default model name.
+        picked = _resolve_gguf_path("", search_dirs=(), prefer="qwen2.5:7b-instruct")
+        assert picked == str(wanted)
+
+
+class TestSystemRoleFolding:
+    """GGUF templates that reject a system role (Gemma-2, Vikhr-Gemma) must still
+    work: the client folds the system prompt into the first user turn and retries,
+    without the caller or the config knowing which family the model belongs to.
+    """
+
+    def _client(self, handle: object) -> LlamaCppLlmClient:
+        options = LlamaCppOptions(model_path="model.gguf", model="vikhr-gemma")
+        return LlamaCppLlmClient(options, factory=make_factory(handle))
+
+    def test_pure_fold_merges_system_into_first_user(self) -> None:
+        payload = [
+            {"role": "system", "content": "ПЕРСОНА"},
+            {"role": "user", "content": "привет"},
+        ]
+        folded = _fold_system_into_user(payload)
+        assert folded == [{"role": "user", "content": "ПЕРСОНА\n\nпривет"}]
+
+    def test_pure_fold_joins_multiple_system_messages(self) -> None:
+        payload = [
+            {"role": "system", "content": "A"},
+            {"role": "system", "content": "B"},
+            {"role": "user", "content": "вопрос"},
+        ]
+        folded = _fold_system_into_user(payload)
+        assert folded == [{"role": "user", "content": "A\n\nB\n\nвопрос"}]
+
+    def test_pure_fold_invents_a_user_turn_when_there_is_none(self) -> None:
+        folded = _fold_system_into_user([{"role": "system", "content": "ПЕРСОНА"}])
+        assert folded == [{"role": "user", "content": "ПЕРСОНА"}]
+
+    def test_pure_fold_returns_none_without_a_system_message(self) -> None:
+        assert _fold_system_into_user([{"role": "user", "content": "привет"}]) is None
+
+    def test_rejecting_template_folds_and_answers(self) -> None:
+        handle = SystemRejectingChatModel(
+            (text_chunk("При"), text_chunk("вет"), finish_chunk("stop"))
+        )
+        client = self._client(handle)
+        response = client.complete([LlmMessage.system("ПЕРСОНА"), LlmMessage.user("привет")])
+        assert response.text == "Привет"
+        # Two calls: the first (with a system role) raised, the second was folded.
+        assert len(handle.calls) == 2
+        assert any(m["role"] == "system" for m in handle.calls[0]["messages"])
+        retried = handle.calls[1]["messages"]
+        assert all(m["role"] != "system" for m in retried)
+        assert retried[0] == {"role": "user", "content": "ПЕРСОНА\n\nпривет"}
+
+    def test_fold_is_remembered_so_later_calls_do_not_retry(self) -> None:
+        handle = SystemRejectingChatModel((finish_chunk("stop"),))
+        client = self._client(handle)
+        client.complete([LlmMessage.system("ПЕРСОНА"), LlmMessage.user("раз")])
+        assert client._fold_system is True
+        assert len(handle.calls) == 2  # one failed, one folded
+        client.complete([LlmMessage.system("ПЕРСОНА"), LlmMessage.user("два")])
+        # The remembered flag folds upfront, so this call did not fail-and-retry.
+        assert len(handle.calls) == 3
+        assert all(m["role"] != "system" for m in handle.calls[2]["messages"])
+
+    def test_accepting_template_is_left_untouched(self) -> None:
+        handle = FakeChatModel((text_chunk("ок"), finish_chunk("stop")))
+        client = self._client(handle)
+        client.complete([LlmMessage.system("ПЕРСОНА"), LlmMessage.user("привет")])
+        # A template that accepts a system role keeps it — no fold, no quality loss.
+        assert client._fold_system is False
+        assert len(handle.calls) == 1
+        roles = [m["role"] for m in handle.calls[0]["messages"]]
+        assert roles == ["system", "user"]
 
 
 # ----------------------------------------------------------------------

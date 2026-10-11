@@ -1187,3 +1187,25 @@ class TestPersistenceAcrossRestarts:
                 reader.close()
 
         assert [row["name"] for row in rows] == ["общий"]
+
+
+class TestLikeWildcardEscaping:
+    """A search string containing % or _ must match them literally, not as wildcards."""
+
+    def test_command_search_escapes_percent(self, repos: Repositories, profile_id: int) -> None:
+        repos.commands.create(make_command(profile_id, name="свет%"))
+        repos.commands.create(make_command(profile_id, name="светильник"))
+        hits = [command.name for command in repos.commands.search(profile_id, "свет%")]
+        assert hits == ["свет%"]
+
+    def test_command_search_escapes_underscore(self, repos: Repositories, profile_id: int) -> None:
+        repos.commands.create(make_command(profile_id, name="свет_1"))
+        repos.commands.create(make_command(profile_id, name="светА1"))
+        hits = [command.name for command in repos.commands.search(profile_id, "свет_1")]
+        assert hits == ["свет_1"]
+
+    def test_clipboard_history_escapes_percent(self, repos: Repositories) -> None:
+        repos.clipboard.add("скидка 50%")
+        repos.clipboard.add("скидка 50 рублей")
+        hits = [entry.content for entry in repos.clipboard.history(query="50%")]
+        assert hits == ["скидка 50%"]

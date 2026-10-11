@@ -459,6 +459,17 @@ class TestToWords:
         assert number_to_words(value, feminine=True) == expected
 
     @pytest.mark.parametrize(
+        "value",
+        [Decimal("0.3333"), Decimal("0.123456"), Decimal("1.98765"), Decimal("12.5001")],
+    )
+    def test_long_fractions_do_not_overflow(self, value: Decimal) -> None:
+        """Four+ decimal places used to crash _under_thousand with an IndexError."""
+        assert number_to_words(value)  # no crash, non-empty
+
+    def test_long_fraction_is_read_to_three_places(self) -> None:
+        assert number_to_words(Decimal("0.3333")) == "ноль целых триста тридцать три тысячных"
+
+    @pytest.mark.parametrize(
         ("value", "expected"),
         [
             (Decimal("1.5"), "одна целая пять десятых"),

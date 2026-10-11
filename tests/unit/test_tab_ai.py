@@ -37,9 +37,19 @@ from ayris.nlu.llm.base import (
     LlmUsage,
     LlmUsageDelta,
 )
+from ayris.nlu.llm.catalog import RECOMMENDED, LlmModelSpec
+from ayris.nlu.llm.local_models import LocalModel
 from ayris.nlu.llm.ollama_client import OllamaPullProgress
 
 pytestmark = pytest.mark.unit
+
+
+def _gguf_spec() -> LlmModelSpec:
+    """Первая рекомендованная модель со встроенным GGUF для llama.cpp."""
+    for spec in RECOMMENDED:
+        if spec.gguf_catalog_id and spec.runs_on("llamacpp"):
+            return spec
+    raise AssertionError("в каталоге нет модели с GGUF для llama.cpp")
 
 
 class _FakeKeyring:
@@ -131,6 +141,11 @@ def _fake_factory(provider: str, **kwargs: object) -> LlmClient:
     return _FakeStreamClient()
 
 
+def _no_local_models(_current_path: str) -> tuple[LocalModel, ...]:
+    """Пустой диск по умолчанию: тест не должен зависеть от профиля машины."""
+    return ()
+
+
 @pytest.fixture
 def app() -> Iterator[QApplication]:
     existing = QApplication.instance()
@@ -159,6 +174,7 @@ def _services(**overrides: object) -> AiServices:
         "secrets": SecretsStore(backend=_FakeKeyring()),
         "client_factory": _fake_factory,
         "total_ram_mb": 16384,
+        "local_models": _no_local_models,
     }
     defaults.update(overrides)
     return AiServices(**defaults)
@@ -168,6 +184,16 @@ def _make_tab(manager: ConfigManager, theme: ThemeManager, **overrides: object) 
     tab = AiTab(manager, theme, None, services=_services(**overrides))
     tab.load_from_config()
     return tab
+
+
+def _cloud_tab(manager: ConfigManager, theme: ThemeManager, **overrides: object) -> AiTab:
+    """Вкладка на облачном поставщике: у него список моделей приходит по сети.
+
+    По умолчанию в конфиге стоит llama.cpp, а у встроенного движка список — это
+    файлы на диске, и сетевых веток там просто нет.
+    """
+    manager.apply({"ai.provider": "openai"})
+    return _make_tab(manager, theme, **overrides)
 
 
 def test_tab_registers_itself_as_the_ai_factory() -> None:
@@ -193,8 +219,8 @@ def test_content_fits_without_a_horizontal_scrollbar(
 
 def test_tab_assembles_and_loads_defaults(app: QApplication, manager: ConfigManager) -> None:
     tab = _make_tab(manager, ThemeManager(app))
-    assert tab._provider_combo.currentData() == "ollama"
-    assert tab._model_edit.text() == "qwen2.5:7b-instruct"
+    assert tab._provider_combo.currentData() == "llamacpp"
+    assert tab._model_picker.current_model() == "qwen2.5:7b-instruct"
     assert mode_from_config(manager.settings) is NluMode.HYBRID
     assert tab._mode_buttons[NluMode.HYBRID].isChecked()
     tab.dispose()
@@ -255,9 +281,18 @@ def test_provider_switch_toggles_cloud_and_local_blocks(
     tab = _make_tab(manager, ThemeManager(app))
     combo = tab._provider_combo
 
-    # Default Ollama: local host and catalogue, no cloud key.
+    # Default llama.cpp (in-process): catalogue and the .gguf picker, no host or key.
+    assert not tab._catalog_block.isHidden()
+    assert not tab._gguf_pick_button.isHidden()
+    assert tab._host_card.isHidden()
+    assert tab._key_block.isHidden()
+    assert tab._probe_block.isHidden()
+
+    # Ollama: local host and catalogue, no cloud key, and no .gguf picker.
+    combo.setCurrentIndex(combo.findData("ollama"))
     assert not tab._host_card.isHidden()
     assert not tab._catalog_block.isHidden()
+    assert tab._gguf_pick_button.isHidden()
     assert tab._key_block.isHidden()
     assert tab._probe_button.text() == "Проверить соединение"
 
@@ -297,13 +332,75 @@ def test_cloud_key_never_reaches_the_config(
     tab.close()
 
 
-def test_probe_populates_the_model_combo(app: QApplication, manager: ConfigManager) -> None:
-    tab = _make_tab(manager, ThemeManager(app))
+def test_probe_warms_the_model_picker(app: QApplication, manager: ConfigManager) -> None:
+    tab = _cloud_tab(manager, ThemeManager(app))
     tab._on_probe_done(CredentialCheck(ok=True, detail="Ключ рабочий.", models=("m-a", "m-b")))
     assert tab._probe_status.text() == "Ключ рабочий."
-    assert tab._model_combo.isEnabled()
-    assert tab._model_combo.count() == 2
-    assert tab._model_combo.itemData(0) == "m-a"
+    # Список пикера подтянулся с сервера, текущая модель осталась приколотой.
+    assert "m-a" in tab._model_picker.models()
+    assert "m-b" in tab._model_picker.models()
+    assert tab._model_picker.current_model() == "qwen2.5:7b-instruct"
+    tab.dispose()
+    tab.close()
+
+
+def test_choosing_a_model_writes_config_and_history(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    provider = manager.settings.ai.provider
+    tab._on_model_chosen("some-model:latest")
+    assert manager.settings.ai.model == "some-model:latest"
+    assert manager.settings.ai.model_history[provider] == ["some-model:latest"]
+    assert tab._model_picker.current_model() == "some-model:latest"
+    tab.dispose()
+    tab.close()
+
+
+def test_add_new_reveals_input_and_applies_typed_name(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    assert tab._new_model_row.isHidden()
+
+    tab._on_add_new_requested()
+    assert not tab._new_model_row.isHidden()
+
+    tab._new_model_edit.setText("gpt-4o")
+    tab._commit_new_model()
+    assert manager.settings.ai.model == "gpt-4o"
+    assert tab._new_model_row.isHidden()
+    assert tab._new_model_edit.text() == ""
+    tab.dispose()
+    tab.close()
+
+
+def test_history_is_most_recent_first_and_deduped(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    provider = manager.settings.ai.provider
+    tab._on_model_chosen("a")
+    tab._on_model_chosen("b")
+    tab._on_model_chosen("a")
+    assert manager.settings.ai.model_history[provider] == ["a", "b"]
+    tab.dispose()
+    tab.close()
+
+
+def test_opening_the_picker_fetches_and_populates(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    tab = _cloud_tab(manager, ThemeManager(app))
+    # Прогоняем «фон» синхронно, чтобы не зависеть от живого потока.
+    tab._models_runner.run = lambda work: tab._models_runner.finished.emit(work())
+    tab._model_picker.list_requested.emit()
+    # Фейковый клиент отдаёт ("gpt-4o-mini", "gpt-4o").
+    assert "gpt-4o-mini" in tab._model_picker.models()
+    assert not tab._models_loading
+    # Повторное открытие берёт из кэша — новый прогон не запускается.
+    tab._models_runner.run = lambda _work: pytest.fail("не должно ходить в сеть повторно")
+    tab._model_picker.list_requested.emit()
     tab.dispose()
     tab.close()
 
@@ -396,3 +493,184 @@ def test_clear_history_button_enabled_only_with_a_service(
     assert with_service._clear_button.isEnabled()
     with_service.dispose()
     with_service.close()
+
+
+def test_llamacpp_download_finish_writes_model_path_and_model(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    from ayris.core.events import ModelDownloadFinished
+
+    tab = _make_tab(manager, ThemeManager(app))  # provider llamacpp по умолчанию
+    spec = _gguf_spec()
+    tab._pulling_spec = spec
+    tab._pulling_catalog_id = spec.gguf_catalog_id
+    tab._on_gguf_finished(
+        ModelDownloadFinished(model_id=spec.gguf_catalog_id, kind="llm", path="C:/models/x.gguf")
+    )
+    ai = manager.settings.ai
+    assert ai.model_path == "C:/models/x.gguf"
+    assert ai.model == spec.name
+    assert tab._pulling_catalog_id == ""
+    assert f"«{spec.name}»" in tab._catalog_status.text()
+    tab.dispose()
+    tab.close()
+
+
+def test_pick_local_gguf_writes_model_path(app: QApplication, manager: ConfigManager) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    tab._set_local_model("C:/weights/custom.gguf")
+    assert manager.settings.ai.model_path == str(Path("C:/weights/custom.gguf"))
+    assert "custom.gguf" in tab._model_path_label.text()
+    # Имя модели идёт за файлом: иначе в отчётах осталась бы прежняя модель.
+    assert manager.settings.ai.model == "custom"
+    tab.dispose()
+    tab.close()
+
+
+# -- список моделей встроенного llama.cpp -----------------------------------
+
+
+def _disk(*models: tuple[str, str]) -> Callable[[str], tuple[LocalModel, ...]]:
+    """Подменить «что лежит на диске» парами «имя → путь»."""
+
+    def scan(_current_path: str) -> tuple[LocalModel, ...]:
+        return tuple(LocalModel(name, Path(path)) for name, path in models)
+
+    return scan
+
+
+def test_llamacpp_picker_lists_the_gguf_files_on_disk(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    tab = _make_tab(
+        manager,
+        ThemeManager(app),
+        local_models=_disk(("Vikhr-Gemma-2B", "D:/llm/Vikhr-Gemma-2B.gguf")),
+    )
+    assert "Vikhr-Gemma-2B" in tab._model_picker.models()
+    tab.dispose()
+    tab.close()
+
+
+def test_llamacpp_picker_marks_the_entry_whose_file_is_configured(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    manager.apply({"ai.model_path": "D:/llm/vikhr.gguf", "ai.model": "совсем другое имя"})
+    tab = _make_tab(
+        manager,
+        ThemeManager(app),
+        local_models=_disk(("vikhr", "D:/llm/vikhr.gguf"), ("gemma", "D:/llm/gemma.gguf")),
+    )
+    # Отметка идёт по файлу, а не по записанному имени: движок работает с файлом.
+    assert tab._model_picker.current_model() == "vikhr"
+    tab.dispose()
+    tab.close()
+
+
+def test_choosing_a_local_model_switches_both_the_name_and_the_file(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    manager.apply({"ai.model_path": "D:/llm/vikhr.gguf", "ai.model": "vikhr"})
+    tab = _make_tab(
+        manager,
+        ThemeManager(app),
+        local_models=_disk(("vikhr", "D:/llm/vikhr.gguf"), ("gemma", "D:/llm/gemma.gguf")),
+    )
+
+    tab._on_model_chosen("gemma")
+
+    ai = manager.settings.ai
+    assert ai.model == "gemma"
+    assert ai.model_path == str(Path("D:/llm/gemma.gguf"))
+    # Обе правки под областью LLM — воркер перезапустится и выгрузит старую модель.
+    assert RestartScope.LLM in manager.pending_restarts
+    assert tab._model_picker.current_model() == "gemma"
+    tab.dispose()
+    tab.close()
+
+
+def test_switching_back_restores_the_first_file(app: QApplication, manager: ConfigManager) -> None:
+    tab = _make_tab(
+        manager,
+        ThemeManager(app),
+        local_models=_disk(("vikhr", "D:/llm/vikhr.gguf"), ("gemma", "D:/llm/gemma.gguf")),
+    )
+
+    tab._on_model_chosen("gemma")
+    tab._on_model_chosen("vikhr")
+
+    assert manager.settings.ai.model_path == str(Path("D:/llm/vikhr.gguf"))
+    assert manager.settings.ai.model == "vikhr"
+    tab.dispose()
+    tab.close()
+
+
+def test_a_hand_typed_name_does_not_touch_the_model_file(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    manager.apply({"ai.model_path": "D:/llm/vikhr.gguf"})
+    tab = _make_tab(manager, ThemeManager(app), local_models=_disk(("vikhr", "D:/llm/vikhr.gguf")))
+
+    tab._new_model_edit.setText("какая-то-своя")
+    tab._commit_new_model()
+
+    assert manager.settings.ai.model == "какая-то-своя"
+    assert manager.settings.ai.model_path == "D:/llm/vikhr.gguf"
+    tab.dispose()
+    tab.close()
+
+
+def test_opening_the_llamacpp_picker_rescans_the_disk_without_network(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    seen: list[str] = []
+    files: list[tuple[str, str]] = []
+
+    def scan(current_path: str) -> tuple[LocalModel, ...]:
+        seen.append(current_path)
+        return tuple(LocalModel(name, Path(path)) for name, path in files)
+
+    tab = _make_tab(manager, ThemeManager(app), local_models=scan)
+    tab._models_runner.run = lambda _work: pytest.fail("встроенный движок в сеть не ходит")
+    assert tab._model_picker.models() == ()
+
+    files.append(("новая", "D:/llm/новая.gguf"))
+    tab._model_picker.list_requested.emit()
+
+    assert "новая" in tab._model_picker.models()
+    assert len(seen) >= 2  # скан на загрузке вкладки и ещё раз на открытии списка
+    tab.dispose()
+    tab.close()
+
+
+def test_a_failing_disk_scan_keeps_the_previous_list(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    broken = False
+
+    def scan(_current_path: str) -> tuple[LocalModel, ...]:
+        if broken:
+            raise OSError("том отвалился")
+        return (LocalModel("vikhr", Path("D:/llm/vikhr.gguf")),)
+
+    tab = _make_tab(manager, ThemeManager(app), local_models=scan)
+    assert "vikhr" in tab._model_picker.models()
+
+    broken = True
+    tab._model_picker.list_requested.emit()
+
+    assert "vikhr" in tab._model_picker.models()
+    tab.dispose()
+    tab.close()
+
+
+def test_gguf_download_without_backend_reports_unavailable(
+    app: QApplication, manager: ConfigManager
+) -> None:
+    tab = _make_tab(manager, ThemeManager(app))
+    tab._backend_tried = True  # менеджер моделей недоступен и уже пробовали
+    tab._start_gguf_download(_gguf_spec())
+    assert "Менеджер моделей недоступен" in tab._catalog_status.text()
+    assert tab._pulling_catalog_id == ""
+    tab.dispose()
+    tab.close()

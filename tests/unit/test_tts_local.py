@@ -85,6 +85,7 @@ from ayris.audio.tts.sentence_split import (
     is_speakable,
     normalize_whitespace,
     split_sentences,
+    strip_markup,
 )
 from ayris.core.errors import TtsError
 from ayris.core.events import NotificationRequested
@@ -398,6 +399,22 @@ class TestSentenceSplit:
 
     def test_normalize_whitespace_collapses_runs(self):
         assert normalize_whitespace("  а\t\tб \n в ") == "а б в"
+
+    def test_strip_markup_drops_markdown_keeps_the_word(self):
+        assert strip_markup("**важно**") == "важно"
+        assert strip_markup("это _курсив_ и `код`") == "это курсив и код"
+        assert strip_markup("## Заголовок") == " Заголовок"
+
+    def test_strip_markup_drops_straight_quotes_around_terms(self):
+        assert strip_markup('запрос "лор"') == "запрос лор"
+        assert strip_markup("слово 'лор'") == "слово лор"
+        # Ёлочки движок читает как паузу, а не слово — их оставляем.
+        assert strip_markup("он сказал «готово»") == "он сказал «готово»"
+
+    def test_split_strips_markup_before_speaking(self):
+        assert split_sentences('Ваш запрос "лор" может быть **разным**.') == [
+            "Ваш запрос лор может быть разным."
+        ]
 
     def test_nothing_is_lost(self):
         """Every word of the answer must reach the speakers."""
@@ -829,6 +846,24 @@ class TestPiperEngine:
                 TtsOptions(),
             )
 
+    def test_a_voice_id_ending_in_onnx_is_not_doubled(self):
+        """«Своя модель» stores the file name, so the id may already end in .onnx.
+
+        Appending the suffix unconditionally gave «voice.onnx.onnx», which no file
+        matches — the preview then failed inside the player and «Прослушать» fell
+        silent. The resolver must add .onnx only when it is missing.
+        """
+        resolved = piper_engine._resolve_model_path(
+            VoiceSpec(engine="piper", voice_id="ru_RU-ruslan-medium.onnx")
+        )
+        assert resolved.name == "ru_RU-ruslan-medium.onnx"
+
+    def test_a_bare_voice_id_gets_the_onnx_suffix(self):
+        resolved = piper_engine._resolve_model_path(
+            VoiceSpec(engine="piper", voice_id="ru_RU-irina-medium")
+        )
+        assert resolved.name == "ru_RU-irina-medium.onnx"
+
     # ------------------------------------------------------- shaping the audio
     #
     # length_scale, the noise argument and the pitch resample are pure functions
@@ -949,6 +984,25 @@ class TestSileroEngine:
         engine = engine_class("silero")()
         with pytest.raises(TtsError):
             engine.load(VoiceSpec(engine="silero", voice_id="нет такого"), TtsOptions())
+
+    def test_a_non_ascii_model_path_without_a_short_name_is_explained(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """torch.package opens the file through a narrow fopen, so a Cyrillic
+        profile folder (``C:\\Users\\Артём\\…``) with 8.3 names off has to be
+        reported, not fail deep in native code - see native_path."""
+        model = tmp_path / "v4_ru.pt"
+        model.write_bytes(b"not a real package")
+        engine = engine_class("silero")()
+        # torch is absent on CI; the path guard must fire before it is reached.
+        monkeypatch.setattr(type(engine), "_import", lambda *_a, **_k: object())
+        monkeypatch.setattr("ayris.audio.tts.silero_engine.native_path", lambda _p: None)
+        with pytest.raises(TtsError) as excinfo:
+            engine.load(
+                VoiceSpec(engine="silero", voice_id="baya", path=str(model)),
+                TtsOptions(),
+            )
+        assert "латин" in excinfo.value.user_message
 
 
 class TestCoquiEngine:

@@ -407,13 +407,13 @@ class TestWorker:
         worker = make_worker(
             {"provider": "custom", "model": "gw-mini", "host": BASE_URL, "credential_ref": ""}
         )
-        assert worker._client_identity() == ("custom", "gw-mini", "", BASE_URL)
+        assert worker._client_identity() == ("custom", "gw-mini", "", BASE_URL, "")
 
     def test_identity_omits_the_endpoint_for_branded(self) -> None:
         worker = make_worker(
             {"provider": "openai", "model": "gpt-4o-mini", "host": BASE_URL, "credential_ref": ""}
         )
-        assert worker._client_identity() == ("openai", "gpt-4o-mini", "", "")
+        assert worker._client_identity() == ("openai", "gpt-4o-mini", "", "", "")
 
     def test_changing_the_endpoint_changes_identity(self) -> None:
         worker = make_worker({"provider": "custom", "model": "gw", "host": BASE_URL})
