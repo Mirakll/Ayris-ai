@@ -595,10 +595,22 @@ class SttWorker(Worker):
         model on another drive; a bare name is resolved under the profile's
         ``models/stt``.
 
+        When the named folder is not on disk - a stale ``config.toml`` pointing at
+        a model that was never downloaded, which is exactly how the "модель не
+        найдена" error happened - the worker does not fail the phrase: it looks for
+        a model actually installed for this engine and uses that, logging the swap.
+        Falling through to the missing path only when nothing usable is installed.
+
         Raises:
             SttError: The settings name no model at all.
         """
         if not model_name:
+            installed = self._first_installed_model(self._configured_engine())
+            if installed is not None:
+                self.log.warning(
+                    "stt: модель не выбрана, беру установленную %s", installed.name
+                )
+                return installed
             raise SttError(
                 "stt: no offline model configured",
                 user_message="Не выбрана модель распознавания речи. Укажите её в настройках.",
@@ -606,7 +618,37 @@ class SttWorker(Worker):
         candidate = Path(model_name)
         if candidate.is_absolute():
             return candidate
-        return get_paths().stt_models_dir / model_name
+        path = get_paths().stt_models_dir / model_name
+        if not path.exists():
+            installed = self._first_installed_model(self._configured_engine())
+            if installed is not None:
+                self.log.warning(
+                    "stt: модель «%s» не найдена на диске, беру установленную %s",
+                    model_name,
+                    installed.name,
+                )
+                return installed
+        return path
+
+    def _first_installed_model(self, engine_name: str) -> Path | None:
+        """A model folder under ``models/stt`` that ``engine_name`` can load.
+
+        The guard behind :meth:`_model_path`: a glance at the direct children of
+        the profile's model directory, returning the first that carries the
+        engine's marker (GigaAM's ``*.onnx`` export, Vosk's ``am`` acoustic model,
+        a Whisper directory). Read-only and best-effort - any filesystem error is
+        "nothing installed", not an exception in the hot path.
+        """
+        try:
+            root = get_paths().stt_models_dir
+            if not root.is_dir():
+                return None
+            for child in sorted(root.iterdir()):
+                if child.is_dir() and _looks_like_model(child, engine_name):
+                    return child
+        except OSError:
+            return None
+        return None
 
     def _matches(self, engine_name: str, model_name: str) -> bool:
         """Whether the loaded engine is already the one being asked for."""
@@ -631,6 +673,31 @@ def _as_float(value: object, default: float) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return default
     return float(value)
+
+
+def _looks_like_model(directory: Path, engine_name: str) -> bool:
+    """Whether ``directory`` holds a model the named engine can load.
+
+    The marker check behind :meth:`SttWorker._first_installed_model`: GigaAM
+    exports are ``.onnx`` weights, a Vosk model always carries an ``am`` acoustic
+    directory, and Whisper's CTranslate2 export carries ``model.bin``. Unknown
+    engines accept any non-empty folder - a wrong guess is caught by the engine's
+    own loader with a precise message, which is strictly better than refusing a
+    model that would have worked.
+    """
+    try:
+        if engine_name == "gigaam":
+            return any(directory.glob("*.onnx"))
+        if engine_name == "vosk":
+            return (directory / "am").exists() or any(
+                (directory / sub / "am").exists()
+                for sub in ("vosk", "stt", "kws", "model")
+            )
+        if engine_name == "whisper":
+            return (directory / "model.bin").exists()
+        return any(directory.iterdir())
+    except OSError:
+        return False
 
 
 def translate_stt_event(kind: str, payload: JsonObject) -> Event | None:

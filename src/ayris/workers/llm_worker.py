@@ -55,7 +55,7 @@ from ayris.nlu.llm.base import (
     NullLlmClient,
 )
 from ayris.nlu.llm.cloud import READ_TIMEOUT_SEC, _decode_tool_call
-from ayris.nlu.llm.factory import HOST_PROVIDERS, create_llm_client
+from ayris.nlu.llm.factory import HOST_PROVIDERS, LLAMACPP_PROVIDER, create_llm_client
 from ayris.nlu.llm.stream import SentenceAssembler
 from ayris.nlu.llm.usage import UsageMeter, resolve_usage
 from ayris.utils.logger import get_pipeline_logger
@@ -71,6 +71,22 @@ if TYPE_CHECKING:
 __all__ = ["EVENT_TRANSLATOR", "LlmWorker", "translate_llm_event"]
 
 
+#: How often the idle watcher wakes to check for an unused local model. Mirrors
+#: the STT worker: fine granularity for a timeout measured in minutes, cheap, and
+#: it notices a timeout shortened by ``configure`` within one tick.
+_IDLE_POLL: Final = 5.0
+
+#: Eco mode multiplies the configured idle timeout by this, same as the STT
+#: worker — under eco the model is not even warmed at start, but a lazily loaded
+#: one is still dropped sooner.
+_ECO_IDLE_FACTOR: Final = 0.5
+
+#: Idle unload is never scheduled sooner than this, whatever the settings say:
+#: reloading a multi-gigabyte GGUF between two turns of one conversation is not a
+#: memory strategy.
+_MIN_IDLE_SEC: Final = 30.0
+
+
 class LlmWorker(Worker):
     """A language model in a worker process, answering as a stream of sentences.
 
@@ -83,11 +99,14 @@ class LlmWorker(Worker):
     def __init__(self, context: WorkerContext) -> None:
         super().__init__(context)
         self._client: LlmClient | None = None
-        #: ``(provider, model, credential_ref, base_url)`` the current client was
-        #: built for. A configure that changes any of these drops the client so the
-        #: next call rebuilds it — a model swap, or a new custom endpoint, must not
-        #: keep talking to the old one.
-        self._client_key: tuple[str, str, str, str] = ("", "", "", "")
+        #: ``(provider, model, credential_ref, base_url, model_path)`` the current
+        #: client was built for. A configure that changes any of these drops the
+        #: client so the next call rebuilds it — a model swap, or a new custom
+        #: endpoint, must not keep talking to the old one. ``model_path`` is in
+        #: there because the in-process engine is bound to a file, not to a name:
+        #: two GGUFs can carry the same display model and swapping between them
+        #: must still unload the one that was open.
+        self._client_key: tuple[str, str, str, str, str] = ("", "", "", "", "")
         self._meter = UsageMeter()
         self._assembler = SentenceAssembler()
         #: Set by :meth:`cancel` and polled by the stream. Distinct from the
@@ -96,30 +115,77 @@ class LlmWorker(Worker):
         self._cancelled = threading.Event()
         self._calls = 0
         self._pipeline = get_pipeline_logger()
+        #: Serialises building, warming and dropping the client across the
+        #: dispatch thread, the startup warm-up thread and the idle watcher.
+        #: Reentrant because a warm/configure that holds it also calls
+        #: :meth:`_ensure_client`, which takes it too.
+        self._model_lock = threading.RLock()
+        #: ``True`` for the length of a streaming ``chat``. The idle watcher reads
+        #: it so it never frees a local model's native memory mid-generation.
+        self._busy = False
+        #: The startup warm-up thread, when one is running (llama.cpp, non-eco).
+        self._warming: threading.Thread | None = None
+        self._idle_stop = threading.Event()
+        self._idle_thread: threading.Thread | None = None
 
     # -- lifecycle ------------------------------------------------------
 
     def on_start(self) -> None:
-        """Announce readiness. The client is built lazily, on the first call.
+        """Announce readiness, start the idle watcher, and warm a local model.
 
-        Nothing here touches the network: a worker that connected on start would
-        break the zero-telemetry promise, and a provider with no key would fail a
-        launch the user never asked to make a request in.
+        Cloud and the local HTTP servers stay lazy: a worker that connected on
+        start would break the zero-telemetry promise, and a provider with no key
+        would fail a launch the user never asked to make a request in. The
+        in-process llama.cpp engine is different — «запускается вместе с Айрис»
+        means its GGUF is loaded off the request path — so when it is the provider,
+        it is configured, and eco mode is off, a background thread opens the file
+        now. That load reads the local disk only; no request leaves.
         """
+        self._idle_thread = threading.Thread(
+            target=self._idle_loop, name="ayris-llm-idle", daemon=True
+        )
+        self._idle_thread.start()
         self.log.info(
             "llm: воркер готов, провайдер %s, модель %s (клиент по требованию)",
             self._provider() or "—",
             self._model() or "по умолчанию",
         )
+        if self._provider() == LLAMACPP_PROVIDER and not self._eco_mode():
+            self._warming = threading.Thread(
+                target=self._warm_in_background, name="ayris-llm-warm", daemon=True
+            )
+            self._warming.start()
 
     def on_stop(self) -> None:
-        """Close the HTTP client and its connection pool."""
+        """Stop the watcher, let the warm-up finish, and close the client."""
+        self._idle_stop.set()
+        idle = self._idle_thread
+        if idle is not None and idle.is_alive():
+            idle.join(timeout=_IDLE_POLL + 1.0)
+        self._idle_thread = None
+        warming = self._warming
+        if warming is not None and warming.is_alive():
+            warming.join(timeout=1.0)
         self._close_client()
 
     def on_configure(self, params: JsonObject) -> None:
-        """Drop the client when provider, model or credential identity changed."""
+        """Drop the client when provider, model, endpoint or model file changed.
+
+        Dropping it is what actually unloads a local GGUF: the handle goes with
+        the client, and llama.cpp frees the native memory on close. Not while a
+        generation streams, though — `chat` does not hold :attr:`_model_lock` for
+        the length of the stream, so closing under it would pull native memory
+        out from under a running inference. A busy worker is left alone and
+        :meth:`_ensure_client` rebuilds on the next call, which runs before any
+        stream starts.
+        """
         del params
-        if self._client is not None and self._client_identity() != self._client_key:
+        with self._model_lock:
+            if self._client is None or self._client_identity() == self._client_key:
+                return
+            if self._busy:
+                self.log.info("llm: модель сменилась на лету, пересоздам клиент после ответа")
+                return
             self.log.info("llm: настройки сменили провайдера или модель, пересоздаю клиент")
             self._close_client()
 
@@ -168,42 +234,48 @@ class LlmWorker(Worker):
         finish = FinishReason.STOP
         index = 0
 
-        for delta in client.stream(
-            messages,
-            _tools(params),
-            temperature=temperature,
-            max_tokens=max_tokens,
-            cancel=self._should_cancel,
-        ):
-            if isinstance(delta, LlmTextDelta):
-                text_parts.append(delta.text)
-                for sentence in self._assembler.feed(delta.text):
-                    self._emit_sentence(sentence, index, provider, request_id, final=False)
-                    index += 1
-            elif isinstance(delta, LlmToolCallDelta):
-                frag = frags.setdefault(delta.index, {"id": "", "name": "", "args": ""})
-                if delta.call_id:
-                    frag["id"] = delta.call_id
-                if delta.name:
-                    frag["name"] = delta.name
-                frag["args"] += delta.arguments
-            elif isinstance(delta, LlmUsageDelta):
-                reported = delta.usage
-            elif isinstance(delta, LlmDoneDelta):
-                finish = delta.finish_reason
+        # Held for the length of the stream so the idle watcher never unloads a
+        # local model out from under a generation in flight.
+        self._busy = True
+        try:
+            for delta in client.stream(
+                messages,
+                _tools(params),
+                temperature=temperature,
+                max_tokens=max_tokens,
+                cancel=self._should_cancel,
+            ):
+                if isinstance(delta, LlmTextDelta):
+                    text_parts.append(delta.text)
+                    for sentence in self._assembler.feed(delta.text):
+                        self._emit_sentence(sentence, index, provider, request_id, final=False)
+                        index += 1
+                elif isinstance(delta, LlmToolCallDelta):
+                    frag = frags.setdefault(delta.index, {"id": "", "name": "", "args": ""})
+                    if delta.call_id:
+                        frag["id"] = delta.call_id
+                    if delta.name:
+                        frag["name"] = delta.name
+                    frag["args"] += delta.arguments
+                elif isinstance(delta, LlmUsageDelta):
+                    reported = delta.usage
+                elif isinstance(delta, LlmDoneDelta):
+                    finish = delta.finish_reason
 
-        return self._finish_chat(
-            provider=provider,
-            model_used=model_used,
-            request_id=request_id,
-            messages=messages,
-            text_parts=text_parts,
-            frags=frags,
-            reported=reported,
-            finish=finish,
-            index=index,
-            started=started,
-        )
+            return self._finish_chat(
+                provider=provider,
+                model_used=model_used,
+                request_id=request_id,
+                messages=messages,
+                text_parts=text_parts,
+                frags=frags,
+                reported=reported,
+                finish=finish,
+                index=index,
+                started=started,
+            )
+        finally:
+            self._busy = False
 
     def _finish_chat(
         self,
@@ -335,13 +407,19 @@ class LlmWorker(Worker):
         return self._cancelled.is_set() or self.context.cancelled or self.context.stopping
 
     def _ensure_client(self) -> LlmClient:
-        """The client for the current settings, rebuilt when the identity changed."""
-        identity = self._client_identity()
-        if self._client is None or identity != self._client_key:
-            self._close_client()
-            self._client = self._build_client()
-            self._client_key = identity
-        return self._client
+        """The client for the current settings, rebuilt when the identity changed.
+
+        Guarded by :attr:`_model_lock` so the startup warm-up thread and the
+        dispatch thread cannot each build one: the loser would leak a native
+        handle. The lock covers construction only, never a streaming call.
+        """
+        with self._model_lock:
+            identity = self._client_identity()
+            if self._client is None or identity != self._client_key:
+                self._close_client()
+                self._client = self._build_client()
+                self._client_key = identity
+            return self._client
 
     def _build_client(self) -> LlmClient:
         """Construct the provider's client, degrading to «не настроено» on failure.
@@ -377,17 +455,95 @@ class LlmWorker(Worker):
 
     def _close_client(self) -> None:
         """Close the current client and forget it. Safe when there is none."""
-        client, self._client = self._client, None
-        self._client_key = ("", "", "", "")
+        with self._model_lock:
+            client, self._client = self._client, None
+            self._client_key = ("", "", "", "", "")
         if client is not None:
             try:
                 client.close()
             except Exception:
                 self.log.debug("llm: ошибка закрытия клиента", exc_info=True)
 
-    def _client_identity(self) -> tuple[str, str, str, str]:
+    def _warm_in_background(self) -> None:
+        """Open the local GGUF now so the first chat does not pay the load.
+
+        The thread body for the startup warm-up. Never raises out of the thread —
+        there is no caller to raise at — so a load that fails becomes a log line
+        and the client stays lazy, exactly as if the warm-up had not run. A client
+        that is not configured (no file chosen yet) is left alone rather than
+        forced.
+        """
+        try:
+            client = self._ensure_client()
+            warm = getattr(client, "warm", None)
+            if not callable(warm):
+                return
+            if not client.configured:
+                self.log.info(
+                    "llm: локальная модель не готова к прогреву: %s",
+                    getattr(client, "message", "") or "не настроено",
+                )
+                return
+            started = perf_counter()
+            if warm():
+                self.log.info(
+                    "llm: локальная модель прогрета при старте за %.0f мс",
+                    (perf_counter() - started) * 1000.0,
+                )
+        except Exception:  # pragma: no cover - a warm-up bug must not kill the worker
+            self.log.exception("llm: прогрев локальной модели не удался")
+
+    def _client_identity(self) -> tuple[str, str, str, str, str]:
         """What a client is bound to: change any of these and it is rebuilt."""
-        return (self._provider(), self._model(), self._credential_ref(), self._base_url())
+        return (
+            self._provider(),
+            self._model(),
+            self._credential_ref(),
+            self._base_url(),
+            self._model_file(),
+        )
+
+    # -- idle -----------------------------------------------------------
+
+    def _idle_loop(self) -> None:
+        """Poll for an idle local model until the worker stops."""
+        while not self._idle_stop.wait(_IDLE_POLL):
+            self._drop_if_idle()
+
+    def _drop_if_idle(self) -> None:
+        """Unload a local model that has sat unused past the idle timeout.
+
+        Only the in-process llama.cpp client owns native memory worth freeing and
+        exposes ``unload_if_idle``; cloud and HTTP clients have neither, so the
+        duck-typed check simply no-ops for them. Never fires while a ``chat`` is
+        streaming (:attr:`_busy`), and the client re-checks its own freshness
+        under its load lock, so a generation in flight is safe twice over.
+        """
+        timeout = self._idle_timeout()
+        if timeout <= 0.0:
+            return
+        with self._model_lock:
+            if self._busy:
+                return
+            client = self._client
+            unloader = getattr(client, "unload_if_idle", None)
+            if not callable(unloader):
+                return
+            if unloader(idle_sec=timeout):
+                self.log.info("llm: локальная модель выгружена по простою")
+
+    def _idle_timeout(self) -> float:
+        """Seconds of idleness before a local model is dropped. ``0`` disables it."""
+        configured = _as_float(self.params.get("model_idle_sec"), 0.0)
+        if configured <= 0.0:
+            return 0.0
+        if self._eco_mode():
+            configured *= _ECO_IDLE_FACTOR
+        return max(_MIN_IDLE_SEC, configured)
+
+    def _eco_mode(self) -> bool:
+        """``performance.eco_mode``: skip the startup warm-up and unload sooner."""
+        return bool(self.params.get("eco_mode", False))
 
     def _emit_sentence(
         self,
@@ -444,6 +600,15 @@ class LlmWorker(Worker):
     def _model(self) -> str:
         """``ai.model``; empty lets the client pick its default."""
         return str(self.params.get("model", ""))
+
+    def _model_file(self) -> str:
+        """``ai.model_path`` as it arrives in ``extra``; empty for every HTTP provider.
+
+        Part of the client identity: the in-process engine is bound to this file,
+        so a swap of it has to close the old handle even when the display name
+        and the endpoint did not move.
+        """
+        return str(self._extra().get("model_path", ""))
 
     def _credential_ref(self) -> str:
         """Name of the credential entry the key is read from. Never the key."""

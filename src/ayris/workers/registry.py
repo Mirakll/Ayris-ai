@@ -33,17 +33,19 @@ import importlib.util
 import logging
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Self, cast
 
 from ayris.core.config import RestartScope, Settings
 from ayris.core.models import JsonObject
+from ayris.nlu.llm.local_models import GGUF_SUFFIX
 from ayris.workers.protocol import PROTOCOL_VERSION
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Mapping
-    from pathlib import Path
 
+    from ayris.core.config import AiConfig
     from ayris.core.events import Event
 
     #: What a worker event becomes on the bus. ``None`` drops the event.
@@ -403,6 +405,13 @@ def _tts_spec(settings: Settings) -> WorkerSpec:
 
 def _llm_spec(settings: Settings) -> WorkerSpec:
     ai = settings.ai
+    performance = settings.performance
+    # Best-effort RAM figure for the §12 guard: the config stores a display name,
+    # so this resolves only when it happens to match a catalogue id or Ollama tag,
+    # and is 0 (no guard) otherwise. The real cap is the download-time check.
+    from ayris.nlu.llm.catalog import get_spec
+
+    spec = get_spec(ai.model)
     return WorkerSpec(
         name="llm",
         kind=WorkerKind.LLM,
@@ -415,8 +424,33 @@ def _llm_spec(settings: Settings) -> WorkerSpec:
             "temperature": ai.temperature,
             "max_tokens": ai.max_tokens,
             "request_timeout_sec": ai.request_timeout_sec,
-            "threads": settings.performance.llm_threads,
-            "gpu": settings.performance.gpu,
+            "threads": performance.llm_threads,
+            "gpu": performance.gpu,
+            # Same reasoning as STT/TTS: the worker measures and unloads the model
+            # itself. eco_mode also gates the startup warm-up of the local engine.
+            "ram_limit_mb": performance.ram_limit_mb,
+            "model_idle_sec": performance.model_idle_sec,
+            "eco_mode": performance.eco_mode,
+            # The in-process llama.cpp engine takes a file path and runtime knobs
+            # rather than an endpoint; they ride in `extra`, which the factory reads
+            # and the HTTP providers ignore. Empty `model_path` → client stays
+            # unconfigured and the «ИИ» tab shows «скачайте модель».
+            "extra": {
+                "model_path": ai.model_path,
+                # Where to hunt for a replacement .gguf if `model_path` is empty
+                # or stale: the folders the user has kept models in before (the
+                # parent of the current path and of each remembered one). Covers
+                # models outside the profile, e.g. D:\ayris-models — see
+                # _resolve_gguf_path. Nothing here forces a swap when the path is
+                # honest; it only rescues a bad one instead of «не выбран файл».
+                "model_search_dirs": _llm_model_dirs(ai),
+                "n_ctx": ai.n_ctx,
+                "n_gpu_layers": ai.n_gpu_layers,
+                "n_threads": performance.llm_threads,
+                "idle_sec": performance.model_idle_sec,
+                "ram_limit_mb": performance.ram_limit_mb,
+                "requires_ram_mb": spec.requires_ram_mb if spec is not None else 0,
+            },
         },
         priority=settings.performance.process_priority,
         start_timeout=120.0,
@@ -425,6 +459,34 @@ def _llm_spec(settings: Settings) -> WorkerSpec:
         call_timeout=ai.request_timeout_sec + 30.0,
         restart_scope=RestartScope.LLM,
     )
+
+
+def _llm_model_dirs(ai: AiConfig) -> list[str]:
+    """Folders to search for a replacement ``.gguf``, newest choice first.
+
+    The parent of the current ``model_path`` and of every path the user has
+    picked before (``model_history`` keeps display names, but a chosen file is a
+    full path when it is one). This is what lets the engine recover a model kept
+    outside the profile — e.g. ``D:\\ayris-models\\llm`` — instead of reporting
+    «не выбран файл модели» after a reset or a transient defaults-load. Only
+    absolute-looking paths contribute a directory; bare model names do not.
+    """
+    seen: dict[str, None] = {}
+    paths: list[str] = []
+    if ai.model_path:
+        paths.append(ai.model_path)
+    for remembered in ai.model_history.values():
+        paths.extend(remembered)
+    for raw in paths:
+        if GGUF_SUFFIX not in raw.lower():
+            continue  # a display name, not a file path — no directory to add
+        try:
+            parent = str(Path(raw).parent)
+        except (OSError, ValueError):
+            continue
+        if parent and parent != ".":
+            seen.setdefault(parent, None)
+    return list(seen)
 
 
 _ENTRYPOINTS: Final[Mapping[WorkerKind, str]] = MappingProxyType(
@@ -513,6 +575,21 @@ def _always(settings: Settings) -> bool:
     return True
 
 
+def _never(settings: Settings) -> bool:
+    """Never planned as a process.
+
+    Speech synthesis runs in the GUI process through the in-process
+    :func:`~ayris.audio.tts.app_router.active_tts_router`, which owns the local
+    and cloud slots itself. The TTS worker holds no client and nothing ever calls
+    its ``synthesize``/``synthesize_stream``/``load_voice``/``next_chunk``, so a
+    planned one would only start on every launch and sit idle, costing a process
+    and tens of megabytes. The type stays registered — the model manager and
+    onboarding treat ``"tts"`` as a *category of models*, not a running process.
+    """
+    del settings
+    return False
+
+
 WORKER_TYPES: Final[tuple[WorkerType, ...]] = (
     WorkerType(
         kind=WorkerKind.AUDIO,
@@ -535,7 +612,10 @@ WORKER_TYPES: Final[tuple[WorkerType, ...]] = (
         kind=WorkerKind.TTS,
         entrypoint=_ENTRYPOINTS[WorkerKind.TTS],
         build=_tts_spec,
-        is_needed=_always,
+        # Synthesis happens in the GUI process (active_tts_router), so this worker
+        # would only idle. Never planned; see _never. is_preferred is left in
+        # place but is never consulted, since is_needed short-circuits first.
+        is_needed=_never,
         is_preferred=_tts_preferred,
     ),
     WorkerType(

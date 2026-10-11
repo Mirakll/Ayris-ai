@@ -35,6 +35,7 @@ runs in the main process, and a top-level import would drag the settings model
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, ClassVar, Final
@@ -126,6 +127,12 @@ class AudioWorker(Worker):
         self._capture: AudioCapture | None = None
         self._denoise: DenoiseStream | None = None
         self._segmenter: Segmenter | None = None
+        # Serialises the detection chain (denoiser + segmenter) between the
+        # capture processing thread, which pushes frames through it, and the
+        # dispatcher/monitor threads, which rebuild, reconfigure or flush it when
+        # a setting changes live or the stream stops. Reentrant because
+        # _configure_detection may fall back to _build_detection while holding it.
+        self._detect_lock = threading.RLock()
         self._wake: WakeWordDetector | None = None
         self._last_segment: SpeechSegment | None = None
         self._calibration_noise: bytes = b""
@@ -177,16 +184,18 @@ class AudioWorker(Worker):
 
     def on_stop(self) -> None:
         """Release the device."""
-        if self._segmenter is not None:
-            self._segmenter.flush()
+        with self._detect_lock:
+            if self._segmenter is not None:
+                self._segmenter.flush()
         if self._wake is not None:
             self._wake.stop()
             self._wake = None
         if self._capture is not None:
             self._capture.stop()
             self._capture = None
-        self._denoise = None
-        self._segmenter = None
+        with self._detect_lock:
+            self._denoise = None
+            self._segmenter = None
 
     def on_configure(self, params: JsonObject) -> None:
         """Apply new settings without dropping the stream when possible.
@@ -245,13 +254,14 @@ class AudioWorker(Worker):
         wake = self._wake
         if wake is not None:
             wake.push(pcm)
-        segmenter = self._segmenter
-        denoiser = self._denoise
-        if segmenter is None or denoiser is None:
-            return
-        clean = denoiser.push(pcm)
-        if clean:
-            segmenter.push(clean)
+        with self._detect_lock:
+            segmenter = self._segmenter
+            denoiser = self._denoise
+            if segmenter is None or denoiser is None:
+                return
+            clean = denoiser.push(pcm)
+            if clean:
+                segmenter.push(clean)
 
     def _on_wake(self, detection: WakeDetection) -> None:
         """Forward an activation and open the listening window.
@@ -325,11 +335,14 @@ class AudioWorker(Worker):
 
     def _on_state(self, state: CaptureState, detail: str) -> None:
         """Forward a state transition."""
-        if state is not CaptureState.RUNNING and self._segmenter is not None:
-            # A stream that stopped will not deliver the silence that would
-            # normally close the phrase, so close it here rather than leave a
-            # half-collected segment behind for the next start to inherit.
-            self._segmenter.flush()
+        if state is not CaptureState.RUNNING:
+            with self._detect_lock:
+                if self._segmenter is not None:
+                    # A stream that stopped will not deliver the silence that
+                    # would normally close the phrase, so close it here rather
+                    # than leave a half-collected segment behind for the next
+                    # start to inherit.
+                    self._segmenter.flush()
         if state is not CaptureState.RUNNING and self._wake is not None:
             # Same reasoning, and one more: the detector's history belongs to
             # audio from before the interruption, and scoring the new stream
@@ -835,26 +848,28 @@ class AudioWorker(Worker):
 
     def _build_detection(self, params: JsonObject) -> None:
         """Create the denoiser and the segmenter for ``params``."""
-        self._denoise = DenoiseStream(_denoise_settings_from_params(params))
-        self._segmenter = Segmenter(
-            _segmenter_settings_from_params(params),
-            _vad_settings_from_params(params),
-            callbacks=SegmenterCallbacks(
-                on_speech_started=self._on_speech_started,
-                on_speech_ended=self._on_speech_ended,
-            ),
-        )
+        with self._detect_lock:
+            self._denoise = DenoiseStream(_denoise_settings_from_params(params))
+            self._segmenter = Segmenter(
+                _segmenter_settings_from_params(params),
+                _vad_settings_from_params(params),
+                callbacks=SegmenterCallbacks(
+                    on_speech_started=self._on_speech_started,
+                    on_speech_ended=self._on_speech_ended,
+                ),
+            )
 
     def _configure_detection(self, params: JsonObject) -> None:
         """Apply new thresholds to the running detector."""
-        if self._denoise is None or self._segmenter is None:
-            self._build_detection(params)
-            return
-        self._denoise.configure(_denoise_settings_from_params(params))
-        self._segmenter.configure(
-            _segmenter_settings_from_params(params),
-            _vad_settings_from_params(params),
-        )
+        with self._detect_lock:
+            if self._denoise is None or self._segmenter is None:
+                self._build_detection(params)
+                return
+            self._denoise.configure(_denoise_settings_from_params(params))
+            self._segmenter.configure(
+                _segmenter_settings_from_params(params),
+                _vad_settings_from_params(params),
+            )
 
     def _build_wake(self, params: JsonObject) -> None:
         """Create the wake word detector for ``params`` and start it.
