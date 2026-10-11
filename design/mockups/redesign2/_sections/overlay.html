@@ -1,0 +1,56 @@
+<div class="sptitle">Панель / Сфера</div>
+<div class="spsub">Облик окна-дашборда и его сферы: форма и движение, экономия анимаций, состав столбца диалога и видимость блоков управления. Всё применяется на лету — перезапуск не нужен.</div>
+
+<div class="sgroup"><div class="gh">Запуск</div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать окно при запуске</div><div class="d">Открывать панель Ayris при старте. Выключено — программа ждёт в трее.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Облик сферы</div>
+  <div class="srow col"><div class="lbl"><div class="t">Предпросмотр сферы</div><div class="d">Живая сфера отражает правки сразу — переключайте состояние кнопками ниже.</div></div><div class="ctl"><div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Предпросмотр сферы обновляется вживую.</div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Состояние предпросмотра</div><div class="d">Как сфера выглядит в каждом из пяти состояний.</div></div><div class="ctl"><div class="seg"><button class="active">Покой</button><button>Слушаю</button><button>Думаю</button><button>Говорю</button><button>Ошибка</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Замер отрисовки</div><div class="d">Кадры, время кадра, число точек и движок. Прочерк — у WebGL-сферы метрик нет.</div></div><div class="ctl"><span class="sval">60 к/с · 16.6 мс/кадр · 600 точек · Canvas</span></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Форма сферы</div><div class="d">Облако точек на сфере или каркас икосаэдра.</div></div><div class="ctl"><div class="seg"><button class="active">Сфера</button><button>Икосаэдр</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Палитра облика</div><div class="d">Набор цветов свечения сферы.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>violet</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">violet</button><button>legacy</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Количество точек</div><div class="d">Плотность сетки сферы. Больше — красивее, но дороже в отрисовке.</div></div><div class="ctl"><div class="slider"><input type="range" min="100" max="3000" value="600" data-unit=" точек"><span class="sval">600 точек</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Скорость вращения</div><div class="d">Как быстро сфера вращается вокруг оси.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="300" value="100" data-unit=" %"><span class="sval">100 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Пульсация в «Слушаю»</div><div class="d">Насколько сильно сфера дышит, пока слушает вас.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="300" value="100" data-unit=" %"><span class="sval">100 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Волны в «Говорю»</div><div class="d">Интенсивность волн по поверхности во время ответа.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="300" value="100" data-unit=" %"><span class="sval">100 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Акцент сферы</div><div class="d">Свой цвет свечения. «Из темы» — наследовать акцент оформления.</div></div><div class="ctl"><div class="sbtns"><button class="btn">Выбрать цвет</button><button class="btn sm">Из темы</button></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Экономия анимаций</div>
+  <div class="srow"><div class="lbl"><div class="t">Анимации сферы</div><div class="d">Общий выключатель. Выключено — сфера замирает и не тратит кадры.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Вращение</div><div class="d">Медленный поворот сферы вокруг оси.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Пульсация</div><div class="d">Дыхание сферы в состоянии «Слушаю».</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Волны</div><div class="d">Волны по поверхности в состоянии «Говорю».</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Вспышка при ошибке</div><div class="d">Резкая вспышка сферы, когда что-то пошло не так.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Целевой FPS</div><div class="d">Потолок кадров в секунду для сферы. «Авто» — по частоте дисплея.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Авто</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button>30</button><button>60</button><button class="sel-on">Авто</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Останавливать анимацию когда скрыто</div><div class="d">Не рисовать сферу, пока окно свёрнуто или спрятано в трей.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Поведение</div>
+  <div class="srow col"><div class="lbl"><div class="t">Пресеты оформления</div><div class="d">Каждый пресет выставляет связанные параметры сферы разом, минуя задержку сохранения.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Красиво</button><button class="btn">Сбалансированно</button><button class="btn">Экономно</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Прозрачность окна</div><div class="d">Насколько панель просвечивает рабочий стол.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="100" value="92" data-unit=" %"><span class="sval">92 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Размытие фона</div><div class="d">Сила размытия за полупрозрачной панелью.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="40" value="18" data-unit=" px"><span class="sval">18 px</span></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Диалог</div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать лог диалога</div><div class="d">Столбец реплик под сферой. Выключено — остаётся только сфера.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Строк в логе</div><div class="d">Сколько последних реплик держать в столбце диалога.</div></div><div class="ctl"><div class="slider"><input type="range" min="1" max="50" value="6" data-unit=" строк"><span class="sval">6 строк</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать распознанную речь</div><div class="d">Добавлять в лог то, что вы сказали.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать ответы</div><div class="d">Добавлять в лог ответы Ayris.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать ошибки</div><div class="d">Добавлять в лог сбои действий и макросов.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+</div>
+<div class="sgroup"><div class="gh">Элементы окна</div>
+  <div class="srow"><div class="lbl"><div class="t">Кнопка микрофона</div><div class="d">Кнопка включения прослушивания.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Строка таймеров</div><div class="d">Активные таймеры и напоминания.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Селектор профиля</div><div class="d">Переключатель профиля голоса.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Кнопка настроек</div><div class="d">Кнопка-гамбургер, открывающая настройки.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Поле текстового ввода</div><div class="d">Строка ввода команд текстом рядом с микрофоном.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Тема сферы</div>
+  <div class="srow"><div class="lbl"><div class="t">Следовать системной теме</div><div class="d">Переключать светлую и тёмную тему вслед за Windows.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Палитра темы</div><div class="d">Образцы активной темы — только отражение эффекта.</div></div><div class="ctl"><div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Фон · Панель · Акцент · Текст настраиваются на вкладке «Общие».</div></div></div>
+</div>
+

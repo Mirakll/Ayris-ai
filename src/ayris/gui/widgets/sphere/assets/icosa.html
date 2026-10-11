@@ -8,12 +8,11 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; overflow: hidden; background: transparent; }
   body { font-family: "Segoe UI", system-ui, sans-serif; color: #cdbce8; }
-  /* прозрачный фон под панель приложения; лёгкое фиолетовое свечение по углам */
+  /* полностью прозрачный фон: свечение фигуры ложится прямо на окно-хост,
+     без тонированной «коробки» за ней */
   #scene {
     position: fixed; inset: 0;
-    background:
-      radial-gradient(120% 120% at 18% 12%, rgba(58,17,96,0.30) 0%, rgba(58,17,96,0) 45%),
-      radial-gradient(120% 120% at 82% 88%, rgba(40,20,80,0.30) 0%, rgba(40,20,80,0) 48%);
+    background: transparent;
   }
   canvas { display: block; }
   #panel {
@@ -65,6 +64,7 @@
   import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
   import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
   import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+  import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
   // ─────────────────────────────────────────────────────────────────────────
   // Константы фигуры
@@ -114,9 +114,47 @@
   bodyGroup.quaternion.copy(qBase);
 
   const composer = new EffectComposer(renderer);
-  composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), MODES.calm.bloom, 0.5, 0.12);
+  const renderPass = new RenderPass(scene, camera);
+  renderPass.clearColor = new THREE.Color(0x000000);
+  renderPass.clearAlpha = 0;                       // кадр стартует полностью прозрачным
+  composer.addPass(renderPass);
+  const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), MODES.calm.bloom, 0.7, 0.12);
   composer.addPass(bloom);
+  // Финальный проход: альфа пикселя = его яркость. EffectComposer+bloom отдают кадр
+  // с непрозрачной альфой — отсюда и бралась видимая «коробка» за фигурой. Здесь
+  // пустые (чёрные) места получают α=0 и исчезают, а сама фигура и её свечение
+  // берут α по яркости и ложатся прямо на окно-хост. Фон уходит без заливки цветом
+  // окна. Цвет домножаем на α (канвас premultiplied), чтобы наложение было ровным.
+  const alphaFromLuma = new ShaderPass({
+    uniforms: {
+      tDiffuse: { value: null },
+      uLo: { value: 0.19 }, uHi: { value: 0.50 },
+      uGlow: { value: 1.10 },                 // сила мягкого ореола (0 — выкл.)
+      uGlowR0: { value: 0.66 }, uGlowR1: { value: 1.00 },  // гасить лишь дальние углы
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform sampler2D tDiffuse; uniform float uLo; uniform float uHi;
+      uniform float uGlow; uniform float uGlowR0; uniform float uGlowR1; varying vec2 vUv;
+      void main(){
+        vec4 c = texture2D(tDiffuse, vUv);
+        float v = max(max(c.r, c.g), c.b);          // «значение» (HSV) — ловит и насыщенный фиолет
+        // Плотная фигура: чёрная точка по альфе отрезает тусклый хвост bloom.
+        float core = smoothstep(uLo, uHi, v);
+        // Мягкий ореол: ЕСТЕСТВЕННЫЙ спад bloom — повторяет силуэт фигуры и тает наружу
+        // по окну (не радиальный «шар»). Плавный ramp (без pow — иначе лезут кольца от
+        // грубых mip). Нижний порог 0.025 срезает равномерный пол mip (иначе прямоугольник);
+        // дальняя страховка гасит только самые углы.
+        float glow = smoothstep(0.025, 0.30, v) * uGlow;
+        float d = distance(vUv, vec2(0.5));
+        glow *= 1.0 - smoothstep(uGlowR0, uGlowR1, d);
+        float a = clamp(max(core, glow), 0.0, 1.0);
+        gl_FragColor = vec4(c.rgb * a, a);
+      }`,
+  });
+  composer.addPass(alphaFromLuma);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Материалы (общие для всех 20 граней)
@@ -471,6 +509,7 @@
     rotation: true, pulsation: true, waves: true, errorFlash: true,
   };
   let accent = null;
+  let lookGain = 1.0;                   // подъём яркости цвета для облика «legacy» (см. FIG_LOOKS)
 
   // ── Настройки фигуры из приложения (setIcosaConfig). Дефолты воспроизводят
   // прототип точ-в-точ: спин «Спокойствия» ×1; флипы тела есть в «Слушает»/«Думает»;
@@ -502,9 +541,9 @@
 
   function applyMode(m) {
     const c = MODES[m] || MODES.calm;
-    tgt.a.set(accent !== null ? accent : c.a);
-    tgt.b.set(c.b);
-    tgt.e.set(c.e);
+    tgt.a.set(accent !== null ? accent : c.a).multiplyScalar(lookGain);
+    tgt.b.set(c.b).multiplyScalar(lookGain);
+    tgt.e.set(c.e).multiplyScalar(lookGain);
     tgt.bloom = c.bloom;
   }
 
@@ -1126,7 +1165,14 @@
   // ─────────────────────────────────────────────────────────────────────────
   // Камера / ресайз
   function fitCamera() {
-    const dist = FIT_R / Math.tan((FOV * Math.PI / 180) / 2);
+    // Вмещаем фигуру по ОБЕИМ осям. FOV вертикальный, поэтому в узкой (портретной)
+    // колонке горизонтальный угол уже — отодвигаем камеру дальше, чтобы по ширине
+    // тоже оставался тёмный запас. Иначе фигура упирается в боковые края канваса и
+    // bloom обрезается ровной рамкой («коробка» вокруг свечения).
+    const vTan = Math.tan((FOV * Math.PI / 180) / 2);
+    const aspect = camera.aspect || 1;
+    const fit = aspect < 1 ? FIT_R / aspect : FIT_R;   // узкое окно → больше радиус
+    const dist = fit / vTan;
     camera.position.set(0, 0, dist);
     camera.lookAt(0, 0, 0);
   }
@@ -1182,13 +1228,13 @@
   };
   window.setPointCount = function () { /* топология фиксирована: 20 граней */ };
   window.setBackground = function (color) {
-    // EffectComposer+bloom дают непрозрачный кадр → пустые места канваса чернеют.
-    // Красим фон СЦЕНЫ в цвет панели-хоста (как в sphere.html), чтобы «коробки» не было.
-    // Пусто/null — прозрачный клир (для standalone-демо со свечением из CSS).
-    if (!color) { scene.background = null; renderer.setClearColor(0x000000, 0); return; }
-    const c = new THREE.Color(color);
-    scene.background = c;
-    renderer.setClearColor(c, 1);
+    // Фон всегда прозрачный. Раньше тут красили сцену в цвет окна-хоста, чтобы
+    // непрозрачный кадр композера не давал «коробку»; теперь прозрачность делает
+    // финальный проход alphaFromLuma (α по яркости), поэтому цвет игнорируем и
+    // держим клир прозрачным — за фигурой видно само окно приложения.
+    void color;
+    scene.background = null;
+    renderer.setClearColor(0x000000, 0);
   };
   window.setPanel = function (v) {
     document.getElementById('panel').style.display = v ? 'flex' : 'none';
@@ -1206,9 +1252,29 @@
     if (!animations) tick(0);                                // фигура заморожена — освежаем кадр
   };
 
+  // ── Облик фигуры (overlay.icosa_palette). Два вида, между которыми переключает
+  // приложение. «violet» (сейчас): высокий порог альфы — тусклая внутренность уходит
+  // в прозрачность, грани глубокие и контрастные (нижние — тёмные), цвет насыщенный.
+  // «legacy» (раньше): низкий порог + подъём яркости цвета (gain) — фигура целиком
+  // залита светом, светлее и пастельнее, как было до правок с чёрной точкой.
+  const FIG_LOOKS = {
+    violet: { lo: 0.19,  hi: 0.50, gain: 1.00 },
+    legacy: { lo: 0.075, hi: 0.34, gain: 1.42 },
+  };
+  let figLook = 'violet';
+  window.setPalette = function (name) {
+    figLook = (typeof name === 'string' && name in FIG_LOOKS) ? name : 'violet';
+    const p = FIG_LOOKS[figLook];
+    alphaFromLuma.uniforms.uLo.value = p.lo;
+    alphaFromLuma.uniforms.uHi.value = p.hi;
+    lookGain = p.gain;
+    applyMode(mode);                                         // перечитать цвета с новым подъёмом
+    if (!animations) tick(0);                                // освежаем статичный кадр
+  };
+
   // Единая точка входа настроек фигуры из приложения (OverlayConfig):
   //   { opacity, calmSpin, flip:{listen:{h,v},think:{h,v}},
-  //     twist:{calm,listen,think,speak}, dockVariant }
+  //     twist:{calm,listen,think,speak}, dockVariant, palette }
   window.setIcosaConfig = function (cfg) {
     if (!cfg) return;
     if (typeof cfg.opacity === 'number') window.setFigureOpacity(cfg.opacity);
@@ -1230,6 +1296,7 @@
       if (typeof cfg.twist.speak === 'number')  twistSpeed.speaking = Math.max(0, cfg.twist.speak);
     }
     if (typeof cfg.dockVariant === 'number') window.setDockVariant(cfg.dockVariant);
+    if (typeof cfg.palette === 'string') window.setPalette(cfg.palette);
     if (!animations) tick(0);                                // освежаем статичный кадр
   };
   // вершина-шапка, обращённая к камере

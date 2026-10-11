@@ -1205,6 +1205,7 @@ class TestWorker:
 
         assert not pusher.is_alive(), "capture thread deadlocked on the detection lock"
         assert errors == []
+        assert worker.status({})["running"]
 
     def test_a_missing_microphone_does_not_fail_the_start(self):
         """Restarting the process cannot conjure a device; capture keeps looking."""

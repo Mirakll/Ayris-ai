@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from threading import Lock
 from typing import Final, Literal
 
 from ayris.core.paths import executable_dir
@@ -31,6 +32,7 @@ __all__ = [
     "PromptKind",
     "build_chat_prompt",
     "build_nlu_prompt",
+    "clear_template_cache",
     "load_template",
     "prompts_dir",
 ]
@@ -67,7 +69,49 @@ def prompts_dir() -> Path:
     return executable_dir() / "resources" / PROMPTS_SUBDIR
 
 
+#: Разобранные шаблоны по ключу (вид, override_dir, resources_dir). Файл читался
+#: с диска на каждом ходу диалога — а он не меняется между правками настроек, так
+#: что держим текст в памяти. Ключ включает оба каталога: смена профиля или
+#: предпросмотр задачи 64 с другим override_dir не должны получить чужой текст.
+_template_cache: dict[tuple[str, str, str], str] = {}
+_template_lock: Final = Lock()
+
+
+def clear_template_cache() -> None:
+    """Сбросить кэш шаблонов — следующий :func:`load_template` перечитает диск.
+
+    Вызывается на смене настроек и профиля: пользователь мог отредактировать
+    ``chat.txt``/``nlu.txt`` в каталоге профиля, и живой кэш не должен держать
+    устаревший текст. Дёшево: словарь маленький, перечитывание — один файл.
+    """
+    with _template_lock:
+        _template_cache.clear()
+
+
 def load_template(
+    kind: PromptKind,
+    *,
+    resources_dir: Path | None = None,
+    override_dir: Path | None = None,
+) -> str:
+    """Текст шаблона ``kind`` из кэша, читая диск лишь при первом промахе.
+
+    Семантика та же, что у :func:`_load_template_uncached`; обёртка только
+    запоминает результат по каталогам, чтобы не ходить на диск каждый ход.
+    :func:`clear_template_cache` сбрасывает память на смене настроек/профиля.
+    """
+    key = (kind, str(override_dir or ""), str(resources_dir or ""))
+    with _template_lock:
+        cached = _template_cache.get(key)
+        if cached is not None:
+            return cached
+    text = _load_template_uncached(kind, resources_dir=resources_dir, override_dir=override_dir)
+    with _template_lock:
+        _template_cache[key] = text
+    return text
+
+
+def _load_template_uncached(
     kind: PromptKind,
     *,
     resources_dir: Path | None = None,

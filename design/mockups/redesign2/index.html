@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AYRIS — Редизайн · 5 направлений</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sora:wght@600;700;800&display=swap" rel="stylesheet" />
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:"Inter",system-ui,sans-serif;background:#07070A;color:#ECEAF2;min-height:100vh;padding:40px 32px 60px}
+body::before{content:"";position:fixed;inset:0;z-index:-1;background:
+  radial-gradient(900px 500px at 15% -5%,rgba(155,109,255,.14),transparent 60%),
+  radial-gradient(900px 600px at 90% 110%,rgba(79,216,232,.08),transparent 55%),#07070A}
+header{max-width:1360px;margin:0 auto 34px}
+.kicker{font-size:12px;letter-spacing:.4em;text-transform:uppercase;color:#8A86A0;font-weight:600}
+h1{font-family:"Sora",sans-serif;font-size:40px;font-weight:800;letter-spacing:-.02em;margin:10px 0 8px;
+  background:linear-gradient(100deg,#fff,#C7B4FF 60%,#8FB7FF);-webkit-background-clip:text;background-clip:text;color:transparent}
+.lede{color:#AEA9C4;font-size:15px;max-width:720px;line-height:1.6}
+.grid{max-width:1360px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:22px}
+.card{background:#101017;border:1px solid rgba(255,255,255,.08);border-radius:20px;overflow:hidden;transition:.2s;display:flex;flex-direction:column}
+.card:hover{transform:translateY(-3px);border-color:rgba(155,109,255,.4);box-shadow:0 30px 70px -30px rgba(0,0,0,.9)}
+.pv{position:relative;width:100%;overflow:hidden;background:#000;border-bottom:1px solid rgba(255,255,255,.06)}
+.pv iframe{position:absolute;top:0;left:0;width:1180px;height:760px;border:0;transform-origin:0 0;pointer-events:none}
+.pv a.open{position:absolute;inset:0;z-index:3;display:block}
+.pv .tag{position:absolute;top:12px;left:12px;z-index:4;font-size:11px;font-weight:700;letter-spacing:.04em;
+  padding:5px 10px;border-radius:999px;background:rgba(10,8,16,.7);border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(8px)}
+.pv .num{position:absolute;top:12px;right:12px;z-index:4;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+  font-family:"Sora";font-weight:700;font-size:13px;background:rgba(10,8,16,.7);border:1px solid rgba(255,255,255,.14)}
+.meta{padding:16px 18px 18px}
+.meta h2{font-family:"Sora";font-size:19px;font-weight:700;display:flex;align-items:center;gap:10px}
+.meta .sub{color:#9B96B2;font-size:12.5px;font-weight:600;margin-top:3px}
+.meta p{color:#B7B2CC;font-size:13.5px;line-height:1.55;margin-top:9px}
+.meta .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.meta .chips span{font-size:11px;color:#9D98B6;padding:4px 9px;border-radius:7px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.07)}
+.meta .go{margin-top:14px;display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:#C7B4FF;text-decoration:none}
+.meta .go:hover{gap:11px}
+.dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+footer{max-width:1360px;margin:36px auto 0;color:#6E6A84;font-size:12.5px;line-height:1.6}
+</style>
+</head>
+<body>
+<header>
+  <div class="kicker">AYRIS · Visual redesign</div>
+  <h1>Пять направлений дизайна</h1>
+  <p class="lede">Полная переработка визуала приложения. Каждое направление — самодостаточное, со своим характером: два в духе Astra (одно в нашей палитре, одно — вольная монохромная переработка) и три эксперимента. Наведите на карточку и откройте живой макет главного экрана.</p>
+</header>
+<main class="grid" id="grid">  <article class="card">
+    <div class="pv"><span class="tag">Astra · наша палитра</span><span class="num">1</span><iframe src="1-astra-nebula.html" loading="lazy"></iframe><a class="open" href="1-astra-nebula.html" target="_blank" title="Открыть"></a></div>
+    <div class="meta"><h2><span class="dot" style="background:#9B6DFF"></span>Nebula</h2>
+      <div class="sub">Astra в фирменных цветах — сфера сохранена</div>
+      <p>Раскладка и дух Astra, перекрашенные в нашу тёмно-фиолетовую палитру: живой ликвид-фон, верхнее меню, виджеты погоды и курса, телеметрия, мини-плеер. Сфера состояния остаётся героем.</p>
+      <div class="chips"><span>Ликвид-фон</span><span>Верхнее меню</span><span>Сфера</span><span>Мини-плеер</span></div>
+      <a class="go" href="1-astra-nebula.html" target="_blank">Открыть макет →</a></div>
+  </article>
+  <article class="card">
+    <div class="pv"><span class="tag">Astra · переработка</span><span class="num">2</span><iframe src="2-astra-obsidian.html" loading="lazy"></iframe><a class="open" href="2-astra-obsidian.html" target="_blank" title="Открыть"></a></div>
+    <div class="meta"><h2><span class="dot" style="background:#C6CCD6"></span>Obsidian</h2>
+      <div class="sub">Astra переосмыслена — монохром, сфера убрана</div>
+      <p>Вольная монохромная версия: жидкий хром на canvas, левый вертикальный рельс вместо верхнего меню, «голосовой» эквалайзер вместо сферы, премиальная металлическая типографика. Главное окно перестроено.</p>
+      <div class="chips"><span>Жидкий хром</span><span>Левый рельс</span><span>Без сферы</span><span>Эквалайзер</span></div>
+      <a class="go" href="2-astra-obsidian.html" target="_blank">Открыть макет →</a></div>
+  </article>
+  <article class="card">
+    <div class="pv"><span class="tag">Obsidian · наши цвета</span><span class="num">2+</span><iframe src="2b-obsidian-violet.html" loading="lazy"></iframe><a class="open" href="2b-obsidian-violet.html" target="_blank" title="Открыть"></a></div>
+    <div class="meta"><h2><span class="dot" style="background:#9B6DFF"></span>Obsidian · Nebula</h2>
+      <div class="sub">Та же раскладка, подогнана под нашу палитру</div>
+      <p>Вариант 2 целиком перекрашен в фирменный фиолет (#9B6DFF): ликвид-металл, вордмарк, эквалайзер, рельс и акценты — в наших цветах. Монохромный оригинал сохранён в <code>_backups/</code>.</p>
+      <div class="chips"><span>Фиолет #9B6DFF</span><span>Левый рельс</span><span>Без сферы</span><span>Эквалайзер</span></div>
+      <a class="go" href="2b-obsidian-violet.html" target="_blank">Открыть макет →</a></div>
+  </article>
+  <article class="card">
+    <div class="pv"><span class="tag">Эксперимент</span><span class="num">3</span><iframe src="3-mission-control.html" loading="lazy"></iframe><a class="open" href="3-mission-control.html" target="_blank" title="Открыть"></a></div>
+    <div class="meta"><h2><span class="dot" style="background:#FFB454"></span>Mission Control</h2>
+      <div class="sub">Аэрокосмический телеметрический HUD</div>
+      <p>Космическая консоль уровня ЦУП: тонкие сетки, реперные скобки, дуговые датчики, «ядро» вместо сферы, моноширинные таймстемпы, фосфор-янтарь и сигнальный циан. Строго, научно, премиально.</p>
+      <div class="chips"><span>Телеметрия</span><span>Моношрифт</span><span>Ядро-реактор</span><span>Янтарь/циан</span></div>
+      <a class="go" href="3-mission-control.html" target="_blank">Открыть макет →</a></div>
+  </article>
+  <article class="card">
+    <div class="pv"><span class="tag">Эксперимент</span><span class="num">4</span><iframe src="4-sumi.html" loading="lazy"></iframe><a class="open" href="4-sumi.html" target="_blank" title="Открыть"></a></div>
+    <div class="meta"><h2><span class="dot" style="background:#D5452F"></span>Sumi</h2>
+      <div class="sub">Японская тушь по тёмному васи</div>
+      <p>Ваби-саби и воздух: кистевой круг энсо вместо сферы, зерно бумаги, засечная типографика, киноварная «печать» как акцент активного. Тихий, медитативный, роскошно-минималистичный.</p>
+      <div class="chips"><span>Энсо</span><span>Зерно бумаги</span><span>Киноварь</span><span>Воздух</span></div>
+      <a class="go" href="4-sumi.html" target="_blank">Открыть макет →</a></div>
+  </article>
+  <article class="card">
+    <div class="pv"><span class="tag">Эксперимент</span><span class="num">5</span><iframe src="5-modular.html" loading="lazy"></iframe><a class="open" href="5-modular.html" target="_blank" title="Открыть"></a></div>
+    <div class="meta"><h2><span class="dot" style="background:#3FBFA6"></span>Modular</h2>
+      <div class="sub">Эурорэк — модульный синтезатор</div>
+      <p>Тактильное железо: лицевые панели с винтами, поворотные ручки, фейдеры, патч-джеки и цветные кабели (ложатся на нодовый редактор), осциллограф-«SCOPE» вместо сферы, LED-барграфы телеметрии.</p>
+      <div class="chips"><span>Ручки/фейдеры</span><span>Патч-кабели</span><span>Осциллограф</span><span>LED-метры</span></div>
+      <a class="go" href="5-modular.html" target="_blank">Открыть макет →</a></div>
+  </article></main>
+<footer>Живые макеты · главный экран каждого направления. Остальные страницы (Голос, Команды, ИИ, Профили, Обновления, Логи, Приватность и др.) собираются следом в выбранных направлениях. Клик по карточке открывает вариант в полном размере.</footer>
+<script>function scalePreviews(){
+  document.querySelectorAll('.pv').forEach(pv=>{
+    const w=pv.clientWidth, k=w/1180;
+    const f=pv.querySelector('iframe');
+    f.style.transform='scale('+k+')';
+    pv.style.height=(760*k)+'px';
+  });
+}
+window.addEventListener('load',scalePreviews);
+window.addEventListener('resize',scalePreviews);
+scalePreviews();
+new ResizeObserver(scalePreviews).observe(document.getElementById('grid'));</script>
+</body>
+</html>

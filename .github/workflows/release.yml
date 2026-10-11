@@ -50,9 +50,13 @@ jobs:
       - name: Установить зависимости и Nuitka
         # Здесь, в отличие от ci.yml, ставим ПОЛНЫЙ набор с зависимостями: Nuitka
         # должна видеть настоящие пакеты, чтобы вкомпилировать их в дистрибутив.
-        # Экстра build тянет саму Nuitka (пин в pyproject.toml, не в
-        # requirements-ci.txt — на раннере тестов она не нужна).
-        run: python -m pip install -e ".[build]"
+        # Экстра build тянет саму Nuitka и движок llama.cpp (ayris[llm-local]) —
+        # он вшивается в exe, чтобы локальная модель работала из коробки.
+        # --extra-index-url даёт готовое CPU-колесо llama-cpp-python (на PyPI
+        # только sdist — иначе пошла бы долгая компиляция из исходников).
+        run: >-
+          python -m pip install -e ".[build]"
+          --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 
       - name: Собрать standalone
         # Внутренний smoke пропускаем: у оконного exe (console отключена)

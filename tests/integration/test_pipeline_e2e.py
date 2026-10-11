@@ -598,7 +598,13 @@ def test_full_voice_pass_wake_to_action() -> None:
     seg, buffer = phrase_segment()
     assert seg.reason is EndReason.SILENCE
 
-    rig = build_rig(settings=commands_only(), transcript=COMMAND_TEXT, buffer=buffer)
+    rig = build_rig(
+        settings=settings_with(
+            ai={"fallback_to_llm": False}, voice={"wake": {"continue_listening": False}}
+        ),
+        transcript=COMMAND_TEXT,
+        buffer=buffer,
+    )
     try:
         drive(rig, seen[0])
     finally:
@@ -610,6 +616,27 @@ def test_full_voice_pass_wake_to_action() -> None:
     assert rig.actions.calls == 1
     assert rig.actions.last.command_id == 8
     assert rig.tts.said == ["Готово."]
+
+
+def test_follow_up_keeps_listening_after_the_answer() -> None:
+    """С «continue_listening» Айрис снова слушает после ответа — без слова активации."""
+    seen = wake_decision("wake_ayris.wav")
+    assert len(seen) == 1
+
+    _seg, buffer = phrase_segment()
+    # commands_only() оставляет continue_listening в значении по умолчанию (включено).
+    rig = build_rig(settings=commands_only(), transcript=COMMAND_TEXT, buffer=buffer)
+    try:
+        drive(rig, seen[0])
+    finally:
+        rig.close()
+
+    # Полный проход, а затем ещё одно «слушаю»: диалог продолжается сам,
+    # повторная активация молчит, и сессия снова открыта в ожидании речи.
+    assert rig.stages() == [*FULL_PASS_STAGES, "listening"]
+    assert rig.tts.said == ["Готово."]
+    assert rig.stages()[-1] == "listening"
+    assert rig.pipeline.session_id != ""
 
 
 def test_absent_fixture_never_activates() -> None:

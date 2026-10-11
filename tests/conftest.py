@@ -46,6 +46,13 @@ def _isolated_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterat
             continue
         monkeypatch.delenv(name, raising=False)
 
+    # The settings reader deliberately waits out a concurrent ``os.replace``
+    # before it believes a config file is absent — that is the launcher's
+    # relaunch race (see ``_read_settings_bytes``). The suite runs against a
+    # fresh, genuinely-empty profile thousands of times, so collapse that wait to
+    # zero here; the race behaviour has its own tests that drive the retry loop.
+    monkeypatch.setattr(config_module, "_ABSENT_CONFIRM_SEC", 0.0, raising=False)
+
     config_module.reset_config_manager()
     secrets_module.reset_secrets()
     paths_module.reset_paths()

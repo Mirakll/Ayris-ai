@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ayris · Редизайн — 6 вариантов</title>
+<style>
+  :root{
+    --bg:#0E0F13; --bg2:#15171D; --panel:#181A21; --panel2:#1E212A;
+    --border:#2A2E3A; --border2:#363B49;
+    --text:#EEF0F5; --text2:#AEB4C2; --muted:#767D8E;
+    --accent:#7C8CFF; --radius:18px; --radius-sm:12px;
+    --shadow:0 10px 40px rgba(0,0,0,.45);
+    --font:"Inter",-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    font-family:var(--font); color:var(--text); min-height:100vh;
+    background:
+      radial-gradient(120% 90% at 18% -10%, #1B2033 0%, transparent 55%),
+      radial-gradient(120% 90% at 100% 0%, #241A2E 0%, transparent 50%),
+      var(--bg);
+    padding:56px clamp(20px,5vw,80px) 80px;
+  }
+  header{max-width:1180px;margin:0 auto 40px}
+  .kicker{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+  h1{font-size:clamp(30px,4vw,46px);font-weight:700;letter-spacing:-.02em;margin:0 0 14px;line-height:1.05}
+  .lead{font-size:16px;line-height:1.6;color:var(--text2);max-width:720px;margin:0}
+  .lead b{color:var(--text);font-weight:600}
+  .grid{
+    max-width:1180px;margin:0 auto;
+    display:grid;gap:22px;
+    grid-template-columns:repeat(auto-fill,minmax(330px,1fr));
+  }
+  .card{
+    position:relative;display:flex;flex-direction:column;
+    background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:1px solid var(--border);border-radius:var(--radius);
+    overflow:hidden;text-decoration:none;color:inherit;
+    transition:transform .22s cubic-bezier(.2,.7,.2,1),border-color .22s,box-shadow .22s;
+  }
+  .card:hover{transform:translateY(-6px);border-color:var(--border2);box-shadow:var(--shadow)}
+  .thumb{height:170px;position:relative;overflow:hidden;border-bottom:1px solid var(--border)}
+  .orb{position:absolute;left:50%;top:52%;width:104px;height:104px;border-radius:50%;
+    transform:translate(-50%,-50%);filter:blur(.2px);}
+  .thumb::after{content:"";position:absolute;inset:0;
+    background:radial-gradient(60% 60% at 50% 52%, transparent 40%, rgba(0,0,0,.35) 100%)}
+  .gr[data-grid]{position:absolute;inset:0}
+  .body{padding:18px 20px 20px;display:flex;flex-direction:column;gap:10px;flex:1}
+  .row1{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+  .name{font-size:18px;font-weight:600;letter-spacing:-.01em}
+  .num{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .desc{font-size:13.5px;line-height:1.55;color:var(--text2);margin:0}
+  .meta{margin-top:auto;display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:6px}
+  .swatches{display:flex;gap:6px}
+  .sw{width:16px;height:16px;border-radius:5px;border:1px solid rgba(255,255,255,.14)}
+  .open{font-size:12.5px;color:var(--text2);display:inline-flex;align-items:center;gap:6px}
+  .card:hover .open{color:var(--text)}
+  .open svg{width:14px;height:14px}
+  footer{max-width:1180px;margin:44px auto 0;color:var(--muted);font-size:13px;line-height:1.6}
+</style>
+</head>
+<body>
+<header>
+  <p class="kicker">Ayris · дизайн-система</p>
+  <h1>Редизайн интерфейса — 6 направлений</h1>
+  <p class="lead">Шесть самодостаточных макетов. В каждом — <b>все 12 страниц</b>
+  приложения (навигация слева переключает разделы) и <b>3 варианта главного
+  экрана</b> со сферой состояния (сегментный переключатель в витрине). Функции
+  сохранены, нодовый холст «Команды» — только перекрас. Всё оффлайн, без внешних
+  ресурсов.</p>
+</header>
+<main class="grid" id="grid"></main>
+<footer>
+  Клик по карточке открывает вариант. Реализация в приложении — QML-острова
+  (QQuickWidget) для стекла и неона, каркас на QWidget; см. <code>design/qt-islands/</code>.
+</footer>
+<script>
+const CARDS=[
+  {n:"01",file:"01-neon-cyberpunk.html",name:"Неон-киберпанк",
+   desc:"«Свечение и кино»: тёмная сцена, неоновые cyan/magenta акценты, проводка с задержкой.",
+   bg:"#070912",orb:["#2FE9FF","#FF2FB0"],sw:["#2FE9FF","#FF2FB0","#0B0F1E"],grid:"#12F0FF22"},
+  {n:"02",file:"02-minimal-swiss.html",name:"Минимализм / Swiss",
+   desc:"Светлый, строгая сетка и типографика, один индиго-акцент, максимум воздуха.",
+   bg:"#FFFFFF",orb:["#4F46E5","#4F46E5"],sw:["#4F46E5","#111111","#F4F4F5"],grid:"#4F46E514"},
+  {n:"03",file:"03-airi-companion.html",name:"AiRI Companion",
+   desc:"Тёплый уют: коралловая сфера с bloom, мягкие тени, округлые формы.",
+   bg:"#1C1A19",orb:["#F2B8A6","#EB8478"],sw:["#EB8478","#F2B8A6","#252220"],grid:"#EB847814"},
+  {n:"04",file:"04-glass-aurora.html",name:"Стекло / Aurora",
+   desc:"visionOS-стекло: блюр-панели, aurora-градиенты, полупрозрачные слои.",
+   bg:"#0C0D1A",orb:["#37E0D0","#7C6CFF"],sw:["#7C6CFF","#37E0D0","#9D7BFF"],grid:"#7C6CFF18"},
+  {n:"05",file:"05-soft-neumorph.html",name:"Неоморфизм / Soft UI",
+   desc:"Мягкий тактильный UI: вдавленные и приподнятые формы, парные тени.",
+   bg:"#20232B",orb:["#8A6CF0","#5B7CFA"],sw:["#5B7CFA","#8A6CF0","#2A2E38"],grid:"#5B7CFA14"},
+  {n:"06",file:"06-editorial-dark.html",name:"Editorial Dark",
+   desc:"Журнальная подача: крупный serif-вордмарк, тёмный фон, янтарный акцент.",
+   bg:"#17150F",orb:["#F2C66B","#E0A73E"],sw:["#E0A73E","#F2C66B","#282419"],grid:"#E0A73E14"},
+];
+const g=document.getElementById("grid");
+for(const c of CARDS){
+  const a=document.createElement("a");
+  a.className="card";a.href=c.file;
+  a.innerHTML=`
+    <div class="thumb" style="background:
+        linear-gradient(0deg, rgba(0,0,0,.15), rgba(0,0,0,.15)),
+        repeating-linear-gradient(90deg, ${c.grid} 0 1px, transparent 1px 34px),
+        ${c.bg}">
+      <div class="orb" style="background:
+          radial-gradient(circle at 36% 32%, #fff8, transparent 38%),
+          radial-gradient(circle at 50% 50%, ${c.orb[0]}, ${c.orb[1]} 72%);
+          box-shadow:0 0 46px ${c.orb[1]}aa, 0 0 14px ${c.orb[0]}cc"></div>
+    </div>
+    <div class="body">
+      <div class="row1"><span class="name">${c.name}</span><span class="num">${c.n} / 06</span></div>
+      <p class="desc">${c.desc}</p>
+      <div class="meta">
+        <div class="swatches">${c.sw.map(s=>`<span class="sw" style="background:${s}"></span>`).join("")}</div>
+        <span class="open">12 страниц · 3 главных
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </span>
+      </div>
+    </div>`;
+  g.appendChild(a);
+}
+</script>
+</body>
+</html>

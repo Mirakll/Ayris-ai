@@ -56,6 +56,12 @@ _DOCK_VARIANTS: Final[tuple[tuple[str, int], ...]] = (
     ("7 — всё вместе", 7),
 )
 
+#: Облик икосаэдра — переключение между нынешним и прежним видом фигуры.
+_ICOSA_PALETTES: Final[tuple[tuple[str, str], ...]] = (
+    ("Текущий — глубокий, насыщенный", "violet"),
+    ("Прежний — ярче и залит светом", "legacy"),
+)
+
 #: Пресеты «экономии»: каждый выставляет связанный набор полей сферы разом. Ключи —
 #: короткие имена внутри секции ``overlay`` (без префикса), значения — числа/флаги.
 OVERLAY_PRESETS: Final[dict[str, dict[str, Any]]] = {
@@ -336,6 +342,19 @@ class OverlayTab(SettingsTab):
 
     def _build_icosa_controls(self) -> None:
         """Настройки икосаэдра (видно при avatar == «icosa»). Дефолты — как в прототипе."""
+        self._icosa_palette_combo = ThemedComboBox()
+        for label, palette in _ICOSA_PALETTES:
+            self._icosa_palette_combo.addItem(label, palette)
+        self.bind_combo(self._icosa_palette_combo, "overlay.icosa_palette", "Облик фигуры")
+        self._content.addWidget(
+            SettingCard(
+                "Облик фигуры",
+                "Цвет и заливка икосаэдра: «Текущий» — глубокий и контрастный, "
+                "«Прежний» — светлее и целиком залит светом, как было раньше.",
+                self._icosa_palette_combo,
+                self._theme,
+            )
+        )
         self._percent_card(
             "Непрозрачность фигуры",
             "Насколько плотный икосаэдр. Меньше — прозрачнее и воздушнее.",

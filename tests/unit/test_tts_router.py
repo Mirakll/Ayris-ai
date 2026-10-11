@@ -45,6 +45,7 @@ import pytest
 from ayris.audio.devices import PlaybackRequest, RawDevice
 from ayris.audio.tts.app_router import build_tts_router
 from ayris.audio.tts.base import AudioChunk, TtsEngine, TtsOptions, VoiceSpec
+from ayris.audio.tts.cache import PhraseCache
 from ayris.audio.tts.elevenlabs_engine import ElevenLabsTtsEngine
 from ayris.audio.tts.player import PlaybackReason, SpeechRequest, TtsPlayer
 from ayris.audio.tts.router import (
@@ -69,6 +70,7 @@ from ayris.core.secrets import SecretsStore, reset_secrets
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 pytestmark = pytest.mark.unit
 
@@ -830,6 +832,105 @@ class TestModes:
         handle.wait(TIMEOUT_S)
         assert handle.reason == PlaybackReason.COMPLETED
         assert backend.written
+        router.close()
+
+    def test_warm_loads_the_local_voice_for_the_offline_first_modes(self) -> None:
+        # The local engine speaks the first answer offline, so warming it at start
+        # takes its cold load off the first reply's critical path.
+        for mode in (TtsMode.OFFLINE, TtsMode.LOCAL_FIRST):
+            pair = EnginePair()
+            router = pair.make_router(mode=mode)
+            router.warm()
+            thread = router._preload
+            assert thread is not None, mode
+            thread.join(TIMEOUT_S)
+            assert pair.local.loads >= 1, mode
+            router.close()
+
+    def test_warm_is_a_noop_in_auto_mode(self) -> None:
+        # Auto speaks through the cloud first; the local side is the *fallback*,
+        # warmed by preload(), not warm() — so warm() must not touch it here.
+        pair = EnginePair()
+        router = pair.make_router(mode=TtsMode.AUTO)
+        router.warm()
+        assert router._preload is None
+        assert pair.local.loads == 0
+        router.close()
+
+
+# ----------------------------------------------------------------------
+# phrase cache
+# ----------------------------------------------------------------------
+
+
+class TestPhraseCache:
+    """A short confirmation is synthesized once and read from disk after that."""
+
+    def _router(self, cache: PhraseCache, pair: EnginePair) -> TtsRouter:
+        """An offline router over ``pair`` whose cache keys by the fake voice."""
+        return pair.make_router(
+            mode=TtsMode.OFFLINE,
+            cloud=None,
+            cache=cache,
+            default_voice=VoiceSpec(engine="fake", voice_id="fake"),
+        )
+
+    def test_repeated_phrase_is_served_from_the_cache(self, tmp_path: Path) -> None:
+        cache = PhraseCache(tmp_path, limit_bytes=1024 * 1024)
+        pair = EnginePair()
+        router = self._router(cache, pair)
+
+        first = router.say("Готово.")
+        first.wait(TIMEOUT_S)
+        assert first.reason == PlaybackReason.COMPLETED
+        assert len(pair.local.requests) == 1
+        wait_until(lambda: cache.stats().entries == 1)
+
+        second = router.say("Готово.")
+        second.wait(TIMEOUT_S)
+        assert second.reason == PlaybackReason.COMPLETED
+        # The engine was not asked a second time: the audio came off the disk,
+        # and the phrase still reads as spoken by the voice that produced it.
+        assert len(pair.local.requests) == 1
+        assert second.engine == "fake"
+        assert cache.stats().hits == 1
+        router.close()
+
+    def test_multi_sentence_answer_is_not_cached(self, tmp_path: Path) -> None:
+        # sentence_pause is not part of the key, so a multi-sentence phrase is left
+        # out rather than risk serving a stale gap after the pause setting changes.
+        cache = PhraseCache(tmp_path, limit_bytes=1024 * 1024)
+        pair = EnginePair()
+        router = self._router(cache, pair)
+        handle = router.say("Первое предложение. Второе предложение.")
+        handle.wait(TIMEOUT_S)
+        assert handle.reason == PlaybackReason.COMPLETED
+        assert cache.stats().entries == 0
+        router.close()
+
+    def test_disabled_cache_always_synthesizes(self, tmp_path: Path) -> None:
+        cache = PhraseCache(tmp_path, limit_bytes=0)  # cache_size_mb = 0
+        pair = EnginePair()
+        router = self._router(cache, pair)
+        router.say("Готово.").wait(TIMEOUT_S)
+        router.say("Готово.").wait(TIMEOUT_S)
+        assert len(pair.local.requests) == 2
+        assert cache.stats().entries == 0
+        router.close()
+
+    def test_set_providers_empties_the_cache(self, tmp_path: Path) -> None:
+        cache = PhraseCache(tmp_path, limit_bytes=1024 * 1024)
+        pair = EnginePair()
+        router = self._router(cache, pair)
+        router.say("Готово.").wait(TIMEOUT_S)
+        wait_until(lambda: cache.stats().entries == 1)
+        router.set_providers(
+            cloud=None,
+            local=pair.make_local(),
+            mode=TtsMode.OFFLINE,
+            default_voice=VoiceSpec(engine="fake", voice_id="fake"),
+        )
+        assert cache.stats().entries == 0
         router.close()
 
 

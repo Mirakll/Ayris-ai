@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AYRIS — Obsidian · наши цвета</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+:root{
+  --bg0:#07060C; --bg1:#16131F; --card:#1A1626; --card2:#201A30; --surface:#271F3A;
+  --border:#2E2742; --line:rgba(199,180,255,.09); --line2:rgba(199,180,255,.15);
+  --t1:#ECE7F6; --t2:#C3BAD9; --t3:#948AAC; --t4:#6E6688;
+  --chrome1:#F3EEFF; --chrome2:#C7B4FF; --chrome3:#9E86E0;
+  --plat:#9B6DFF; --ok:#45D6A1; --warn:#F6C85F; --err:#FF6685;
+  --r-sm:10px; --r-md:14px; --r-lg:20px;
+  --font:"Inter",system-ui,"Segoe UI",sans-serif; --display:"Space Grotesk","Inter",sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{font-family:var(--font);color:var(--t1);background:#000;display:flex;align-items:center;justify-content:center;
+  min-height:100vh;padding:26px;overflow:hidden;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;background:radial-gradient(1000px 600px at 50% -5%,rgba(155,109,255,.18),transparent 60%),#000}
+button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:none}
+.app{position:relative;width:min(1180px,100%);height:min(760px,calc(100vh - 52px));border-radius:22px;overflow:hidden;
+  background:var(--bg1);border:1px solid rgba(255,255,255,.07);
+  box-shadow:0 40px 120px -30px rgba(0,0,0,.95),inset 0 1px 0 rgba(255,255,255,.06)}
+/* жидкий хром — фон окна */
+.metal{position:absolute;inset:0;z-index:0;overflow:hidden;background:linear-gradient(165deg,#1B1527 0%,#120F1C 55%,#0A0812 100%)}
+.metal canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.9}
+.metal .sheen{position:absolute;inset:-35%;background:conic-gradient(from 120deg at 55% 42%,transparent 10deg,rgba(176,146,255,.22) 90deg,transparent 180deg,rgba(124,83,224,.16) 260deg,transparent 345deg);
+  filter:blur(42px);animation:spin 58s linear infinite;mix-blend-mode:screen;opacity:1}
+.metal .vign{position:absolute;inset:0;background:radial-gradient(120% 100% at 50% 0%,transparent 50%,rgba(0,0,0,.55))}
+.grain{position:absolute;inset:0;z-index:1;opacity:.05;mix-blend-mode:overlay;pointer-events:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>")}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* ——— раскладка: левый рельс + главная ——— */
+.shell{position:relative;z-index:2;height:100%;display:flex}
+.rail{flex:0 0 76px;display:flex;flex-direction:column;align-items:center;gap:6px;padding:16px 0;
+  border-right:1px solid var(--line);background:rgba(8,8,10,.4);backdrop-filter:blur(8px)}
+.brandmark{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;margin-bottom:10px;
+  background:linear-gradient(145deg,var(--chrome1),var(--chrome3));color:#0B0B0D;font-family:var(--display);font-weight:700;font-size:20px;
+  box-shadow:0 8px 20px -8px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.7)}
+.rail .ni{position:relative;width:46px;height:42px;border-radius:12px;color:var(--t3);display:grid;place-items:center;transition:.16s}
+.rail .ni svg{width:20px;height:20px}
+.rail .ni:hover{color:var(--t1);background:rgba(255,255,255,.06)}
+.rail .ni.active{color:#fff;background:linear-gradient(145deg,#B092FF,#7C53E0);box-shadow:0 6px 18px -8px rgba(155,109,255,.65)}
+.rail .lbl{position:absolute;left:62px;white-space:nowrap;background:#1b1b20;border:1px solid var(--line2);padding:5px 10px;border-radius:9px;
+  font-size:12px;font-weight:600;color:var(--t1);opacity:0;pointer-events:none;transform:translateX(-6px);transition:.16s;z-index:9}
+.rail .ni:hover .lbl{opacity:1;transform:none}
+.rail .sp{flex:1}
+.rail .av{width:42px;height:42px;border-radius:12px;background:linear-gradient(145deg,#3A3350,#1D1830);display:grid;place-items:center;
+  font-size:12px;font-weight:700;color:var(--t2);border:1px solid var(--line2)}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+/* ——— верхняя полоса ——— */
+.top{display:flex;align-items:center;gap:16px;padding:14px 18px 10px;position:relative}
+.top .brand{font-family:var(--display);font-weight:700;letter-spacing:.14em;font-size:13px;color:#CFC1F6;text-shadow:0 0 9px rgba(176,146,255,.6),0 0 20px rgba(124,83,224,.35)}
+.top .clk{font-family:var(--display);font-weight:600;font-size:13px;color:var(--t3);font-variant-numeric:tabular-nums}
+.chips{display:flex;align-items:center;gap:16px;margin-left:6px}
+.chip{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--t3)}
+.chip svg{width:14px;height:14px;opacity:.8}.chip b{color:var(--t1);font-weight:600;font-variant-numeric:tabular-nums}
+.chip .dn{color:var(--err);font-weight:600}
+.tele{display:flex;align-items:center;gap:14px;margin-left:auto}
+.tm{display:flex;align-items:center;gap:8px;font-size:11px;color:var(--t3);font-weight:600;letter-spacing:.02em}
+.tm .ring{--p:48;position:relative;width:26px;height:26px;border-radius:50%;background:conic-gradient(var(--chrome2) calc(var(--p)*1%),rgba(255,255,255,.1) 0);display:grid;place-items:center}
+.tm .ring::after{content:"";width:19px;height:19px;border-radius:50%;background:var(--bg1)}
+.tm .ring b{position:absolute;z-index:1;font-size:9px;color:var(--t1)}
+.wbtns{display:flex;gap:6px;align-items:center;margin-left:4px}
+.wbtns button{width:28px;height:28px;border-radius:8px;color:var(--t3);display:grid;place-items:center;transition:.16s}
+.wbtns button svg{width:14px;height:14px}
+.wbtns button:hover{background:rgba(255,255,255,.08);color:var(--t1)}
+.wbtns .x:hover{background:rgba(255,102,133,.18);color:#ffb3c2}
+/* ——— герой ——— */
+.hero{flex:1;min-height:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 40px;position:relative}
+.eq{display:flex;align-items:flex-end;gap:5px;height:84px;margin-bottom:30px}
+.eq i{width:5px;border-radius:3px;background:linear-gradient(180deg,var(--chrome1),var(--chrome3));box-shadow:0 0 12px rgba(155,109,255,.32);transition:height .12s ease}
+.wordmark{font-family:var(--display);font-weight:700;font-size:104px;line-height:.86;letter-spacing:-.04em;position:relative;
+  background:linear-gradient(176deg,#FFFFFF 0%,#D9CCFF 36%,#9E86E0 58%,#F1EAFF 76%,#8A6AD8 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 2px 1px rgba(0,0,0,.4))}
+.tagline{color:var(--t2);font-size:16px;margin-top:16px;font-weight:500;letter-spacing:.01em}
+.subcap{color:var(--t4);font-size:11px;letter-spacing:.42em;margin-top:8px;text-transform:uppercase}
+.cta{display:flex;gap:12px;margin-top:30px}
+.cta button{display:flex;align-items:center;gap:9px;padding:12px 24px;border-radius:12px;font-size:14px;font-weight:600;
+  background:rgba(255,255,255,.05);border:1px solid var(--line2);color:var(--t1);transition:.18s}
+.cta button svg{width:16px;height:16px}
+.cta button:hover{background:rgba(255,255,255,.1);transform:translateY(-1px)}
+.cta button.prim{background:linear-gradient(180deg,#B092FF,#7C53E0);color:#fff;border-color:transparent;
+  box-shadow:0 14px 34px -12px rgba(155,109,255,.55)}
+/* slim-плеер */
+.player{position:absolute;left:40px;bottom:30px;display:flex;align-items:center;gap:12px;width:280px;
+  padding:10px 12px;border-radius:14px;background:rgba(18,18,22,.6);border:1px solid var(--line);backdrop-filter:blur(14px)}
+.player .art{width:38px;height:38px;border-radius:9px;flex:0 0 auto;display:grid;place-items:center;color:#0B0B0D;background:linear-gradient(145deg,var(--chrome1),var(--chrome3))}
+.player .art svg{width:18px;height:18px}
+.player .meta{flex:1;min-width:0}.player .meta .t{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.player .meta .a{font-size:11px;color:var(--t3)}
+.player .play{width:34px;height:34px;border-radius:50%;background:#fff;color:#0B0B0D;display:grid;place-items:center;flex:0 0 auto}
+.player .play svg{width:15px;height:15px}
+/* быстрые действия */
+.quick{position:absolute;right:40px;bottom:30px;display:flex;gap:8px}
+.quick button{position:relative;width:38px;height:38px;border-radius:11px;color:var(--t3);display:grid;place-items:center;background:rgba(255,255,255,.04);border:1px solid var(--line);transition:.16s}
+.quick button svg{width:17px;height:17px}
+.quick button:hover{color:var(--t1);background:rgba(255,255,255,.09);transform:translateY(-2px)}
+.quick .badge{position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;border-radius:9px;background:var(--plat);color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center;box-shadow:0 0 0 2px var(--bg1)}
+.quick button.tgl.on{color:var(--chrome2);background:rgba(155,109,255,.12);border-color:rgba(155,109,255,.32)}
+.quick button.off{opacity:.5}
+/* ——— командная строка ——— */
+.cmdbar{position:absolute;left:50%;bottom:150px;transform:translateX(-50%);z-index:5;width:min(560px,calc(100% - 120px));
+  display:flex;align-items:center;gap:8px;padding:7px 7px 7px 12px;border-radius:15px;
+  background:rgba(14,14,17,.82);border:1px solid var(--line2);backdrop-filter:blur(18px);
+  box-shadow:0 20px 50px -22px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.06)}
+.cmdbar .mode{width:34px;height:34px;border-radius:10px;color:var(--t3);display:grid;place-items:center;font-size:12px;font-weight:700;border:1px solid var(--line)}
+.cmdbar .mode:hover{color:var(--t1);border-color:var(--line2)}
+.cmdbar input{flex:1;background:none;border:none;outline:none;color:var(--t1);font-size:14px;font-family:inherit}
+.cmdbar input::placeholder{color:var(--t4)}
+.cmdbar .mic,.cmdbar .send{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;transition:.16s}
+.cmdbar .mic{color:var(--t2)}.cmdbar .mic:hover{background:rgba(255,255,255,.1)}
+.cmdbar .mic.live{color:#fff;background:var(--plat);box-shadow:0 0 0 4px rgba(155,109,255,.22)}
+.cmdbar .send{color:#fff;background:linear-gradient(180deg,#B092FF,#7C53E0)}
+.cmdbar svg{width:17px;height:17px}
+.main.chatting .cmdbar{bottom:24px}
+/* ——— диалог ——— */
+.chat{position:absolute;inset:0;display:none;flex-direction:column;padding:12px 0 0}
+.chat.show{display:flex}.hero.hide{display:none}
+.chat .status{display:flex;align-items:center;gap:12px;padding:4px 40px 14px}
+.chat .status .av{width:44px;height:44px;border-radius:13px;display:grid;place-items:center;color:#0B0B0D;background:linear-gradient(145deg,var(--chrome1),var(--chrome3))}
+.chat .status .av svg{width:22px;height:22px}
+.chat .status .line{font-family:var(--display);font-size:18px;font-weight:600}
+.log{flex:1;overflow:auto;display:flex;flex-direction:column;gap:12px;padding:4px 40px 150px}
+.msg{max-width:76%;display:flex;flex-direction:column}
+.msg .who{font-size:11px;color:var(--t4);margin-bottom:4px;font-weight:600;letter-spacing:.03em}
+.msg .bub{padding:11px 14px;border-radius:14px;font-size:14px;line-height:1.5}
+.msg.you{align-self:flex-end;align-items:flex-end}.msg.you .bub{background:linear-gradient(180deg,#B092FF,#8458E8);color:#fff;border-bottom-right-radius:5px}
+.msg.ai{align-self:flex-start}.msg.ai .bub{background:var(--card2);border:1px solid var(--line);color:var(--t2);border-bottom-left-radius:5px}
+/* офлайн/профиль */
+.off{display:none;align-items:center;gap:6px;font-size:11px;color:var(--warn);font-weight:600}.off.show{display:flex}
+.pf{display:flex;align-items:center;gap:7px;padding:6px 11px;border-radius:10px;color:var(--t2);font-size:12px;font-weight:600;border:1px solid var(--line);white-space:nowrap;flex:0 0 auto}
+.pf:hover{background:rgba(255,255,255,.06);color:var(--t1)}.pf .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);box-shadow:0 0 8px var(--ok)}
+/* ——— слой настроек ——— */
+.settings{position:absolute;inset:0;z-index:20;display:none;flex-direction:column;animation:sl .3s cubic-bezier(.2,.8,.2,1);
+  background:radial-gradient(900px 520px at 18% -12%,rgba(124,83,224,.17),transparent 60%),radial-gradient(760px 520px at 108% 115%,rgba(79,140,231,.09),transparent 55%),linear-gradient(162deg,#18131F 0%,#120F1A 58%,#0B0912 100%);
+  backdrop-filter:blur(26px)}
+.settings::before{content:"";position:absolute;inset:0;opacity:.045;mix-blend-mode:overlay;pointer-events:none;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>")}
+.settings>*{position:relative;z-index:1}
+.settings.show{display:flex}
+@keyframes sl{from{opacity:0;transform:translateY(-12px)}to{opacity:1;transform:none}}
+.shead{display:flex;align-items:center;gap:14px;padding:20px 26px 16px}
+.shead h2{font-family:var(--display);font-size:22px;font-weight:700;text-shadow:0 0 16px rgba(155,109,255,.35)}
+.shead .sr{margin-left:auto;display:flex;align-items:center;gap:10px}
+.srch{display:flex;align-items:center;gap:9px;padding:9px 14px;border-radius:12px;background:rgba(255,255,255,.05);border:1px solid var(--line);color:var(--t3);width:240px}
+.srch input{background:none;border:none;outline:none;color:var(--t1);font-family:inherit;font-size:13px;flex:1}
+.sclose{width:34px;height:34px;border-radius:10px;color:var(--t2);display:grid;place-items:center;border:1px solid var(--line)}
+.sclose:hover{background:rgba(255,102,133,.16);color:#ffb3c2}
+.sbody{flex:1;min-height:0;display:flex}
+.snav2{flex:0 0 232px;overflow:auto;padding:4px 14px 20px;border-right:1px solid var(--line);display:flex;flex-direction:column;gap:3px}
+.sn{position:relative;display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:11px;color:var(--t2);font-size:13.5px;font-weight:500;text-align:left;transition:.14s}
+.sn svg{width:18px;height:18px;flex:0 0 auto;opacity:.85}
+.sn:hover{background:rgba(255,255,255,.05);color:var(--t1)}
+.sn.active{background:linear-gradient(145deg,rgba(176,146,255,.2),rgba(124,83,224,.1));color:#fff;box-shadow:inset 0 0 0 1px rgba(155,109,255,.32)}
+.sn.active::before{content:"";position:absolute;left:-14px;top:9px;bottom:9px;width:3px;border-radius:0 3px 3px 0;background:linear-gradient(180deg,#B092FF,#7C53E0)}
+.scontent{flex:1;min-width:0;overflow:auto;padding:10px 30px 44px}
+.spage{display:none;max-width:720px;margin:0 auto}
+.spage.active{display:block;animation:fade .2s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.sptitle{font-family:var(--display);font-size:22px;font-weight:700;margin:6px 0 4px;background:linear-gradient(176deg,#FFFFFF,#C7B4FF 70%,#9E86E0);-webkit-background-clip:text;background-clip:text;color:transparent}
+.spsub{color:var(--t3);font-size:13px;margin-bottom:18px;line-height:1.5}
+.sgroup{background:linear-gradient(180deg,rgba(34,27,52,.66),rgba(26,22,38,.5));border:1px solid var(--line);border-radius:18px;padding:2px 20px;margin-bottom:16px;box-shadow:0 12px 32px -20px rgba(0,0,0,.7),inset 0 1px 0 rgba(255,255,255,.04)}
+.gh{display:flex;align-items:center;gap:9px;font-size:11.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--t3);padding:16px 0 2px}
+.gh::before{content:"";width:16px;height:2px;border-radius:2px;background:linear-gradient(90deg,#B092FF,#7C53E0)}
+.srow{display:flex;align-items:center;gap:16px;padding:15px 20px;margin:0 -20px;border-top:1px solid var(--line);transition:background .14s}
+.srow:hover{background:rgba(255,255,255,.025)}
+.sgroup .srow:first-of-type,.sgroup .gh+.srow{border-top:0}
+.srow .lbl{flex:1;min-width:0}
+.srow .lbl .t{font-size:14px;font-weight:500;color:var(--t1)}
+.srow .lbl .d{font-size:12px;color:var(--t3);margin-top:3px;line-height:1.45}
+.srow .ctl{flex:0 0 auto;display:flex;align-items:center;gap:10px}
+.srow.col{flex-direction:column;align-items:stretch;gap:10px}
+.srow.col .ctl{width:100%}
+/* ——— полировка ——— */
+.log::-webkit-scrollbar,.snav::-webkit-scrollbar{width:9px}
+.log::-webkit-scrollbar-thumb,.snav::-webkit-scrollbar-thumb{background:rgba(155,109,255,.32);border-radius:9px;border:2px solid transparent;background-clip:padding-box}
+.log::-webkit-scrollbar-thumb:hover,.snav::-webkit-scrollbar-thumb:hover{background:rgba(155,109,255,.5);background-clip:padding-box}
+.log,.snav{scrollbar-width:thin;scrollbar-color:rgba(155,109,255,.35) transparent}
+button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--plat);outline-offset:2px}
+.pf-wrap{position:relative}
+.pf.open{background:rgba(255,255,255,.08);color:var(--t1)}
+.pf svg{transition:transform .18s}.pf.open svg{transform:rotate(180deg)}
+.pf-menu{position:absolute;top:calc(100% + 8px);right:0;z-index:30;min-width:196px;padding:6px;border-radius:12px;
+  background:rgba(22,19,31,.97);border:1px solid var(--line2);backdrop-filter:blur(16px);
+  box-shadow:0 20px 50px -20px rgba(0,0,0,.85);display:none;flex-direction:column;gap:2px}
+.pf-menu.open{display:flex;animation:pop .16s ease}
+@keyframes pop{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:none}}
+.pf-menu button{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:9px;font-size:13px;color:var(--t2);text-align:left;width:100%}
+.pf-menu button:hover{background:rgba(255,255,255,.06);color:var(--t1)}
+.pf-menu button .pd{width:7px;height:7px;border-radius:50%;background:var(--t4);flex:0 0 auto}
+.pf-menu button.sel .pd{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.pf-menu button .ck{margin-left:auto;color:var(--plat);opacity:0}.pf-menu button.sel .ck{opacity:1}
+.cmdbar .mode.code{color:var(--plat);border-color:rgba(155,109,255,.5);background:rgba(155,109,255,.12)}
+.modeseg{display:flex;gap:3px;padding:4px;border-radius:12px;background:rgba(14,14,17,.6);border:1px solid var(--line2);backdrop-filter:blur(10px);flex:0 0 auto;margin-left:auto}
+.modeseg button{padding:6px 15px;border-radius:9px;font-size:12.5px;font-weight:600;color:var(--t3);transition:.16s;white-space:nowrap}
+.modeseg button:hover{color:var(--t1)}
+.modeseg button.active{color:#fff;background:linear-gradient(180deg,#B092FF,#7C53E0);box-shadow:0 5px 14px -6px rgba(155,109,255,.6)}
+.player{cursor:default}
+.player .body2{flex:1;min-width:0}
+.player .prog{height:3px;border-radius:3px;background:rgba(255,255,255,.12);margin-top:7px;position:relative;overflow:hidden;cursor:pointer}
+.player .prog i{position:absolute;left:0;top:0;bottom:0;width:38%;border-radius:3px;background:linear-gradient(90deg,var(--chrome3),var(--chrome2))}
+.player.playing .art{box-shadow:0 0 0 3px rgba(155,109,255,.2)}
+.cmdbar .mic{position:relative}
+.cmdbar .mic.live::after{content:"";position:absolute;inset:-4px;border-radius:12px;border:2px solid var(--plat);animation:pulse 1.5s ease-out infinite;pointer-events:none}
+@keyframes pulse{0%{transform:scale(.85);opacity:.65}100%{transform:scale(1.5);opacity:0}}
+.toast{position:absolute;left:50%;bottom:86px;transform:translateX(-50%) translateY(10px);z-index:40;padding:9px 16px;border-radius:11px;
+  background:rgba(22,19,31,.96);border:1px solid var(--line2);color:var(--t1);font-size:13px;font-weight:500;
+  box-shadow:0 14px 34px -14px rgba(0,0,0,.8);opacity:0;pointer-events:none;transition:.22s;white-space:nowrap}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.app.full{width:100vw;height:100vh;border-radius:0;border:0}body.full{padding:0}
+/* контролы настроек */
+.sw{position:relative;width:44px;height:25px;border-radius:13px;background:rgba(255,255,255,.1);border:1px solid var(--line2);transition:.18s;flex:0 0 auto;cursor:pointer}
+.sw i{position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:var(--t2);transition:.18s}
+.sw[aria-pressed="true"]{background:linear-gradient(180deg,#B092FF,#7C53E0);border-color:transparent}
+.sw[aria-pressed="true"] i{left:21px;background:#fff}
+.slider{display:flex;align-items:center;gap:12px;min-width:240px}
+.slider input[type=range]{-webkit-appearance:none;appearance:none;flex:1;height:4px;border-radius:3px;background:rgba(255,255,255,.14);outline:none}
+.slider input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid #9B6DFF;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.slider input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:#fff;border:3px solid #9B6DFF;cursor:pointer}
+.slider .sval{min-width:58px;text-align:right;font-size:13px;font-weight:600;color:var(--t1);font-variant-numeric:tabular-nums}
+.sel{position:relative}
+.sel-btn{display:flex;align-items:center;gap:10px;justify-content:space-between;min-width:200px;padding:9px 12px;border-radius:10px;background:rgba(255,255,255,.05);border:1px solid var(--line2);color:var(--t1);font-size:13px;font-weight:500;width:100%}
+.sel-btn:hover{border-color:rgba(155,109,255,.4)}
+.sel-btn svg{width:14px;height:14px;color:var(--t3);transition:.18s;flex:0 0 auto}
+.sel.open .sel-btn svg{transform:rotate(180deg)}
+.sel-menu{position:absolute;top:calc(100% + 6px);right:0;left:0;z-index:6;padding:5px;border-radius:11px;background:rgba(26,22,38,.98);border:1px solid var(--line2);box-shadow:0 18px 44px -18px rgba(0,0,0,.85);display:none;flex-direction:column;gap:2px;max-height:244px;overflow:auto}
+.sel.open .sel-menu{display:flex}
+.sel-menu button{text-align:left;padding:8px 11px;border-radius:8px;font-size:13px;color:var(--t2)}
+.sel-menu button:hover{background:rgba(255,255,255,.06);color:var(--t1)}
+.sel-menu button.sel-on{color:#fff;background:rgba(155,109,255,.18)}
+.ti{padding:9px 12px;border-radius:10px;background:rgba(255,255,255,.05);border:1px solid var(--line2);color:var(--t1);font-family:inherit;font-size:13px;outline:none;min-width:210px}
+.ti:focus{border-color:rgba(155,109,255,.5)}
+.ti.full{width:100%;min-width:0}
+.ti.mono{font-family:"Space Grotesk",monospace;letter-spacing:.06em}
+.ta{width:100%;padding:11px 13px;border-radius:11px;background:rgba(255,255,255,.05);border:1px solid var(--line2);color:var(--t1);font-family:inherit;font-size:13px;line-height:1.55;outline:none;resize:vertical;min-height:92px}
+.ta:focus{border-color:rgba(155,109,255,.5)}
+.ta.ro{color:var(--t3);background:rgba(255,255,255,.02)}
+.sbtns{display:flex;flex-wrap:wrap;gap:9px}
+.btn{padding:9px 16px;border-radius:10px;font-size:13px;font-weight:600;color:var(--t1);background:rgba(255,255,255,.06);border:1px solid var(--line2);transition:.16s;white-space:nowrap}
+.btn:hover{background:rgba(255,255,255,.1)}
+.btn.primary{background:linear-gradient(180deg,#B092FF,#7C53E0);border-color:transparent;color:#fff}
+.btn.primary:hover{box-shadow:0 8px 20px -8px rgba(155,109,255,.6)}
+.btn.danger{color:#ffb3c2;border-color:rgba(255,102,133,.35);background:rgba(255,102,133,.08)}
+.btn.danger:hover{background:rgba(255,102,133,.16)}
+.btn.sm{padding:7px 12px;font-size:12px}
+.seg{display:inline-flex;gap:3px;padding:4px;border-radius:11px;background:rgba(255,255,255,.05);border:1px solid var(--line2)}
+.seg button{padding:7px 15px;border-radius:8px;font-size:12.5px;font-weight:600;color:var(--t3);transition:.14s}
+.seg button:hover{color:var(--t1)}
+.seg button.active{color:#fff;background:linear-gradient(180deg,#B092FF,#7C53E0)}
+.notice{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:12px;font-size:12.5px;margin-bottom:16px;line-height:1.45}
+.notice.warn{background:rgba(246,200,95,.1);border:1px solid rgba(246,200,95,.28);color:#f6d98a}
+.notice.info{background:rgba(104,184,255,.1);border:1px solid rgba(104,184,255,.28);color:#aed4ff}
+.notice .btn{margin-left:auto}
+.kbd{display:inline-grid;place-items:center;min-width:28px;padding:4px 9px;border-radius:7px;background:rgba(255,255,255,.07);border:1px solid var(--line2);border-bottom-width:2px;font-size:12px;font-weight:600;font-family:"Space Grotesk",monospace;color:var(--t1)}
+.badge2{padding:3px 9px;border-radius:7px;font-size:11px;font-weight:600;background:rgba(155,109,255,.15);color:var(--chrome2);white-space:nowrap}
+.badge2.warn{background:rgba(246,200,95,.14);color:#f6d98a}.badge2.ok{background:rgba(69,214,161,.14);color:#8ff0cc}
+.pbar{height:6px;border-radius:4px;background:rgba(255,255,255,.1);overflow:hidden;flex:1}.pbar i{display:block;height:100%;background:linear-gradient(90deg,#7C53E0,#B092FF)}
+.restab{display:flex;flex-direction:column;gap:1px}.restab .rr{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-top:1px solid var(--line);font-size:13px}
+.restab .rr:first-child{border-top:0}.restab .rr .nm{color:var(--t2)}.restab .rr .vv{color:var(--t1);font-weight:600;font-variant-numeric:tabular-nums}
+.hkrow{display:flex;align-items:center;gap:14px;padding:13px 0;border-top:1px solid var(--line)}.hkrow:first-of-type{border-top:0}
+.hkrow .hk-nm{flex:1;font-size:14px;color:var(--t1)}.hkrow .hk-ks{display:flex;gap:5px;align-items:center}
+@media(prefers-reduced-motion:reduce){.metal .sheen{animation:none}.eq i{transition:none}}
+@media(max-height:720px){.wordmark{font-size:80px}.eq{height:60px;margin-bottom:20px}.cta{margin-top:18px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="metal"><canvas id="metal"></canvas><div class="sheen"></div><div class="vign"></div></div>
+  <div class="grain"></div>
+  <div class="shell">
+    <aside class="rail">
+      <button class="ni active" data-view="home"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></svg><span class="lbl">Главная</span></button>
+      <button class="ni" data-settings="commands"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 7 4 4-4 4"/><path d="M12 16h7"/></svg><span class="lbl">Команды</span></button>
+      <button class="ni" data-settings="ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="7" width="10" height="10" rx="2.5"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg><span class="lbl">ИИ / LLM</span></button>
+      <button class="ni" data-settings="voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg><span class="lbl">Голос</span></button>
+      <button class="ni" data-settings="updates"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 3 7.5v9L12 21l9-4.5v-9z"/><path d="M3 7.5 12 12l9-4.5M12 12v9"/></svg><span class="lbl">Модель</span></button>
+      <button class="ni" data-open="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7 7 0 0 0-2-1.2l-.4-2.6h-4l-.4 2.6a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6A7 7 0 0 0 5 12a7 7 0 0 0 .1 1.2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6A7 7 0 0 0 19 12z"/></svg><span class="lbl">Настройки</span></button>
+      <div class="sp"></div>
+      <div class="av">АБ</div>
+    </aside>
+    <section class="main">
+      <div class="top">
+        <span class="brand">AYRIS</span>
+        <span class="clk" id="clock">14:32</span>
+        <div class="chips">
+          <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M19 5l-1.5 1.5M6.5 17.5 5 19"/></svg><b>+18°</b>&nbsp;Ясно</span>
+        </div>
+        <div class="modeseg" id="nlu" role="tablist" aria-label="Режим ответа ассистента" title="Режим ответа">
+          <button data-m="Команды" role="tab" aria-selected="false" title="Выполнять только команды">Команды</button>
+          <button data-m="Гибрид" class="active" role="tab" aria-selected="true" title="Команды + ИИ по смыслу">Гибрид</button>
+          <button data-m="ИИ" role="tab" aria-selected="false" title="Отвечает только ИИ">ИИ</button>
+        </div>
+        <div class="tele">
+          <div class="tm"><span class="ring" style="--p:48"><b>48</b></span>CPU</div>
+          <div class="tm"><span class="ring" style="--p:57"><b>57</b></span>RAM</div>
+          <div class="tm"><span class="ring" style="--p:25"><b>25</b></span>GPU</div>
+        </div>
+        <span class="off" id="off"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3l18 18"/></svg>Офлайн</span>
+        <div class="pf-wrap">
+          <button class="pf" id="pfbtn" aria-haspopup="true" aria-expanded="false" title="Профиль ассистента"><span class="dot"></span><span id="pfname">По умолчанию</span><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button>
+          <div class="pf-menu" id="pfmenu" role="menu">
+            <button data-p="По умолчанию" class="sel" role="menuitem"><span class="pd"></span>По умолчанию<svg class="ck" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m5 12 4 4 10-10"/></svg></button>
+            <button data-p="Работа" role="menuitem"><span class="pd"></span>Работа<svg class="ck" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m5 12 4 4 10-10"/></svg></button>
+            <button data-p="Дом" role="menuitem"><span class="pd"></span>Дом<svg class="ck" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m5 12 4 4 10-10"/></svg></button>
+            <button data-p="Игры" role="menuitem"><span class="pd"></span>Игры<svg class="ck" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.4"><path d="m5 12 4 4 10-10"/></svg></button>
+          </div>
+        </div>
+        <div class="wbtns">
+          <button id="win-min" title="Свернуть" aria-label="Свернуть окно"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg></button>
+          <button id="win-full" title="Во весь экран (F11)" aria-label="Полноэкранный режим"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M8 3H4v4M16 3h4v4M8 21H4v-4M16 21h4v-4"/></svg></button>
+          <button class="x" id="win-close" title="Закрыть" aria-label="Закрыть окно"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+        </div>
+      </div>
+      <div class="hero" id="hero">
+        <div class="eq" id="eq"></div>
+        <h1 class="wordmark">AYRIS</h1>
+        <p class="tagline">Ваш ИИ-компаньон на рабочем столе</p>
+        <p class="subcap">A Y R I S &nbsp; A S S I S T A N T</p>
+        <div class="player" id="player">
+          <div class="art"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l10-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="16" cy="16" r="3"/></svg></div>
+          <div class="body2">
+            <div class="meta"><div class="t">Midnight Drive</div><div class="a">The Midnight · <span id="ptime">1:24</span> / 3:41</div></div>
+            <div class="prog" id="pprog"><i id="pbar"></i></div>
+          </div>
+          <button class="play" id="pplay" aria-label="Воспроизвести"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+        </div>
+        <div class="quick">
+          <button id="qa-timers" title="Таймеры"><span class="badge">2</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="13" r="8"/><path d="M12 13V9M9 2h6M18 6l1.5-1.5"/></svg></button>
+          <button id="qa-history" title="История диалога"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3.5 9a9 9 0 1 1-1 5"/><path d="M3 4v5h5"/><path d="M12 8v4.5l3 1.8"/></svg></button>
+          <button id="qa-tts" title="Голосовой ответ"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/></svg></button>
+          <button id="qa-wake" title="Активация голосом"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v9"/><path d="M7.5 6.6a7 7 0 1 0 9 0"/></svg></button>
+        </div>
+      </div>
+      <div class="chat" id="chat">
+        <div class="status"><div class="av"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 4 7v6c0 4.5 3.4 7.3 8 8 4.6-.7 8-3.5 8-8V7z"/><path d="M9.5 12.5 11 14l3.5-3.5"/></svg></div><div class="line" id="statusline">Привет, чем помочь?</div></div>
+        <div class="log" id="log">
+          <div class="msg you"><div class="who">Вы · 14:28</div><div class="bub">Собери сводку по проекту и поставь напоминание на 17:00</div></div>
+          <div class="msg ai"><div class="who">Айрис · 14:28</div><div class="bub">Сводка готова, напоминание на 17:00 поставлено. Показать детали?</div></div>
+          <div class="msg you"><div class="who">Вы · 14:30</div><div class="bub">Да, и включи плеер потише</div></div>
+          <div class="msg ai"><div class="who">Айрис · 14:30</div><div class="bub">Открываю сводку и убавляю громкость до 20%.</div></div>
+        </div>
+      </div>
+      <div class="cmdbar">
+        <button class="mode" id="mode" title="Режим команды или кода" aria-label="Режим команды или кода" aria-pressed="false">&lt;/&gt;</button>
+        <input id="cmd" placeholder="Чем могу помочь сегодня?" aria-label="Поле ввода команды" />
+        <button class="mic" id="mic" title="Голосовой ввод" aria-label="Голосовой ввод" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg></button>
+        <button class="send" id="send" title="Отправить" aria-label="Отправить команду"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20V5M6 11l6-6 6 6"/></svg></button>
+      </div>
+      <div class="settings" id="settings">
+        <div class="shead"><h2>Настройки</h2>
+          <div class="sr"><div class="srch"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><input placeholder="Найти настройку" /></div>
+          <button class="sclose" id="sclose"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+        </div>
+        <div class="sbody">
+          <nav class="snav2" id="snav2">
+            <button class="sn active" data-sp="general"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 20h8"/></svg>Общие</button>
+            <button class="sn" data-sp="voice"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>Голос</button>
+            <button class="sn" data-sp="commands"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m5 7 4 4-4 4"/><path d="M12 16h7"/></svg>Команды</button>
+            <button class="sn" data-sp="ai"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="7" y="7" width="10" height="10" rx="2.5"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg>ИИ / LLM</button>
+            <button class="sn" data-sp="hotkeys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0"/></svg>Горячие клавиши</button>
+            <button class="sn" data-sp="overlay"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>Панель / Сфера</button>
+            <button class="sn" data-sp="profiles"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 11.5 12 4l9 7.5M5 10.5V20h14v-9.5"/></svg>Профили</button>
+            <button class="sn" data-sp="updates"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12a9 9 0 1 1-3-6.7M21 4v4h-4"/></svg>Обновления</button>
+            <button class="sn" data-sp="devtools"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m8 7-5 5 5 5M16 7l5 5-5 5"/></svg>Логи / DevTools</button>
+            <button class="sn" data-sp="privacy"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3 4 7v5c0 4.5 3.4 7.3 8 9 4.6-1.7 8-4.5 8-9V7z"/></svg>Приватность</button>
+          </nav>
+          <div class="scontent" id="scontent">
+            <section class="spage active" id="sp-general">
+          <div class="sptitle">Общие</div>
+          <div class="spsub">Интерфейс, поведение запуска и закрытия, первый запуск и производительность помощника.</div>
+          <div class="sgroup"><div class="gh">Интерфейс</div>
+            <div class="srow"><div class="lbl"><div class="t">Язык</div><div class="d">Язык интерфейса и распознавания. Другие языки пока не поддерживаются.</div></div>
+              <div class="ctl"><div class="sel"><button class="sel-btn"><span>Русский</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Русский</button></div></div></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Тема</div><div class="d">Оформление окна и оверлея. Применяется сразу.</div></div>
+              <div class="ctl"><div class="sel"><button class="sel-btn"><span>Тёмная фиолетовая</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Тёмная фиолетовая</button><button>Светлая</button><button>Системная</button></div></div></div></div>
+          </div>
+          <div class="sgroup"><div class="gh">Запуск и закрытие</div>
+            <div class="srow"><div class="lbl"><div class="t">Запускать вместе с Windows</div><div class="d">Добавляет Ayris в автозагрузку текущего пользователя.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Стартовать свёрнутым</div><div class="d">При запуске окно не показывается — Ayris ждёт в трее.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Кнопка «свернуть» — в трей</div><div class="d">Свёрнутое окно убирается в трей, а не на панель задач.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Кнопка «закрыть» — в трей</div><div class="d">Закрытие окна прячет Ayris в трей вместо выхода из программы.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+          </div>
+          <div class="sgroup"><div class="gh">Первый запуск</div>
+            <div class="srow"><div class="lbl"><div class="t">Заставка при запуске</div><div class="d">Показывать лого и сферу, пока Айрис поднимается. Запуск не задерживает.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Мастер первого запуска</div><div class="d">Заново пройти настройку темы, режима, микрофона, моделей и профиля. Модели и команды сохранятся.</div></div><div class="ctl"><button class="btn">Пройти мастер заново</button></div></div>
+          </div>
+          <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Часть изменений применится после перезапуска воркера.<button class="btn sm">Перезапустить</button></div>
+          <div class="sgroup"><div class="gh">Производительность</div>
+            <div class="srow"><div class="lbl"><div class="t">Приоритет помощника</div><div class="d">Приоритет главного процесса. Применяется сразу.</div></div>
+              <div class="ctl"><div class="sel"><button class="sel-btn"><span>Обычный</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Обычный</button><button>Выше обычного</button><button>Высокий</button></div></div></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Приоритет захвата звука</div><div class="d">Ниже «Высокого» возможны пропуски звука. «Реальное время» — с осторожностью.</div></div>
+              <div class="ctl"><div class="sel"><button class="sel-btn"><span>Высокий</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button>Обычный</button><button>Выше обычного</button><button class="sel-on">Высокий</button><button>Реальное время</button></div></div></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Лимит памяти для моделей</div><div class="d">Мягкий предел, выше которого локальные модели не загружаются.</div></div>
+              <div class="ctl"><div class="sel"><button class="sel-btn"><span>4 ГБ</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button>Без ограничения</button><button>2 ГБ</button><button class="sel-on">4 ГБ</button><button>8 ГБ</button><button>16 ГБ</button></div></div></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Потоки распознавания</div><div class="d">Больше — быстрее на длинных фразах. Требует перезапуска воркера.</div></div><div class="ctl"><div class="slider"><input type="range" min="1" max="4" value="2"><span class="sval">2</span></div></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Потоки синтеза</div><div class="d">Параллельная озвучка нескольких ответов.</div></div><div class="ctl"><div class="slider"><input type="range" min="1" max="2" value="1"><span class="sval">1</span></div></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Потоки языковой модели</div><div class="d">Параллельные запросы к модели.</div></div><div class="ctl"><div class="slider"><input type="range" min="1" max="2" value="1"><span class="sval">1</span></div></div></div>
+            <div class="srow"><div class="lbl"><div class="t">Потоки макросов</div><div class="d">Сколько макросов выполняется одновременно.</div></div><div class="ctl"><div class="slider"><input type="range" min="1" max="16" value="4"><span class="sval">4</span></div></div></div>
+          </div>
+          <div class="sgroup"><div class="gh">Экономный режим</div>
+            <div class="srow"><div class="lbl"><div class="t">Экономить память</div><div class="d">Не держать в памяти локальные модели, которые сейчас не на основном пути. Они поднимутся при первом обращении — первый вызов будет с задержкой.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+          </div>
+          <div class="sgroup"><div class="gh">Ресурсы · текущее потребление</div>
+            <div class="restab">
+              <div class="rr"><span class="nm">Ayris — главный процесс</span><span class="vv">184 МБ · 3%</span></div>
+              <div class="rr"><span class="nm">Захват звука <span style="color:var(--t4)">· pid 7420</span></span><span class="vv">62 МБ · 1%</span></div>
+              <div class="rr"><span class="nm">Распознавание речи <span style="color:var(--t4)">· GigaAM</span></span><span class="vv">208 МБ · 6%</span></div>
+              <div class="rr"><span class="nm">Синтез речи <span style="color:var(--t4)">· Piper</span></span><span class="vv">96 МБ · 2%</span></div>
+              <div class="rr"><span class="nm">Языковая модель <span style="color:var(--t4)">· Qwen2.5 7B</span></span><span class="vv">4.9 ГБ · 11%</span></div>
+            </div>
+            <div class="srow"><div class="lbl"><div class="t">Всего</div></div><div class="ctl"><span class="badge2">≈ 5.4 ГБ</span></div></div>
+          </div></section>
+            <section class="spage" id="sp-voice">
+<div class="sptitle">Голос</div>
+<div class="spsub">Вся речевая цепочка на одной странице: распознавание (STT), синтез (TTS), слово активации и микрофон. Страница прокручивается вертикально.</div>
+
+<div class="sgroup"><div class="gh">Распознавание речи (STT)</div>
+  <div class="srow"><div class="lbl"><div class="t">Режим</div><div class="d">Онлайн точнее и без моделей на диске, офлайн — без сети. «Авто» начинает с облака и откатывается на офлайн при потере связи.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Авто: облако с откатом на офлайн</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button>Только офлайн</button><button>Только облако</button><button class="sel-on">Авто: облако с откатом на офлайн</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Локальный движок</div><div class="d">Движок распознавания для офлайн-режима. GigaAM точнее на русском.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>GigaAM (локально)</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">GigaAM (локально)</button><button>Vosk (локально)</button><button>Whisper.cpp (локально)</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Модель</div><div class="d">Файл модели в папке моделей. Модели скачиваются в менеджере моделей.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>GigaAM v3 RNNT</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">GigaAM v3 RNNT</button><button>GigaAM v2 CTC</button><button>vosk-model-small-ru-0.22 (нет в каталоге)</button></div></div></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Модель для выбранного движка не скачана.<button class="btn sm">Менеджер моделей</button></div>
+  <div class="srow"><div class="lbl"><div class="t">Облачный провайдер</div><div class="d">Сервис распознавания для онлайн-режима.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Яндекс SpeechKit</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Яндекс SpeechKit</button><button>Google Cloud Speech-to-Text</button><button>Azure Speech</button><button>OpenAI-совместимый (Whisper)</button></div></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Адрес сервиса</div><div class="d">Полный URL метода транскрипции OpenAI-совместимого API. Пусто — адрес OpenAI по умолчанию. Показывается для провайдера «OpenAI-совместимый».</div></div><div class="ctl"><input class="ti full" placeholder="https://api.openai.com/v1/audio/transcriptions"></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Модель (облако)</div><div class="d">Идентификатор модели распознавания у сервиса. Пусто — модель по умолчанию (whisper-1).</div></div><div class="ctl"><input class="ti full" placeholder="whisper-1"></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Имя записи</div><div class="d">Короткое латинское имя записи ключа, например yandex.</div></div><div class="ctl"><input class="ti" placeholder="yandex"></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Ключ облачного сервиса</div><div class="d">Вставьте ключ — он не попадёт в файл настроек. Ключ хранится в диспетчере учётных данных Windows, а не в config.toml.</div></div><div class="ctl"><input class="ti mono full" type="password" placeholder="Вставьте ключ"><div class="sbtns"><button class="btn primary">Сохранить</button><button class="btn">Проверить</button><button class="btn danger">Удалить</button></div></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Облачный движок выбран, но ключ не задан — команды будут молча отклоняться.</div>
+  <div class="srow col"><div class="lbl"><div class="t">Тест распознавания</div><div class="d">Проверьте микрофон и движок: запишите короткую фразу и сверьте текст.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Записать фразу</button></div><span class="badge2 warn">Слушаю…</span></div></div>
+  <div class="srow col"><div class="ctl"><textarea class="ta ro" placeholder="Скажите фразу — распознанный текст появится здесь."></textarea></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Изменения распознавания применятся после перезапуска воркера.<button class="btn sm">Перезапустить</button></div>
+</div>
+<div class="sgroup"><div class="gh">Синтез речи (TTS)</div>
+  <div class="srow"><div class="lbl"><div class="t">Движок</div><div class="d">Чем озвучивать ответы. Piper — быстрый локальный голос.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Piper (локально)</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Piper (локально)</button><button>Silero (локально)</button><button>Coqui XTTS (локально)</button><button>Яндекс SpeechKit</button><button>Google Cloud TTS</button><button>Azure Speech</button><button>ElevenLabs</button><button>OpenAI-совместимый (OpenRouter…)</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Голос</div><div class="d">Голос выбранного движка. Свои модели можно загрузить ниже.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>ru · Денис (Piper)</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">ru · Денис (Piper)</button><button>ru · Ирина (Piper)</button><button>ru · Руслан (Piper)</button></div></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Адрес сервиса</div><div class="d">Базовый URL OpenAI-совместимого API. Пусто — адрес по умолчанию (OpenRouter). Показывается для движка «OpenAI-совместимый».</div></div><div class="ctl"><input class="ti full" placeholder="https://openrouter.ai/api/v1"></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Модель</div><div class="d">Идентификатор модели синтеза у сервиса — обязателен для облачного голоса.</div></div><div class="ctl"><input class="ti full" placeholder="например, openai/gpt-4o-mini-tts"></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Имя записи</div><div class="d">Имя записи ключа, например openai.</div></div><div class="ctl"><input class="ti" placeholder="openai"></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Ключ облачного сервиса</div><div class="d">Вставьте ключ — он не попадёт в файл настроек. Ключ хранится в диспетчере учётных данных Windows, а не в config.toml.</div></div><div class="ctl"><input class="ti mono full" type="password" placeholder="Вставьте ключ"><div class="sbtns"><button class="btn primary">Сохранить</button><button class="btn">Проверить</button><button class="btn danger">Удалить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Скорость</div><div class="d">1.0× — обычный темп речи.</div></div><div class="ctl"><div class="slider"><input type="range" min="50" max="200" value="100" data-unit=" %"><span class="sval">100 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Тон</div><div class="d">Высота голоса относительно обычной.</div></div><div class="ctl"><div class="slider"><input type="range" min="50" max="200" value="100" data-unit=" %"><span class="sval">100 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Громкость</div><div class="d">Громкость озвучки помощника.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="100" value="80" data-unit=" %"><span class="sval">80 %</span></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Проба голоса</div><div class="d">Произнести тестовую фразу выбранным голосом с текущими скоростью, тоном и громкостью. «Выбрать файл модели…» доступно для Piper (.onnx) и Coqui (.pth).</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Прослушать</button><button class="btn">Выбрать файл модели…</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Запасной облачный голос</div><div class="d">Если локальный синтез не справился, озвучить ответ через облако.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Изменения синтеза применятся после перезапуска воркера.<button class="btn sm">Перезапустить</button></div>
+</div>
+<div class="sgroup"><div class="gh">Слово активации</div>
+  <div class="srow"><div class="lbl"><div class="t">Активация голосом</div><div class="d">Реагировать на «Айрис» и его варианты без нажатия клавиш.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Движок</div><div class="d">Чем распознавать слово активации.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>openWakeWord</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">openWakeWord</button><button>Porcupine</button><button>Vosk KWS</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Режим микрофона</div><div class="d">Всегда слушать, только по клавише или оба способа сразу.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Всегда слушать</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Всегда слушать</button><button>По клавише (Push-to-Talk)</button><button>И то и другое</button></div></div></div></div>
+  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Чем больше вариантов, тем терпимее к произношению; выше чувствительность — чаще ложные срабатывания.</div>
+  <div class="srow"><div class="lbl"><div class="t">«айрис»</div><div class="d">Чувствительность срабатывания.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="100" value="60" data-unit=" %"><span class="sval">60 %</span></div><button class="sw" aria-pressed="true"><i></i></button><button class="btn sm danger">Удалить</button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">«слушай айрис»</div><div class="d">Чувствительность срабатывания.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="100" value="55" data-unit=" %"><span class="sval">55 %</span></div><button class="sw" aria-pressed="true"><i></i></button><button class="btn sm danger">Удалить</button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">«эй айрис»</div><div class="d">Чувствительность срабатывания.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="100" value="50" data-unit=" %"><span class="sval">50 %</span></div><button class="sw" aria-pressed="false"><i></i></button><button class="btn sm danger">Удалить</button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Новый вариант</div><div class="d">Например «слушай айрис». Слово активации должно быть не короче двух символов. Enter или кнопка «Добавить».</div></div><div class="ctl"><input class="ti full" placeholder="Новый вариант, например «слушай айрис»"><div class="sbtns"><button class="btn primary">Добавить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Пауза после срабатывания</div><div class="d">Не срабатывать повторно в течение этого времени.</div></div><div class="ctl"><div class="slider"><input type="range" min="200" max="10000" value="1500" data-unit=" мс"><span class="sval">1500 мс</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Режим теста активации</div><div class="d">Включите режим и произносите слово: здесь видно каждое срабатывание и уверенность.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Проверка слова активации</div><div class="d">Последнее: «айрис» (92 %). Счётчики обновляются, пока вкладка видима.</div></div><div class="ctl"><span class="badge2 ok">Срабатываний: 7</span><span class="badge2 warn">Ложных: 1</span><div class="sbtns"><button class="btn">Сбросить счётчик</button><button class="btn">Отметить ложное</button></div></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Изменения слова активации применятся после перезапуска воркера.<button class="btn sm">Перезапустить</button></div>
+</div>
+<div class="sgroup"><div class="gh">Аудио вход</div>
+  <div class="srow"><div class="lbl"><div class="t">Устройство записи</div><div class="d">Микрофон для распознавания. «Обновить» перечитывает список после подключения микрофона.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Системное по умолчанию</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Системное по умолчанию</button><button>Микрофон (Realtek Audio)</button><button>USB-микрофон (Fifine)</button><button>3 (недоступно)</button></div></div><button class="btn">Обновить</button></div></div>
+  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Выбранное устройство сейчас недоступно — подключите его или выберите другое.</div>
+  <div class="srow"><div class="lbl"><div class="t">Усиление</div><div class="d">Программное усиление входного сигнала. 100 % — без изменений.</div></div><div class="ctl"><div class="slider"><input type="range" min="10" max="1000" value="100" data-unit=" %"><span class="sval">100 %</span></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Уровень сигнала</div><div class="d">Полоса — текущий уровень, вертикальная черта — порог речи. Обновляется, только пока вкладка открыта.</div></div><div class="ctl"><div class="pbar"><i style="width:42%"></i></div><span class="badge2">−24 дБ</span></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Порог речи (VAD)</div><div class="d">Ниже порога сигнал считается тишиной. Черта на шкале уровня показывает порог.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="100" value="50" data-unit=" %"><span class="sval">50 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Шумоподавление</div><div class="d">RNNoise добавляет небольшую задержку, но заметно чище в шумной комнате.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>RNNoise (лучшее качество, +~10 мс)</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button>Выключено</button><button class="sel-on">RNNoise (лучшее качество, +~10 мс)</button><button>Спектральное (лёгкое)</button></div></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Калибровка</div><div class="d">Измерит шум комнаты и вашу речь, затем предложит усиление, порог и шумоподавление. Доступна после запуска захвата звука.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Калибровать</button></div></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Изменения аудиовхода применятся после перезапуска воркера.<button class="btn sm">Перезапустить</button></div>
+</div>
+</section>
+            <section class="spage" id="sp-commands">
+<div class="sptitle">Команды</div>
+<div class="spsub">Библиотека макросов профиля: поиск, фильтры и папки. По кнопке «Открыть» команда разворачивается в полноэкранном редакторе — обзор, триггеры, действия-ноды, переменные, звуки и история версий.</div>
+
+<div class="sgroup"><div class="gh">Библиотека <span class="badge2">5</span></div>
+  <div class="srow col">
+    <input class="ti full" placeholder="Поиск команды…">
+    <div class="sbtns">
+      <button class="btn primary">＋ Создать</button>
+      <button class="btn">Импорт…</button>
+      <button class="btn">Экспорт…</button>
+      <button class="btn">＋ Новая папка</button>
+    </div>
+  </div>
+  <div class="srow"><div class="lbl"><div class="t">Фильтры</div><div class="d">Отбор команд по статусу и тегу.</div></div>
+    <div class="ctl">
+      <div class="sel"><button class="sel-btn"><span>Все</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Все</button><button>Включённые</button><button>Выключенные</button></div></div>
+      <div class="sel"><button class="sel-btn"><span>Все теги</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Все теги</button><button>работа</button><button>дом</button><button>медиа</button></div></div>
+    </div>
+  </div>
+  <div class="srow"><div class="lbl"><div class="t">Только с конфликтами</div><div class="d">Показывать лишь команды, чьи триггеры пересекаются с другими.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Продуктивность <span class="badge2">2</span></div>
+  <div class="srow"><div class="lbl"><div class="t">Открыть YouTube и найти</div><div class="d">Фраза «открой ютуб и найди…» · 1 триггер · 4 действия</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button><button class="btn sm">Открыть</button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Заметки со встречи</div><div class="d">Хоткей <span class="kbd">Alt</span> <span class="kbd">Y</span> · 2 триггера · 6 действий</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button><button class="btn sm">Открыть</button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Фокус <span class="badge2">2</span></div>
+  <div class="srow"><div class="lbl"><div class="t">Режим фокуса</div><div class="d">Хоткей <span class="kbd">Ctrl</span> <span class="kbd">Alt</span> <span class="kbd">F</span> · 1 триггер · 5 действий</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button><button class="btn sm">Открыть</button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Заблокировать экран</div><div class="d">Хоткей <span class="kbd">Win</span> <span class="kbd">L</span> · 1 действие <span class="badge2 warn">конфликт триггера</span></div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button><button class="btn sm">Открыть</button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Без группы <span class="badge2">1</span></div>
+  <div class="srow"><div class="lbl"><div class="t">Поздороваться</div><div class="d">Фраза «привет, айрис» · 1 триггер · 2 действия</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button><button class="btn sm">Открыть</button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Редактор</div>
+  <div class="srow"><div class="lbl"><div class="t">Нодовый редактор команд</div><div class="d">Собирайте сценарии из блоков: триггеры, условия, действия, звуки. Поток слева направо, задержки на связях, точки останова для отладки.</div></div><div class="ctl"><button class="btn primary">Открыть редактор</button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Общее</div>
+  <div class="srow"><div class="lbl"><div class="t">Подтверждать опасные действия</div><div class="d">Перед запуском команд с опасными блоками (удаление файлов, запуск процессов) спрашивать подтверждение.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Звук при выполнении команды</div><div class="d">Короткий сигнал на старте и завершении команды.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Вид редактора действий</div><div class="d">Как по умолчанию открывать вкладку «Действия» — списком блоков или нодовым холстом.</div></div>
+    <div class="ctl"><div class="sel"><button class="sel-btn"><span>Ноды</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button>Список</button><button class="sel-on">Ноды</button></div></div></div>
+  </div>
+</div>
+</section>
+            <section class="spage" id="sp-ai">
+<div class="sptitle">ИИ / LLM</div>
+<div class="spsub">Распознавание фраз языковой моделью: режим, поставщик, ключи и модели, параметры генерации, память диалога, промпты и пробный запрос.</div>
+
+<div class="sgroup"><div class="gh">Режим распознавания</div>
+  <div class="srow col"><div class="lbl"><div class="t">Как Айрис понимает фразы</div><div class="d">От режима зависит, участвует ли языковая модель.</div></div><div class="ctl"><div class="seg"><button>Команды</button><button class="active">Гибрид</button><button>Только ИИ</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Только команды</div><div class="d">Айрис выполняет только заготовленные команды и честно сообщает, когда фразу не удалось сопоставить. Модель не используется.</div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Гибрид</div><div class="d">Сначала подбирается команда из библиотеки; если ничего не совпало, фраза уходит модели.</div></div><div class="ctl"><span class="badge2 ok">выбрано</span></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Только ИИ</div><div class="d">Любая фраза уходит модели; ответ озвучивается.</div></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>В режиме «Только ИИ» заготовленные команды не срабатывают напрямую — всё решает модель.</div>
+</div>
+
+<div class="sgroup"><div class="gh">Языковая модель</div>
+  <div class="srow"><div class="lbl"><div class="t">Поставщик</div><div class="d">Облачный сервис или локальный движок. Ключи облака хранятся в диспетчере Windows.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Ollama (локально)</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Ollama (локально)</button><button>LM Studio (локально)</button><button>llama.cpp (в процессе)</button><button>OpenAI</button><button>Anthropic · Claude</button><button>OpenRouter</button><button>DeepSeek</button><button>GigaChat · Сбер</button><button>YandexGPT</button><button>Свой OpenAI-совместимый</button></div></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Адрес сервера</div><div class="d">Локальный сервер (Ollama, LM Studio) или базовый URL OpenAI-совместимого API.</div></div><div class="ctl"><input class="ti full" value="http://127.0.0.1:11434" placeholder="http://127.0.0.1:11434"></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Модель</div><div class="d">Название модели у поставщика. Проверка ниже подтянет список прямо с сервера.</div></div><div class="ctl"><input class="ti full" value="qwen2.5:7b-instruct" placeholder="qwen2.5:7b-instruct"></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Модели с сервера</div><div class="d">Выберите из того, что вернул сервис при проверке.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>qwen2.5:7b-instruct</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">qwen2.5:7b-instruct</button><button>llama3.2:3b</button><button>gemma2:2b</button><button>phi3:mini</button></div></div></div></div>
+</div>
+<div class="sgroup"><div class="gh">Ключ облачного сервиса</div>
+  <div class="srow"><div class="lbl"><div class="t">Имя записи</div><div class="d">Латиница, например openai. Ключ хранится в диспетчере учётных данных Windows, а не в config.toml.</div></div><div class="ctl"><input class="ti" value="openai" placeholder="openai"></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Ключ</div><div class="d">Вставьте ключ — он сохранится в хранилище Windows и больше не показывается.</div></div><div class="ctl"><input class="ti mono full" type="password" placeholder="Вставьте ключ"></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Запись ключа</div><div class="d">Сохраните ключ в хранилище Windows или удалите существующий.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Сохранить</button><button class="btn">Удалить</button><span class="badge2 ok">Запись «openai»: ключ сохранён.</span></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Проверка</div>
+  <div class="srow"><div class="lbl"><div class="t">Проверка связи</div><div class="d">Проверяет ключ или соединение и подтягивает список моделей. Сеть — в фоне.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Проверить ключ</button><span class="badge2 ok">Проверка прошла успешно.</span></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Рекомендованные модели</div>
+  <div class="srow"><div class="lbl"><div class="t">Qwen2.5 1.5B Instruct</div><div class="d">≈ 0.9 ГБ · шустрая, для команд и коротких ответов</div></div><div class="ctl"><div class="sbtns"><span class="badge2 ok">влезет</span><button class="btn sm">Загрузить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Gemma 2 2B</div><div class="d">≈ 1.6 ГБ · хороший баланс для слабого железа</div></div><div class="ctl"><div class="sbtns"><span class="badge2 ok">влезет</span><button class="btn sm">Загрузить</button></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Qwen2.5 7B Instruct</div><div class="d">≈ 4.7 ГБ · умнее, но требовательна к памяти · впритык</div></div><div class="ctl"><div class="sbtns" style="width:100%"><div class="pbar"><i style="width:62%"></i></div><span class="badge2">Загружаю «qwen2.5:7b»… 62%</span><button class="btn sm">Отмена</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Gemma 2 9B</div><div class="d">≈ 5.4 ГБ · самая способная из списка</div></div><div class="ctl"><div class="sbtns"><span class="badge2">не влезет</span><button class="btn sm">Загрузить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Статус каталога</div><div class="d">Загрузка по имени доступна только для Ollama.</div></div><div class="ctl"><span class="badge2">Загрузка доступна только для Ollama.</span></div></div>
+</div>
+
+<div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Изменения вступят в силу после перезапуска: языковая модель.<button class="btn sm">Перезапустить</button></div>
+<div class="sgroup"><div class="gh">Параметры генерации</div>
+  <div class="srow"><div class="lbl"><div class="t">Температура</div><div class="d">Разброс ответов: 0 — предсказуемо, 200 — максимально разнообразно (шкала 0–2 ×100).</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="200" value="70" data-unit=""><span class="sval">70</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Лимит ответа</div><div class="d">Максимум токенов в ответе модели. Больше — длиннее и дороже.</div></div><div class="ctl"><div class="slider"><input type="range" min="64" max="32768" value="1024" data-unit=" ток."><span class="sval">1024 ток.</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Таймаут</div><div class="d">Сколько секунд ждать ответ модели, прежде чем прервать запрос.</div></div><div class="ctl"><div class="slider"><input type="range" min="2" max="300" value="30" data-unit=" с"><span class="sval">30 с</span></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">История диалога</div>
+  <div class="srow"><div class="lbl"><div class="t">Сколько помнить</div><div class="d">Сколько последних реплик держать в контексте. 0 — не помнить ничего.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="100" value="10" data-unit=" реплик"><span class="sval">10 реплик</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Когда сворачивать</div><div class="d">После скольких реплик сворачивать историю в краткий пересказ. 0 — никогда; иначе не меньше длины истории.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="500" value="30" data-unit=" реплик"><span class="sval">30 реплик</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Сброс истории</div><div class="d">Забыть текущий разговор с моделью. На заготовленные команды не влияет.</div></div><div class="ctl"><button class="btn danger">Очистить историю диалога</button></div></div>
+</div>
+<div class="sgroup"><div class="gh">Промпт свободного разговора</div>
+  <div class="srow col"><div class="lbl"><div class="t">Текст промпта</div><div class="d">Ваша «персона» для чата. Ниже — итоговый промпт с шаблоном поведения.</div></div><div class="ctl"><textarea class="ta" placeholder="Опишите характер и манеру Айрис…">Ты — Айрис, доброжелательный голосовой помощник. Отвечай кратко, по-русски, тёплым живым тоном. Не выдумывай факты; если не знаешь — честно скажи.</textarea></div></div>
+  <div class="sbtns"><span class="badge2">≈ 48 токенов</span><button class="btn">Сбросить к дефолту</button></div>
+  <div class="srow col"><div class="lbl"><div class="t">Итоговый промпт для модели</div></div><div class="ctl"><textarea class="ta ro" readonly>Ты — Айрис, доброжелательный голосовой помощник. Отвечай кратко, по-русски, тёплым живым тоном. Не выдумывай факты; если не знаешь — честно скажи.
+
+[автоматически добавляются: текущее время, профиль пользователя и правила озвучки]</textarea></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Промпт разбора команд</div>
+  <div class="srow col"><div class="lbl"><div class="t">Текст промпта</div><div class="d">Инструкция для распознавания команд. В предпросмотр подставляется список команд.</div></div><div class="ctl"><textarea class="ta" placeholder="Инструкция для разбора команд…">Определи, какой команде из списка соответствует фраза пользователя. Верни только идентификатор команды и параметры. Если совпадения нет — верни «нет».</textarea></div></div>
+  <div class="sbtns"><span class="badge2">≈ 36 токенов</span><button class="btn">Сбросить к дефолту</button></div>
+  <div class="srow col"><div class="lbl"><div class="t">Итоговый промпт для модели</div></div><div class="ctl"><textarea class="ta ro" readonly>Определи, какой команде из списка соответствует фраза пользователя. Верни только идентификатор команды и параметры. Если совпадения нет — верни «нет».
+
+Доступные команды:
+— «погода» · узнать погоду
+— «таймер» · поставить таймер на N минут
+— «музыка» · включить или выключить музыку</textarea></div></div>
+</div>
+<div class="sgroup"><div class="gh">Спросить у модели</div>
+  <div class="srow col"><div class="lbl"><div class="t">Вопрос модели</div><div class="d">Разовый запрос с текущими настройками: ответ, время и токены. Историю диалога не затрагивает.</div></div><div class="ctl"><input class="ti full" placeholder="Спросите модель, чтобы проверить настройки…"></div></div>
+  <div class="sbtns"><button class="btn primary">Спросить</button></div>
+  <div class="srow col"><div class="lbl"><div class="t">Ответ модели</div></div><div class="ctl"><textarea class="ta ro" readonly placeholder="Ответ появится здесь.">Привет! Я Айрис. Готова помочь — просто спросите.</textarea></div></div>
+  <div class="sbtns"><span class="badge2 ok">первый токен 0.4 с · всего 1.8 с · ≈120 токенов</span></div>
+</div>
+</section>
+            <section class="spage" id="sp-hotkeys">
+<div class="sptitle">Горячие клавиши</div>
+<div class="spsub">Системные сочетания ассистента и хоткеи команд. Назначайте и меняйте комбинации, разрешайте конфликты и включайте перехват клавиш для полноэкранных игр.</div>
+
+<div class="sgroup"><div class="gh">Системные сочетания</div>
+  <div class="hkrow"><span class="hk-nm">Показать / скрыть окно</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">A</span></span><button class="btn sm">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Говорить (push-to-talk)</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Space</span></span><button class="btn sm">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Активация голосом вкл / выкл</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Alt</span><span class="kbd">V</span></span><button class="btn sm">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Остановить озвучку</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">S</span></span><button class="btn sm">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Открыть чат</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Alt</span><span class="kbd">C</span></span><button class="btn sm">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Открыть настройки</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">,</span></span><button class="btn sm">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Выключить микрофон</span><span class="hk-ks"><button class="btn sm">Назначить</button></span></div>
+  <div class="hkrow"><span class="hk-nm">Вернуть системные сочетания к значениям по умолчанию</span><span class="hk-ks"><button class="btn danger sm">Сбросить все системные</button></span></div>
+</div>
+
+<div class="sgroup"><div class="gh">Команды</div>
+  <div class="hkrow"><span class="hk-nm">Открыть YouTube</span><span class="hk-ks"><span class="kbd">Alt</span><span class="kbd">Y</span></span><button class="btn sm">Изменить</button><button class="btn sm">Очистить</button></div>
+  <div class="hkrow"><span class="hk-nm">Режим фокуса</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Alt</span><span class="kbd">F</span></span><button class="btn sm">Изменить</button><button class="btn sm">Очистить</button></div>
+  <div class="hkrow"><span class="hk-nm">Заблокировать экран</span><span class="hk-ks"><span class="kbd">Win</span><span class="kbd">L</span></span><button class="btn sm">Изменить</button><button class="btn sm">Очистить</button></div>
+  <div class="hkrow"><span class="hk-nm">Сделать скриншот</span><span class="hk-ks"><button class="btn sm">Назначить</button></span></div>
+</div>
+
+<div class="sgroup"><div class="gh">Игровой режим</div>
+  <div class="srow"><div class="lbl"><div class="t">Перехват клавиш в играх (Interception)</div><div class="d">Перехватывать клавиши драйвером Interception, чтобы сочетания срабатывали в полноэкранных играх, которые прячут обычные горячие клавиши Windows.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Нужен драйвер Interception. Пока он не установлен, перехват в играх недоступен, а глобальные сочетания могут не срабатывать поверх полноэкранных окон.<button class="btn sm">Скачать драйвер</button></div>
+</div>
+</section>
+            <section class="spage" id="sp-overlay">
+<div class="sptitle">Панель / Сфера</div>
+<div class="spsub">Облик окна-дашборда и его сферы: форма и движение, экономия анимаций, состав столбца диалога и видимость блоков управления. Всё применяется на лету — перезапуск не нужен.</div>
+
+<div class="sgroup"><div class="gh">Запуск</div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать окно при запуске</div><div class="d">Открывать панель Ayris при старте. Выключено — программа ждёт в трее.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Облик сферы</div>
+  <div class="srow col"><div class="lbl"><div class="t">Предпросмотр сферы</div><div class="d">Живая сфера отражает правки сразу — переключайте состояние кнопками ниже.</div></div><div class="ctl"><div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Предпросмотр сферы обновляется вживую.</div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Состояние предпросмотра</div><div class="d">Как сфера выглядит в каждом из пяти состояний.</div></div><div class="ctl"><div class="seg"><button class="active">Покой</button><button>Слушаю</button><button>Думаю</button><button>Говорю</button><button>Ошибка</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Замер отрисовки</div><div class="d">Кадры, время кадра, число точек и движок. Прочерк — у WebGL-сферы метрик нет.</div></div><div class="ctl"><span class="sval">60 к/с · 16.6 мс/кадр · 600 точек · Canvas</span></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Форма сферы</div><div class="d">Облако точек на сфере или каркас икосаэдра.</div></div><div class="ctl"><div class="seg"><button class="active">Сфера</button><button>Икосаэдр</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Палитра облика</div><div class="d">Набор цветов свечения сферы.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>violet</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">violet</button><button>legacy</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Количество точек</div><div class="d">Плотность сетки сферы. Больше — красивее, но дороже в отрисовке.</div></div><div class="ctl"><div class="slider"><input type="range" min="100" max="3000" value="600" data-unit=" точек"><span class="sval">600 точек</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Скорость вращения</div><div class="d">Как быстро сфера вращается вокруг оси.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="300" value="100" data-unit=" %"><span class="sval">100 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Пульсация в «Слушаю»</div><div class="d">Насколько сильно сфера дышит, пока слушает вас.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="300" value="100" data-unit=" %"><span class="sval">100 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Волны в «Говорю»</div><div class="d">Интенсивность волн по поверхности во время ответа.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="300" value="100" data-unit=" %"><span class="sval">100 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Акцент сферы</div><div class="d">Свой цвет свечения. «Из темы» — наследовать акцент оформления.</div></div><div class="ctl"><div class="sbtns"><button class="btn">Выбрать цвет</button><button class="btn sm">Из темы</button></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Экономия анимаций</div>
+  <div class="srow"><div class="lbl"><div class="t">Анимации сферы</div><div class="d">Общий выключатель. Выключено — сфера замирает и не тратит кадры.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Вращение</div><div class="d">Медленный поворот сферы вокруг оси.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Пульсация</div><div class="d">Дыхание сферы в состоянии «Слушаю».</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Волны</div><div class="d">Волны по поверхности в состоянии «Говорю».</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Вспышка при ошибке</div><div class="d">Резкая вспышка сферы, когда что-то пошло не так.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Целевой FPS</div><div class="d">Потолок кадров в секунду для сферы. «Авто» — по частоте дисплея.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Авто</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button>30</button><button>60</button><button class="sel-on">Авто</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Останавливать анимацию когда скрыто</div><div class="d">Не рисовать сферу, пока окно свёрнуто или спрятано в трей.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Поведение</div>
+  <div class="srow col"><div class="lbl"><div class="t">Пресеты оформления</div><div class="d">Каждый пресет выставляет связанные параметры сферы разом, минуя задержку сохранения.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Красиво</button><button class="btn">Сбалансированно</button><button class="btn">Экономно</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Прозрачность окна</div><div class="d">Насколько панель просвечивает рабочий стол.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="100" value="92" data-unit=" %"><span class="sval">92 %</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Размытие фона</div><div class="d">Сила размытия за полупрозрачной панелью.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="40" value="18" data-unit=" px"><span class="sval">18 px</span></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Диалог</div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать лог диалога</div><div class="d">Столбец реплик под сферой. Выключено — остаётся только сфера.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Строк в логе</div><div class="d">Сколько последних реплик держать в столбце диалога.</div></div><div class="ctl"><div class="slider"><input type="range" min="1" max="50" value="6" data-unit=" строк"><span class="sval">6 строк</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать распознанную речь</div><div class="d">Добавлять в лог то, что вы сказали.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать ответы</div><div class="d">Добавлять в лог ответы Ayris.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать ошибки</div><div class="d">Добавлять в лог сбои действий и макросов.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+</div>
+<div class="sgroup"><div class="gh">Элементы окна</div>
+  <div class="srow"><div class="lbl"><div class="t">Кнопка микрофона</div><div class="d">Кнопка включения прослушивания.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Строка таймеров</div><div class="d">Активные таймеры и напоминания.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Селектор профиля</div><div class="d">Переключатель профиля голоса.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Кнопка настроек</div><div class="d">Кнопка-гамбургер, открывающая настройки.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Поле текстового ввода</div><div class="d">Строка ввода команд текстом рядом с микрофоном.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Тема сферы</div>
+  <div class="srow"><div class="lbl"><div class="t">Следовать системной теме</div><div class="d">Переключать светлую и тёмную тему вслед за Windows.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Палитра темы</div><div class="d">Образцы активной темы — только отражение эффекта.</div></div><div class="ctl"><div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>Фон · Панель · Акцент · Текст настраиваются на вкладке «Общие».</div></div></div>
+</div>
+</section>
+            <section class="spage" id="sp-profiles">
+<div class="sptitle">Профили</div>
+<div class="spsub">Профиль — отдельный набор команд, папок и переменных. Все профили живут в одной установке; активный помечен бейджем. Здесь же — экспорт профиля в архив, резервные копии и папка данных.</div>
+
+<div class="sgroup"><div class="gh">Профили ассистента</div>
+  <div class="srow"><div class="lbl"><div class="t">По умолчанию</div><div class="d">12 команд · 3 папки · 5 переменных · создан 10.09.2026</div></div><div class="ctl"><div class="sbtns"><span class="badge2 ok">Активен</span><button class="btn sm">Переименовать</button><button class="btn sm">Дублировать</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Работа</div><div class="d">28 команд · 6 папок · 11 переменных · создан 14.09.2026</div></div><div class="ctl"><div class="sbtns"><button class="btn sm primary">Сделать активным</button><button class="btn sm">Переименовать</button><button class="btn sm">Дублировать</button><button class="btn sm danger">Удалить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Дом</div><div class="d">9 команд · 2 папки · 4 переменные · создан 22.09.2026</div></div><div class="ctl"><div class="sbtns"><button class="btn sm primary">Сделать активным</button><button class="btn sm">Переименовать</button><button class="btn sm">Дублировать</button><button class="btn sm danger">Удалить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Игры</div><div class="d">16 команд · 4 папки · 7 переменных · создан 03.10.2026</div></div><div class="ctl"><div class="sbtns"><button class="btn sm primary">Сделать активным</button><button class="btn sm">Переименовать</button><button class="btn sm">Дублировать</button><button class="btn sm danger">Удалить</button></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Создание и управление</div>
+  <div class="srow col"><div class="lbl"><div class="t">Новый профиль</div><div class="d">Создаёт пустой профиль — без команд, папок и переменных. Переключиться на него можно кнопкой «Сделать активным» в списке выше.</div></div><div class="ctl"><input class="ti full" placeholder="Имя профиля — например, «Стрим»"><div class="sbtns"><button class="btn primary">Создать профиль</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Выбранный профиль</div><div class="d">Действия над выделенным в списке профилем. «Удалить» доступно, если профилей больше одного; перед удалением создаётся резервная копия.</div></div><div class="ctl"><div class="sbtns"><button class="btn">Переименовать</button><button class="btn">Дублировать</button><button class="btn danger">Удалить</button></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Экспорт и импорт</div>
+  <div class="srow"><div class="lbl"><div class="t">Экспортировать профиль</div><div class="d">Сохранить профиль в архив .zip и перенести на другой компьютер. Всегда входят команды, папки, переменные и список моделей. Секреты — API-ключи и токены — в архив не попадают.</div></div><div class="ctl"><button class="btn">Экспортировать профиль…</button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Импортировать профиль</div><div class="d">Загрузить профиль из архива .zip — в новый профиль или влить в текущий. После переноса ключи и токены придётся ввести заново.</div></div><div class="ctl"><button class="btn primary">Импортировать профиль…</button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Резервные копии и данные</div>
+  <div class="srow col"><div class="lbl"><div class="t">Резервные копии</div><div class="d">Копии создаются автоматически перед импортом и сбросом, а также вручную кнопкой ниже. Хранятся последние 10.</div></div><div class="ctl">
+    <div class="restab">
+      <div class="rr"><span class="nm">10.10.2026 18:42 · вручную</span><span class="vv">18.4 МБ</span></div>
+      <div class="rr"><span class="nm">08.10.2026 11:05 · перед импортом</span><span class="vv">17.9 МБ</span></div>
+      <div class="rr"><span class="nm">02.10.2026 09:20 · перед сбросом</span><span class="vv">16.2 МБ</span></div>
+      <div class="rr"><span class="nm">27.09.2026 21:13 · вручную</span><span class="vv">15.8 МБ</span></div>
+    </div>
+    <div class="sbtns"><button class="btn primary">Создать копию</button><button class="btn">Восстановить</button><button class="btn danger">Удалить</button></div>
+  </div></div>
+  <div class="srow"><div class="lbl"><div class="t">Папка данных</div><div class="d">База профилей, модели, настройки и резервные копии хранятся в C:\Users\Артём\AppData\Roaming\Ayris. Свободно на диске: 214 ГБ. Не держите папку в облачных клиентах (OneDrive, Dropbox, Syncthing) — они могут повредить базу.</div></div><div class="ctl"><div class="sbtns"><button class="btn">Открыть папку</button><button class="btn">Изменить папку…</button></div></div></div>
+</div>
+</section>
+            <section class="spage" id="sp-updates">
+<div class="sptitle">Обновления</div>
+<div class="spsub">Обновление самого приложения, менеджер моделей и место на диске. Ручную проверку можно запустить в любой момент.</div>
+<div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Доступна версия 1.5.0 от 9 октября 2026 — уже скачана, осталось установить.<button class="btn sm primary">Установить сейчас</button></div>
+<div class="sgroup"><div class="gh">Приложение</div>
+  <div class="srow"><div class="lbl"><div class="t">Текущая версия</div><div class="d">Установленная сейчас сборка Ayris.</div></div><div class="ctl"><span class="badge2">1.4.2</span></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Доступно обновление</div><div class="d">Новая стабильная версия вышла 9 октября 2026.</div></div><div class="ctl"><span class="badge2 ok">1.5.0</span></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Проверка и установка</div><div class="d">Ручную проверку можно запустить в любой момент; установка — по вашему подтверждению.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Проверить обновления</button><button class="btn">Установить обновление</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Когда проверять</div><div class="d">Как часто искать новую версию в фоне.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Раз в день</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button>При запуске</button><button class="sel-on">Раз в день</button><button>Только вручную</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Канал</div><div class="d">Стабильные сборки или ранние бета-версии с новыми возможностями.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Стабильный</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Стабильный</button><button>Бета</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Проверять автоматически</div><div class="d">Найденное обновление скачивается в фоне; установка — по вашему подтверждению.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Ставить при следующем запуске</div><div class="d">Скачанное обновление установится без вопроса при следующем старте Ayris.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Обновлять модели вместе с программой</div><div class="d">Проверять новые версии моделей из каталога при обновлении Ayris.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Что нового в 1.5.0</div><div class="d">Список изменений последней версии.</div></div><div class="ctl"><textarea class="ta ro" rows="6" readonly aria-label="Список изменений версии 1.5.0">Версия 1.5.0 — 9 октября 2026
+
+• Новый менеджер моделей: загрузка и проверка целостности прямо из приложения.
+• Офлайн-настройки Piper: выразительность, тон и пауза между фразами.
+• Локальные языковые модели: Ollama, LM Studio и llama.cpp за единым роутером.
+• Ускорены холодный старт распознавания и первая озвучка.
+• Исправлено молчание синтеза после смены голоса.</textarea></div></div>
+</div>
+<div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Загрузка моделей идёт в фоне и продолжается, даже если закрыть окно.</div>
+<div class="sgroup"><div class="gh">Менеджер моделей</div>
+  <div class="srow"><div class="lbl"><div class="t">Вид модели</div><div class="d">Фильтр каталога по назначению.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Все виды</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Все виды</button><button>Распознавание (STT)</button><button>Синтез (TTS)</button><button>Активация (Wake)</button><button>Языковая модель (LLM)</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Только установленные</div><div class="d">Скрыть модели, которые ещё не скачаны.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">GigaAM v3 (STT)</div><div class="d">1.1 ГБ · активна</div></div><div class="ctl"><span class="badge2 ok">Активна</span><div class="sbtns"><button class="btn sm">Проверить</button><button class="btn sm danger">Удалить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Vosk small · ru (STT)</div><div class="d">45 МБ · установлена</div></div><div class="ctl"><span class="badge2">Установлена</span><div class="sbtns"><button class="btn sm">Сделать активной</button><button class="btn sm danger">Удалить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Piper · Дмитрий (TTS)</div><div class="d">63 МБ · активна</div></div><div class="ctl"><span class="badge2 ok">Активна</span><div class="sbtns"><button class="btn sm">Проверить</button><button class="btn sm danger">Удалить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Silero v4 · Baya (TTS)</div><div class="d">78 МБ · не скачана</div></div><div class="ctl"><span class="badge2 warn">Не скачана</span><div class="sbtns"><button class="btn sm primary">Загрузить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Qwen2.5 7B (LLM)</div><div class="d">4.7 ГБ · установлена</div></div><div class="ctl"><span class="badge2">Установлена</span><div class="sbtns"><button class="btn sm">Сделать активной</button><button class="btn sm danger">Удалить</button></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Vikhr-Gemma 2B (LLM)</div><div class="d">1.6 ГБ · загрузка · 1.1 ГБ из 1.6 ГБ · 8.4 МБ/с · осталось ~1 мин</div></div><div class="ctl"><div class="pbar"><i style="width:68%"></i></div><button class="btn sm">Отмена</button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">openWakeWord · айрис</div><div class="d">1.2 МБ · активна</div></div><div class="ctl"><span class="badge2 ok">Активна</span><div class="sbtns"><button class="btn sm">Проверить</button><button class="btn sm danger">Удалить</button></div></div></div>
+</div>
+<div class="sgroup"><div class="gh">Диск</div>
+  <div class="restab">
+    <div class="rr"><span class="nm">Распознавание речи (STT)</span><span class="vv">1.1 ГБ</span></div>
+    <div class="rr"><span class="nm">Синтез речи (TTS)</span><span class="vv">63 МБ</span></div>
+    <div class="rr"><span class="nm">Языковая модель (LLM)</span><span class="vv">4.7 ГБ</span></div>
+    <div class="rr"><span class="nm">Активация (Wake)</span><span class="vv">1.2 МБ</span></div>
+    <div class="rr"><span class="nm">Занято моделями · всего</span><span class="vv">5.9 ГБ</span></div>
+    <div class="rr"><span class="nm">Свободно на диске</span><span class="vv">214 ГБ</span></div>
+  </div>
+  <div class="srow col"><div class="lbl"><div class="t">Папка данных</div><div class="d">Здесь хранятся модели, база и настройки. Текущее расположение: D:\Ayris\data. Папку можно перенести на другой диск — данные скопируются, а новая папка вступит в силу после перезапуска Ayris.</div></div><div class="ctl"><div class="sbtns"><button class="btn">Открыть папку моделей</button><button class="btn primary">Изменить папку…</button></div></div></div>
+</div>
+</section>
+            <section class="spage" id="sp-devtools">
+<div class="sptitle">Логи / DevTools</div>
+<div class="spsub">Живое окно в работающий Ayris — журнал, здоровье воркеров и Python-консоль. Значения уже замаскированы: секреты сюда не попадают. Без запущенного приложения виджеты показывают пустую форму.</div>
+
+<div class="sgroup"><div class="gh">Журнал</div>
+  <div class="srow"><div class="lbl"><div class="t">Уровень</div><div class="d">Фильтр записей по уровню. Меняется на лету, перезапускать Ayris не нужно.</div></div><div class="ctl"><div class="seg"><button class="active">Всё</button><button>Инфо</button><button>Предупр.</button><button>Ошибки</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Автопрокрутка</div><div class="d">Держать прокрутку внизу, у самых свежих строк.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать время</div><div class="d">Добавлять к каждой строке отметку времени.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Последние события</div><div class="d">Формат строки: время · уровень · модуль · сообщение. Цвет — по уровню.</div></div><div class="ctl"><textarea class="ta ro" rows="7" readonly>14:27:58 INFO  app: Ayris запущен, воркеры подняты
+14:28:03 INFO  пайплайн: команда «Открыть YouTube» выполнена
+14:29:40 DEBUG stt: сегмент 1.8 с → «поставь музыку»
+14:30:11 WARN  STT: переподключение к облаку
+14:30:12 INFO  stt: соединение восстановлено
+14:31:02 ERROR LLM: таймаут 30с
+14:31:05 INFO  llm: ответ получен за 2.4 с</textarea></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Файл логов</div><div class="d">Открыть журнал в проводнике, скопировать видимое или очистить вид.</div></div><div class="ctl"><div class="sbtns"><button class="btn">Открыть файл логов</button><button class="btn">Скопировать</button><button class="btn danger">Очистить</button></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Статус воркеров</div>
+  <div class="restab">
+    <div class="rr"><span class="nm">Захват звука</span><span class="vv"><span class="badge2 ok">работает</span></span></div>
+    <div class="rr"><span class="nm">Распознавание речи <span style="color:var(--t4)">· GigaAM</span></span><span class="vv"><span class="badge2 ok">работает</span></span></div>
+    <div class="rr"><span class="nm">Синтез речи <span style="color:var(--t4)">· Piper</span></span><span class="vv"><span class="badge2 warn">простаивает</span></span></div>
+    <div class="rr"><span class="nm">Языковая модель <span style="color:var(--t4)">· Qwen2.5 7B</span></span><span class="vv"><span class="badge2 ok">работает</span></span></div>
+  </div>
+  <div class="srow"><div class="lbl"><div class="t">Управление</div><div class="d">Каждая подсистема живёт в своём процессе. При активной сессии Ayris сначала предупредит о перезапуске.</div></div><div class="ctl"><button class="btn">Перезапустить воркеры</button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Консоль (REPL)</div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Консоль выполняет любой код Python в контексте приложения — с полным доступом к настройкам, базе и командам. Ошибка здесь может повредить данные; каждый ввод пишется в журнал безопасности.</div>
+  <div class="srow col"><div class="lbl"><div class="t">Команда Python</div><div class="d">Enter — выполнить, Up/Down — история. Выполнение идёт в фоновом потоке.</div></div><div class="ctl"><input class="ti full mono" placeholder="напр. pipeline.run_text(«который час»)"><button class="btn primary">Выполнить</button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Вывод</div><div class="d">Эхо ввода, результат и ошибки. Только чтение.</div></div><div class="ctl"><textarea class="ta ro" rows="4" readonly>>>> app.config.voice.wake.enabled
+True
+>>> list(app.commands.all())[:2]
+['Открыть YouTube', 'Поставь музыку']
+>>> pipeline.run_text(«который час»)
+Результат: успех · интент: time.now · ответ: «Сейчас 14:31»</textarea></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Сухой прогон (dry-run)</div><div class="d">Разобрать команду, но не выполнять её.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Аудит</div><div class="d">Полный журнал всех вводов в консоль с временем и результатом.</div></div><div class="ctl"><button class="btn">Аудит действий</button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Диагностика</div>
+  <div class="srow"><div class="lbl"><div class="t">Отчёт для разработчика</div><div class="d">Собрать zip с логами и конфигом (значения замаскированы). Отправьте файл вручную — Ayris ничего никуда не загружает.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Собрать отчёт</button><button class="btn">Открыть папку данных</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Подробные логи (debug)</div><div class="d">Повышает детальность журнала. Может немного замедлить работу.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+</div>
+</section>
+            <section class="spage" id="sp-privacy">
+<div class="sptitle">Приватность</div>
+<div class="spsub">Что Айрис хранит на диске, когда обращается в сеть, где лежат ключи сервисов и почему телеметрии нет. Все данные остаются на вашем компьютере.</div>
+
+<div class="sgroup"><div class="gh">Данные и история</div>
+  <div class="srow"><div class="lbl"><div class="t">Хранить историю диалога</div><div class="d">Сохранять распознанные фразы и ответы Айрис в локальной базе. Нужно для команды «повтори» и трасс во вкладке «Логи».</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Хранить аудиозаписи распознавания</div><div class="d">Оставлять на диске короткие фрагменты звука, по которым сработало распознавание. Занимают место, нужны в основном для отладки.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Вести журнал команд (аудит)</div><div class="d">Записывать, какая команда и с какими параметрами выполнена, с результатом и временем.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Срок хранения истории</div><div class="d">Записи старше выбранного срока удаляются автоматически — при запуске и раз в сутки. 0 — хранить без ограничения.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="90" value="30" data-unit=" дн."><span class="sval">30 дн.</span></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Удаление данных</div><div class="d">Переключатели выше действуют только на новые записи. Уже сохранённое удаляется здесь — каждое действие необратимо и просит подтверждения с точным числом записей.</div></div><div class="ctl"><div class="sbtns"><button class="btn danger">Очистить историю</button><button class="btn danger">Удалить аудиозаписи</button><button class="btn danger">Очистить журнал</button></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Ключи и доступ</div>
+  <div class="srow col"><div class="lbl"><div class="t">Сохранённые ключи сервисов</div><div class="d">Ключи и токены облачных сервисов, которые уже заданы в приложении.</div></div><div class="ctl"><div class="restab">
+    <div class="rr"><span class="nm">OpenAI</span><span class="vv"><span class="badge2 ok">сохранён</span> <button class="btn sm danger">Удалить</button></span></div>
+    <div class="rr"><span class="nm">Яндекс SpeechKit</span><span class="vv"><span class="badge2 ok">сохранён</span> <button class="btn sm danger">Удалить</button></span></div>
+    <div class="rr"><span class="nm">GigaChat</span><span class="vv"><span class="badge2 warn">не задан</span></span></div>
+  </div></div></div>
+  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Ключи и токены хранятся в Диспетчере учётных данных Windows, а не в config.toml и не в базе. В конфиге лежит только имя записи — ключи не попадают в экспорт профиля, в логи и в архив баг-репорта.</div>
+  <div class="srow"><div class="lbl"><div class="t">Разрешить сетевые запросы (облачные сервисы)</div><div class="d">Когда выключено, Айрис работает только офлайн: облачные распознавание, синтез и языковые модели недоступны, ни одного исходящего запроса не уходит.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Телеметрия</div>
+  <div class="srow"><div class="lbl"><div class="t">Отправлять анонимную статистику</div><div class="d">По умолчанию выключено. Функции сбора в Айрис нет вообще — включать нечего. Переключатель оставлен для прозрачности.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Проверить можно самому: запустите сетевой сниффер (Wireshark или монитор во вкладке «Логи») и убедитесь, что без вашего действия Айрис не открывает ни одного исходящего соединения.</div>
+</div>
+
+<div class="sgroup"><div class="gh">Данные приложения</div>
+  <div class="srow"><div class="lbl"><div class="t">Папка данных</div><div class="d">%APPDATA%\Ayris — настройки, база данных, модели, логи и резервные копии.</div></div><div class="ctl"><button class="btn">Открыть папку</button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Сбросить все данные</div><div class="d">Удаляет историю, аудит, буфер обмена, переменные, таймеры и версии команд. Перед сбросом создаётся резервная копия базы, сами команды остаются. Для подтверждения нужно ввести слово «СБРОС».</div></div><div class="ctl"><div class="sbtns"><button class="btn danger">Сбросить все данные</button></div></div></div>
+</div>
+</section>
+          </div>
+        </div>
+      </div>
+      <div class="toast" id="toast"></div>
+    </section>
+  </div>
+</div>
+<script>const $=s=>document.querySelector(s),$$=s=>document.querySelectorAll(s);
+// часы
+const clock=$('#clock');
+const pad=n=>String(n).padStart(2,'0');
+(function t(){const d=new Date();clock.textContent=pad(d.getHours())+':'+pad(d.getMinutes());setTimeout(t,(60-d.getSeconds())*1000);})();
+// жидкий хром на canvas
+const cv=$('#metal'),cx=cv.getContext('2d');let W,H,DPR=Math.min(2,devicePixelRatio||1);
+function size(){const r=cv.getBoundingClientRect();W=cv.width=r.width*DPR;H=cv.height=r.height*DPR;}
+size();addEventListener('resize',size);
+const ribbons=[{a:.12,f:1.1,s:.00018,o:0.0,h:.52},{a:.10,f:1.7,s:-.00024,o:1.3,h:.46},{a:.09,f:.8,s:.00014,o:2.4,h:.62},{a:.07,f:2.3,s:.0003,o:3.1,h:.4},{a:.06,f:1.4,s:-.0002,o:.7,h:.7}];
+let mlast=0;
+function draw(ts){requestAnimationFrame(draw);if(document.hidden||(ts-mlast)<33)return;mlast=ts;
+  cx.clearRect(0,0,W,H);cx.globalCompositeOperation='screen';
+  for(const r of ribbons){
+    const g=cx.createLinearGradient(0,H*(r.h-.14),0,H*(r.h+.14));
+    g.addColorStop(0,`rgba(199,180,255,0)`);g.addColorStop(.5,`rgba(155,109,255,${r.a})`);g.addColorStop(1,`rgba(76,46,158,0)`);
+    cx.fillStyle=g;cx.beginPath();cx.moveTo(0,H);
+    for(let x=0;x<=W;x+=14){const y=H*r.h+Math.sin(x*0.0016*r.f+ts*r.s+r.o)*H*0.09+Math.sin(x*0.004*r.f+ts*r.s*1.7)*H*0.03;cx.lineTo(x,y);}
+    cx.lineTo(W,H);cx.closePath();cx.fill();
+  }
+  cx.globalCompositeOperation='source-over';
+}
+requestAnimationFrame(draw);
+// эквалайзер-«голос»
+const eq=$('#eq');const BARS=36;const bars=[];
+for(let i=0;i<BARS;i++){const b=document.createElement('i');eq.appendChild(b);bars.push(b);}
+let live=false,thinking=false,elast=0;
+function anim(ts){requestAnimationFrame(anim);if(document.hidden||(ts-elast)<40)return;elast=ts;
+  const t=performance.now()*0.004;bars.forEach((b,i)=>{let base=8,amp=16;if(live){base=30;amp=34;}else if(thinking){base=18;amp=24;}
+  const v=base+Math.abs(Math.sin(t+i*0.5))*amp*(0.5+0.5*Math.sin(t*0.7+i));b.style.height=Math.max(6,v).toFixed(0)+'px';
+  b.style.opacity=(0.45+0.55*(v/60)).toFixed(2);});}
+requestAnimationFrame(anim);
+// навигация / вид
+const hero=$('#hero'),chat=$('#chat'),mainEl=$('.main'),navHome=$('.ni[data-view="home"]');
+function show(v){const c=v==='chat';hero.classList.toggle('hide',c);chat.classList.toggle('show',c);mainEl.classList.toggle('chatting',c);
+  if(c)setTimeout(()=>{const l=$('#log');l.scrollTop=l.scrollHeight;$('#cmd').focus();},40);}
+$$('[data-view]').forEach(b=>b.addEventListener('click',()=>show(b.dataset.view)));
+navHome.addEventListener('click',()=>{$$('.ni').forEach(n=>n.classList.remove('active'));navHome.classList.add('active');show('home');});
+// настройки
+const settings=$('#settings');
+function openSP(key){$$('.sn').forEach(n=>n.classList.toggle('active',n.dataset.sp===key));$$('.spage').forEach(p=>p.classList.toggle('active',p.id==='sp-'+key));const sc=$('#scontent');if(sc)sc.scrollTop=0;}
+$$('.sn').forEach(n=>n.addEventListener('click',()=>openSP(n.dataset.sp)));
+$$('[data-open="settings"],[data-settings]').forEach(b=>b.addEventListener('click',()=>{settings.classList.add('show');openSP(b.dataset.settings||'general');}));
+$('#sclose').addEventListener('click',()=>settings.classList.remove('show'));
+addEventListener('keydown',e=>{if(e.key==='Escape')settings.classList.remove('show');});
+// контролы настроек (делегирование)
+document.addEventListener('click',e=>{
+  const sw=e.target.closest('.sw');if(sw)sw.setAttribute('aria-pressed',sw.getAttribute('aria-pressed')==='true'?'false':'true');
+  const sb=e.target.closest('.sel-btn');if(sb){const sel=sb.parentElement,was=sel.classList.contains('open');$$('.sel.open').forEach(s=>s.classList.remove('open'));if(!was)sel.classList.add('open');e.stopPropagation();return;}
+  if(!e.target.closest('.sel-menu'))$$('.sel.open').forEach(s=>s.classList.remove('open'));
+  const opt=e.target.closest('.sel-menu button');if(opt){const sel=opt.closest('.sel'),sp=sel.querySelector('.sel-btn span');if(sp)sp.textContent=opt.textContent;sel.querySelectorAll('.sel-menu button').forEach(b=>b.classList.remove('sel-on'));opt.classList.add('sel-on');sel.classList.remove('open');}
+  const sg=e.target.closest('#scontent .seg button');if(sg){sg.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('active'));sg.classList.add('active');}
+});
+document.addEventListener('input',e=>{const r=e.target;if(r.matches('.slider input[type=range]')){const v=r.closest('.slider').querySelector('.sval');if(v)v.textContent=r.value+(r.dataset.unit||'');}});
+const ssearch=$('.srch input');if(ssearch)ssearch.addEventListener('input',()=>{const q=ssearch.value.trim().toLowerCase();$$('.spage.active .srow,.spage.active .hkrow').forEach(row=>{row.style.display=(!q||row.textContent.toLowerCase().includes(q))?'':'none';});});
+// микрофон
+const mic=$('#mic'),cmdEl=$('#cmd');
+mic.addEventListener('click',()=>{live=!live;mic.classList.toggle('live',live);mic.setAttribute('aria-pressed',String(live));
+  $('#statusline').textContent=live?'Слушаю…':'Привет, чем помочь?';
+  cmdEl.placeholder=live?'Слушаю…':(window.codeMode?'Вставьте код или команду…':'Чем могу помочь сегодня?');});
+// отправка
+const cmd=$('#cmd'),log=$('#log');
+function send(){const t=cmd.value.trim();if(!t)return;const n=new Date();const hm=pad(n.getHours())+':'+pad(n.getMinutes());
+  log.insertAdjacentHTML('beforeend',`<div class="msg you"><div class="who">Вы · ${hm}</div><div class="bub">${t.replace(/</g,'&lt;')}</div></div>`);
+  cmd.value='';if(!chat.classList.contains('show'))show('chat');log.scrollTop=log.scrollHeight;
+  thinking=true;$('#statusline').textContent='Думаю…';
+  setTimeout(()=>{thinking=false;$('#statusline').textContent='Привет, чем помочь?';
+    log.insertAdjacentHTML('beforeend',`<div class="msg ai"><div class="who">Айрис · ${hm}</div><div class="bub">Принято. Это живой макет — здесь был бы ответ модели.</div></div>`);log.scrollTop=log.scrollHeight;},760);}
+$('#send').addEventListener('click',send);
+cmd.addEventListener('keydown',e=>{if(e.key==='Enter')send();});
+// тост
+const toast=$('#toast');let toastT;
+function say(m){toast.textContent=m;toast.classList.add('show');clearTimeout(toastT);toastT=setTimeout(()=>toast.classList.remove('show'),1800);}
+// профиль
+const pfBtn=$('#pfbtn'),pfMenu=$('#pfmenu'),pfName=$('#pfname');
+function pfOpen(o){pfBtn.classList.toggle('open',o);pfMenu.classList.toggle('open',o);pfBtn.setAttribute('aria-expanded',String(o));}
+pfBtn.addEventListener('click',e=>{e.stopPropagation();pfOpen(!pfMenu.classList.contains('open'));});
+pfMenu.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>{pfMenu.querySelectorAll('button').forEach(x=>x.classList.remove('sel'));
+  b.classList.add('sel');pfName.textContent=b.dataset.p;pfOpen(false);say('Профиль: '+b.dataset.p);}));
+document.addEventListener('click',()=>pfOpen(false));
+// режим команда/код
+window.codeMode=false;const mode=$('#mode');
+mode.addEventListener('click',()=>{window.codeMode=!window.codeMode;const c=window.codeMode;mode.classList.toggle('code',c);mode.setAttribute('aria-pressed',String(c));
+  if(!live)cmd.placeholder=c?'Вставьте код или команду…':'Чем могу помочь сегодня?';say(c?'Режим кода':'Режим команды');});
+// режим распознавания: Команды / Гибрид / ИИ
+$$('#nlu button').forEach(b=>b.addEventListener('click',()=>{$$('#nlu button').forEach(x=>{x.classList.remove('active');x.setAttribute('aria-selected','false');});
+  b.classList.add('active');b.setAttribute('aria-selected','true');say('Режим распознавания: '+b.dataset.m);}));
+// плеер
+const player=$('#player'),pplay=$('#pplay'),pbar=$('#pbar'),ptime=$('#ptime'),pprog=$('#pprog');
+let playing=false,pos=84;const dur=221,ICON={play:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',pause:'<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="3.4" height="14" rx="1"/><rect x="13.6" y="5" width="3.4" height="14" rx="1"/></svg>'};
+let ptimer;const fmt=s=>Math.floor(s/60)+':'+pad(Math.floor(s%60));
+function paintP(){pbar.style.width=(pos/dur*100)+'%';ptime.textContent=fmt(pos);}
+function setPlay(p){playing=p;player.classList.toggle('playing',p);pplay.setAttribute('aria-label',p?'Пауза':'Воспроизвести');pplay.innerHTML=p?ICON.pause:ICON.play;
+  clearInterval(ptimer);if(p)ptimer=setInterval(()=>{pos=(pos+1)%dur;paintP();},1000);}
+pplay.addEventListener('click',()=>setPlay(!playing));
+pprog.addEventListener('click',e=>{const r=pprog.getBoundingClientRect();pos=Math.max(0,Math.min(dur,(e.clientX-r.left)/r.width*dur));paintP();});
+paintP();
+// телеметрия — лёгкое «дыхание»
+const rings=[48,57,25].map((v,i)=>({el:$$('.tm .ring')[i],cur:v}));
+setInterval(()=>{rings.forEach(r=>{r.cur=Math.max(6,Math.min(96,r.cur+(Math.random()*10-5)));const v=Math.round(r.cur);
+  r.el.style.setProperty('--p',v);r.el.querySelector('b').textContent=v;});},2200);
+// кнопки окна
+const app=$('.app');
+$('#win-min').addEventListener('click',()=>{app.style.transition='transform .25s,opacity .25s';app.style.transform='scale(.96)';app.style.opacity='.5';setTimeout(()=>{app.style.transform='';app.style.opacity='';},300);say('Свернуть (демо)');});
+$('#win-close').addEventListener('click',()=>{app.style.transition='transform .3s,opacity .3s';app.style.opacity='0';app.style.transform='scale(.97)';setTimeout(()=>{app.style.opacity='';app.style.transform='';},460);say('Закрыть (демо)');});
+function toggleFull(){document.body.classList.toggle('full');app.classList.toggle('full');}
+$('#win-full').addEventListener('click',toggleFull);
+// офлайн
+const off=$('#off');function setOffline(v){off.classList.toggle('show',v);say(v?'Нет сети — офлайн-режим':'Сеть восстановлена');}
+addEventListener('offline',()=>setOffline(true));addEventListener('online',()=>setOffline(false));window.__setOffline=setOffline;
+// быстрые действия + карточки настроек
+$('#qa-timers').addEventListener('click',()=>say('Активные таймеры: 2'));
+$('#qa-history').addEventListener('click',()=>say('История диалога'));
+function qtoggle(btn,onMsg,offMsg){let on=true;btn.classList.add('tgl','on');btn.setAttribute('aria-pressed','true');
+  btn.addEventListener('click',()=>{on=!on;btn.classList.toggle('on',on);btn.classList.toggle('off',!on);btn.setAttribute('aria-pressed',String(on));say(on?onMsg:offMsg);});}
+qtoggle($('#qa-tts'),'Голосовой ответ включён','Голосовой ответ выключен');
+qtoggle($('#qa-wake'),'Активация голосом включена','Ассистент в режиме сна');
+// клавиатура
+addEventListener('keydown',e=>{if(e.key==='/'&&document.activeElement!==cmd){e.preventDefault();cmd.focus();}
+  if(e.key==='Escape'&&chat.classList.contains('show'))show('home');
+  if(e.key==='F11'){e.preventDefault();toggleFull();}});</script>
+</body>
+</html>

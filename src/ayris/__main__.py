@@ -249,10 +249,12 @@ def _run_application(options: CliOptions) -> int:
     from ayris.core.power_events import install_power_events
     from ayris.core.resilience import install_resilience
     from ayris.core.watchdog import install_watchdog, read_shutdown_reason
+    from ayris.core.worker_speech import make_transcribe_once
     from ayris.gui.main_window import MainWindow, ShowWindowNativeEventFilter
     from ayris.gui.overlay import ActiveTimer as OverlayTimer
     from ayris.gui.splash import SplashScreen
     from ayris.gui.tabs.devtools import DevToolsServices, set_active_devtools_services
+    from ayris.gui.tabs.voice import VoiceServices, set_active_voice_services
     from ayris.gui.theme import ThemeManager
     from ayris.gui.tray import TrayController
     from ayris.gui.widgets import set_active_worker_control
@@ -343,6 +345,24 @@ def _run_application(options: CliOptions) -> int:
                 previous_exit.get("kind", "watchdog"),
                 str(previous_exit.get("reason", "")).strip() or "причина не записана",
             )
+
+        # The «Голос» tab is built by the plain register_tab factory, which cannot
+        # carry the live microphone or STT worker its self-tests need, so — like
+        # DevTools below — it reads them through a module seam we publish here.
+        # Only the recognition self-test is wired: make_transcribe_once records the
+        # next spoken phrase off the audio worker and recognises it on the STT
+        # worker, returning the text and timing «Записать фразу» shows. The other
+        # voice services stay None, so their buttons remain disabled as before.
+        set_active_voice_services(
+            VoiceServices(transcribe_once=make_transcribe_once(worker_manager))
+        )
+        ayris.add_component(
+            Component(
+                name="voice_services",
+                stage=LifecycleStage.GUI,
+                stop=lambda: set_active_voice_services(None),
+            )
+        )
 
         # The dispatcher (task 18) becomes the text field's destination: a typed
         # command runs the same understanding → IntentMatched path a spoken one

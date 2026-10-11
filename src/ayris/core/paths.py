@@ -69,6 +69,7 @@ __all__ = [
     "get_paths",
     "init_paths",
     "is_ascii_path",
+    "is_frozen",
     "native_path",
     "native_path_problem",
     "read_configured_root",
@@ -268,9 +269,21 @@ def _safe_resolve(value: str | Path) -> Path | None:
         return None
 
 
+def is_frozen() -> bool:
+    """Whether the code runs from a packaged binary rather than from source.
+
+    Two packagers matter and they signal differently. PyInstaller and cx_Freeze
+    set ``sys.frozen``; Nuitka — which the task 71 build uses in standalone mode —
+    does not, and exposes a module-level ``__compiled__`` marker instead. Both are
+    honoured so that :func:`executable_dir` resolves resources against the folder
+    of the executable in either build, and against the repository in development.
+    """
+    return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
 def executable_dir() -> Path:
     """Directory of the running binary, or the repository root in development."""
-    if getattr(sys, "frozen", False):
+    if is_frozen():
         return Path(sys.executable).resolve().parent
     # src/ayris/core/paths.py -> repository root
     return Path(__file__).resolve().parents[3]

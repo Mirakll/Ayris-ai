@@ -1,0 +1,44 @@
+<div class="sptitle">Логи / DevTools</div>
+<div class="spsub">Живое окно в работающий Ayris — журнал, здоровье воркеров и Python-консоль. Значения уже замаскированы: секреты сюда не попадают. Без запущенного приложения виджеты показывают пустую форму.</div>
+
+<div class="sgroup"><div class="gh">Журнал</div>
+  <div class="srow"><div class="lbl"><div class="t">Уровень</div><div class="d">Фильтр записей по уровню. Меняется на лету, перезапускать Ayris не нужно.</div></div><div class="ctl"><div class="seg"><button class="active">Всё</button><button>Инфо</button><button>Предупр.</button><button>Ошибки</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Автопрокрутка</div><div class="d">Держать прокрутку внизу, у самых свежих строк.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Показывать время</div><div class="d">Добавлять к каждой строке отметку времени.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Последние события</div><div class="d">Формат строки: время · уровень · модуль · сообщение. Цвет — по уровню.</div></div><div class="ctl"><textarea class="ta ro" rows="7" readonly>14:27:58 INFO  app: Ayris запущен, воркеры подняты
+14:28:03 INFO  пайплайн: команда «Открыть YouTube» выполнена
+14:29:40 DEBUG stt: сегмент 1.8 с → «поставь музыку»
+14:30:11 WARN  STT: переподключение к облаку
+14:30:12 INFO  stt: соединение восстановлено
+14:31:02 ERROR LLM: таймаут 30с
+14:31:05 INFO  llm: ответ получен за 2.4 с</textarea></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Файл логов</div><div class="d">Открыть журнал в проводнике, скопировать видимое или очистить вид.</div></div><div class="ctl"><div class="sbtns"><button class="btn">Открыть файл логов</button><button class="btn">Скопировать</button><button class="btn danger">Очистить</button></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Статус воркеров</div>
+  <div class="restab">
+    <div class="rr"><span class="nm">Захват звука</span><span class="vv"><span class="badge2 ok">работает</span></span></div>
+    <div class="rr"><span class="nm">Распознавание речи <span style="color:var(--t4)">· GigaAM</span></span><span class="vv"><span class="badge2 ok">работает</span></span></div>
+    <div class="rr"><span class="nm">Синтез речи <span style="color:var(--t4)">· Piper</span></span><span class="vv"><span class="badge2 warn">простаивает</span></span></div>
+    <div class="rr"><span class="nm">Языковая модель <span style="color:var(--t4)">· Qwen2.5 7B</span></span><span class="vv"><span class="badge2 ok">работает</span></span></div>
+  </div>
+  <div class="srow"><div class="lbl"><div class="t">Управление</div><div class="d">Каждая подсистема живёт в своём процессе. При активной сессии Ayris сначала предупредит о перезапуске.</div></div><div class="ctl"><button class="btn">Перезапустить воркеры</button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Консоль (REPL)</div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Консоль выполняет любой код Python в контексте приложения — с полным доступом к настройкам, базе и командам. Ошибка здесь может повредить данные; каждый ввод пишется в журнал безопасности.</div>
+  <div class="srow col"><div class="lbl"><div class="t">Команда Python</div><div class="d">Enter — выполнить, Up/Down — история. Выполнение идёт в фоновом потоке.</div></div><div class="ctl"><input class="ti full mono" placeholder="напр. pipeline.run_text(«который час»)"><button class="btn primary">Выполнить</button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Вывод</div><div class="d">Эхо ввода, результат и ошибки. Только чтение.</div></div><div class="ctl"><textarea class="ta ro" rows="4" readonly>>>> app.config.voice.wake.enabled
+True
+>>> list(app.commands.all())[:2]
+['Открыть YouTube', 'Поставь музыку']
+>>> pipeline.run_text(«который час»)
+Результат: успех · интент: time.now · ответ: «Сейчас 14:31»</textarea></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Сухой прогон (dry-run)</div><div class="d">Разобрать команду, но не выполнять её.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Аудит</div><div class="d">Полный журнал всех вводов в консоль с временем и результатом.</div></div><div class="ctl"><button class="btn">Аудит действий</button></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Диагностика</div>
+  <div class="srow"><div class="lbl"><div class="t">Отчёт для разработчика</div><div class="d">Собрать zip с логами и конфигом (значения замаскированы). Отправьте файл вручную — Ayris ничего никуда не загружает.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Собрать отчёт</button><button class="btn">Открыть папку данных</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Подробные логи (debug)</div><div class="d">Повышает детальность журнала. Может немного замедлить работу.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+</div>

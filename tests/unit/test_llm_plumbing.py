@@ -734,6 +734,45 @@ class TestWorkerLifecycle:
         assert client.closed is True
         assert worker._client is None
 
+    def test_on_configure_drops_client_when_only_the_gguf_file_changed(self) -> None:
+        """Имя модели у llama.cpp косметическое — движок привязан к файлу."""
+        client = ScriptedDeltaClient([LlmDoneDelta()])
+        worker = make_worker(
+            {
+                "provider": "llamacpp",
+                "model": "vikhr",
+                "eco_mode": True,  # без фонового прогрева: тест не грузит .gguf
+                "extra": {"model_path": "D:/llm/vikhr.gguf"},
+            },
+            client=client,
+        )
+        worker.context.params["extra"] = {"model_path": "D:/llm/gemma.gguf"}
+        worker.on_configure({})
+        assert client.closed is True
+        assert worker._client is None
+
+    def test_on_configure_defers_the_swap_while_a_generation_streams(self) -> None:
+        """Закрыть llama.cpp посреди ответа — снести нативную память под инференсом."""
+        client = ScriptedDeltaClient([LlmDoneDelta()])
+        worker = make_worker(
+            {
+                "provider": "llamacpp",
+                "model": "vikhr",
+                "eco_mode": True,  # без фонового прогрева: тест не грузит .gguf
+                "extra": {"model_path": "D:/llm/vikhr.gguf"},
+            },
+            client=client,
+        )
+        worker._busy = True
+        worker.context.params["extra"] = {"model_path": "D:/llm/gemma.gguf"}
+        worker.on_configure({})
+        assert client.closed is False
+        assert worker._client is client
+        worker._busy = False
+        worker.on_configure({})  # ответ дошёл — теперь клиент можно закрыть
+        assert client.closed is True
+        assert worker._client is None
+
     def test_on_configure_keeps_client_when_identity_stable(self) -> None:
         client = ScriptedDeltaClient([LlmDoneDelta()])
         worker = make_worker(

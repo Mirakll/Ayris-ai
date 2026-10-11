@@ -96,6 +96,7 @@ def apply_overlay_appearance(sphere: SphereLike, overlay: OverlayConfig) -> None
                     "speak": overlay.icosa_speak_twist,
                 },
                 "dockVariant": overlay.icosa_dock_variant,
+                "palette": overlay.icosa_palette,
             }
         )
 

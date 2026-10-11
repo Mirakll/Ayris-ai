@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 from ayris.audio.tts.base import TtsOptions, VoiceSpec, create_engine, engine_class
+from ayris.audio.tts.cache import PhraseCache, default_cache_dir
 from ayris.audio.tts.cloud_base import create_cloud_engine, is_cloud_engine
 from ayris.audio.tts.router import TtsRouter, VoiceParams, mode_from_config
 from ayris.audio.tts.service import connect_player
@@ -78,6 +79,10 @@ _log = get_logger(__name__)
 _DEFAULT_LOCAL_ENGINE: Final = "piper"
 _DEFAULT_LOCAL_VOICE: Final = "ru_RU-irina-medium"
 
+#: Bytes per megabyte, for turning ``voice.tts.cache_size_mb`` into the byte
+#: budget :class:`~ayris.audio.tts.cache.PhraseCache` takes.
+_MB: Final = 1024 * 1024
+
 
 def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Callable[[], None]]:
     """Build the runtime router over ``player`` and return it with a teardown.
@@ -108,6 +113,13 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
 
     cloud, local = _providers(cfg)
 
+    # The phrase cache turns the handful of confirmations the assistant repeats all
+    # day («Готово», «Не расслышала») into a file read on their second use. It is
+    # keyed by the configured local voice; a cloud primary is left uncached so an
+    # auto-mode fallback never serves a cloud-synthesized phrase amid local speech.
+    cache = PhraseCache(default_cache_dir(), limit_bytes=cfg.cache_size_mb * _MB)
+    default_voice = _default_cache_voice(cfg)
+
     bridge = connect_player(app.bus, player)
     router = TtsRouter(
         player,
@@ -118,7 +130,14 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
         bus=app.bus,
         monitor=None,
         on_spoken=None,
+        cache=cache,
+        default_voice=default_voice,
     )
+    # Take the local engine's cold start off the first reply. warm() loads the
+    # primary local voice for the offline-first modes; preload() warms the local
+    # fallback in auto mode. Each is a no-op outside its own mode and best-effort.
+    router.warm()
+    router.preload()
 
     def on_config(_event: ConfigChanged) -> None:
         # Live knobs move on every change. engine/voice/expressiveness decide the
@@ -137,6 +156,9 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
                 sentence_pause=live.sentence_pause,
             )
         )
+        # The cache budget is a live knob: a user who drags it to 0 means "stop
+        # caching now", and shrinking it trims the directory on the spot.
+        cache.set_limit(live.cache_size_mb * _MB)
         new_slots = _slot_key(live)
         if new_slots != built_slots:
             built_slots = new_slots
@@ -146,7 +168,12 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
                 cloud=new_cloud,
                 local=new_local,
                 mode=mode_from_config(live.engine, cloud_fallback=live.cloud_fallback),
+                default_voice=_default_cache_voice(live),
             )
+            # A live switch to a local engine should warm it too, so the first
+            # answer after the change does not eat the cold load.
+            router.warm()
+            router.preload()
             _log.info(
                 "маршрутизатор TTS пересобран вживую: движок %s, голос %s", live.engine, live.voice
             )
@@ -167,6 +194,21 @@ def build_tts_router(app: AyrisApp, player: TtsPlayer) -> tuple[TtsRouter, Calla
         cfg.credential_ref if is_cloud_engine(cfg.credential_ref) else "нет",
     )
     return router, close
+
+
+def _default_cache_voice(cfg: TtsConfig) -> VoiceSpec | None:
+    """The voice the phrase cache keys by, or ``None`` to leave this engine uncached.
+
+    Only a local primary is cached. A cloud engine runs in auto mode, where the
+    local voice is the fallback: a confirmation synthesized in the cloud and then
+    served from the cache after the network dropped would be an audible voice swap
+    in the middle of locally-spoken answers. Offline and local-first both speak in
+    the configured local voice, which does not change under the user mid-session,
+    so a stored «Готово» always matches what the next one would sound like.
+    """
+    if is_cloud_engine(cfg.engine):
+        return None
+    return _resolve_local_voice(cfg.engine, cfg.voice)
 
 
 def _slot_key(cfg: TtsConfig) -> tuple[str, str, float, str, str, str]:

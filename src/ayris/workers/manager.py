@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import functools
 import itertools
 import logging
 import multiprocessing
@@ -1246,6 +1247,24 @@ class WorkerManager:
                     restarted += 1
         return restarted
 
+    def refresh_spec(self, name: str, spec: WorkerSpec) -> bool:
+        """Adopt a new spec for a registered worker without restarting it.
+
+        The settings-changed path uses this so a cold worker — or one about to be
+        restarted by its scope handler — comes up with current parameters, while a
+        worker that is already running is told the new parameters live through its
+        ``configure`` method.  Returns whether anything actually changed, so the
+        caller can skip the live push when the spec is identical.
+        """
+        handle = self._handles.get(name)
+        if handle is None:
+            return False
+        with handle.lock:
+            if handle.spec == spec:
+                return False
+            handle.spec = spec
+        return True
+
     def status(self) -> tuple[WorkerSummary, ...]:
         """A snapshot of every registered worker, for DevTools and tests."""
         now = time.monotonic()
@@ -1340,13 +1359,62 @@ def install_workers(app: AyrisApp) -> WorkerManager:
     # and a worker child must not drag the whole lifecycle module into its process.
     from ayris.core.app import Component, LifecycleStage
     from ayris.core.config import RestartScope
+    from ayris.core.events import ConfigChanged
     from ayris.workers.registry import event_translator, plan_workers
 
     manager = WorkerManager(app.bus, log_dir=app.paths.logs_dir)
 
+    def _log_configure(name: str, future: Future[Any]) -> None:
+        exc = future.exception()
+        if exc is not None:
+            _log.warning("воркер %s: не удалось применить настройки на лету: %s", name, exc)
+
+    def _on_settings_changed(event: ConfigChanged) -> None:
+        """Deliver a settings change to the workers that are already running.
+
+        Persisting the change and firing the event is not enough on its own: a
+        worker reads its parameters when it starts, so a moved sensitivity slider
+        or an edited wake phrase would sit in the config file and never reach the
+        running detector until the next launch — which is exactly the «сколько ни
+        крути, ничего не меняется» the user sees.  Rebuild the plan, adopt the
+        fresh specs so a cold or soon-to-restart worker comes up current, and push
+        the running ones their new parameters live; each worker's ``configure``
+        decides for itself whether anything needs a reload (a sensitivity change
+        does not, an engine swap does).
+        """
+        del event  # the plan is rebuilt from the application's current settings
+        try:
+            plan = plan_workers(app.settings, log_dir=app.paths.logs_dir)
+        except Exception:
+            _log.exception("не удалось перестроить план воркеров под новые настройки")
+            return
+        for planned in plan:
+            name = planned.spec.name
+            if not manager.refresh_spec(name, planned.spec):
+                continue
+            if not manager.is_ready(name):
+                # A cold worker starts with the fresh spec, and one its scope
+                # handler is restarting re-reads it too: nothing to push live.
+                continue
+            try:
+                future = manager.call(name, "configure", planned.spec.params, autostart=False)
+            except WorkerError as exc:
+                _log.warning("воркер %s: не удалось применить настройки на лету: %s", name, exc)
+                continue
+            future.add_done_callback(functools.partial(_log_configure, name))
+
+    unsub_config = app.bus.subscribe(ConfigChanged, _on_settings_changed, weak=False)
+
     def _bring_up() -> None:
         """Build the plan and start the autostart workers. Runs off the caller."""
         try:
+            _ai = app.settings.ai
+            _log.info(
+                "DIAG bring_up: ai.provider=%r ai.model=%r ai.model_path=%r",
+                _ai.provider,
+                _ai.model,
+                _ai.model_path,
+            )
             plan = plan_workers(app.settings, log_dir=app.paths.logs_dir)
             _log.info("план воркеров: %s", plan.describe())
             for planned in plan:
@@ -1368,6 +1436,7 @@ def install_workers(app: AyrisApp) -> WorkerManager:
         thread.start()
 
     def stop() -> None:
+        unsub_config()
         manager.shutdown()
 
     app.add_component(

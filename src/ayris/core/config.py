@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -83,6 +84,7 @@ __all__ = [
     "ConfigSection",
     "DevtoolsConfig",
     "DisplayActionsConfig",
+    "FilesActionsConfig",
     "GeneralConfig",
     "HotkeysConfig",
     "InputActionsConfig",
@@ -328,8 +330,8 @@ class PerformanceConfig(ConfigSection):
     llm_threads: int = Field(
         default=1,
         ge=1,
-        le=2,
-        description="Потоков языковой модели",
+        le=64,
+        description="Ядер CPU на счёт ответа локальной модели (llama.cpp)",
         json_schema_extra=_restart(RestartScope.LLM),
     )
     macro_threads: int = Field(
@@ -738,6 +740,19 @@ class AiConfig(ConfigSection):
         default=False,
         description="Свободный разговор с моделью, а не только команды",
     )
+    agent_mode: bool = Field(
+        default=False,
+        description=(
+            "Агентный режим: модель сама вызывает действия в несколько шагов "
+            "(нужна облачная модель)"
+        ),
+    )
+    agent_max_steps: int = Field(
+        default=8,
+        ge=1,
+        le=50,
+        description="Максимум шагов «рассуждение-и-действие» за один запрос агента",
+    )
     provider: Literal[
         "ollama",
         "lmstudio",
@@ -794,6 +809,13 @@ class AiConfig(ConfigSection):
     credential_ref: str = Field(
         default="openai",
         description="Имя записи с ключом в хранилище Windows. Сам ключ здесь не хранится",
+    )
+    model_history: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description=(
+            "Недавно выбранные модели по каждому поставщику — чтобы не вводить имя "
+            "заново. Заполняется вкладкой «ИИ», перезапуска не требует"
+        ),
     )
     temperature: float = Field(
         default=0.7,
@@ -1516,6 +1538,46 @@ class MediaActionsConfig(ConfigSection):
     )
 
 
+class FilesActionsConfig(ConfigSection):
+    """Sub-section ``[actions.files]`` — что файловым действиям можно трогать.
+
+    ``allowed_dirs`` — белый список корней, и ничего вне их действие не читает,
+    не пишет и не удаляет. Пустой список по умолчанию означает «доступа нет»:
+    файловые операции безопасны ровно до тех пор, пока пользователь сам не
+    назовёт папку, с которой готов их разрешить.
+
+    ``delete_to_trash`` отправляет удаляемое в корзину вместо безвозвратного
+    стирания — восстановимое поведение по умолчанию. ``max_read_bytes``
+    ограничивает, сколько прочитать из файла (ответ озвучивается и уходит в
+    модель, так что гигабайтный лог читать целиком незачем). ``follow_symlinks``
+    по умолчанию выключен: переход по ссылке — это способ выйти за пределы
+    разрешённого корня, поэтому он включается только осознанно.
+    """
+
+    allowed_dirs: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description="Папки, с которыми разрешены файловые действия; пусто — доступа нет",
+    )
+    delete_to_trash: bool = Field(
+        default=True,
+        description="Удалять в корзину, а не безвозвратно",
+    )
+    max_read_bytes: int = Field(
+        default=1_048_576,
+        ge=1_024,
+        le=104_857_600,
+        description="Сколько байт максимум читать из файла (1 МиБ по умолчанию)",
+    )
+    follow_symlinks: bool = Field(
+        default=False,
+        description=(
+            "Переходить по символическим ссылкам (небезопасно: может вывести "
+            "за пределы разрешённых папок)"
+        ),
+    )
+
+
 class ActionsConfig(ConfigSection):
     """Tab «Действия» — what the action library reads out of the settings."""
 
@@ -1558,6 +1620,10 @@ class ActionsConfig(ConfigSection):
     media: MediaActionsConfig = Field(
         default_factory=MediaActionsConfig,
         description="Плеер: Яндекс Музыка и управление воспроизведением",
+    )
+    files: FilesActionsConfig = Field(
+        default_factory=FilesActionsConfig,
+        description="Файловые операции: разрешённые папки, корзина, лимиты",
     )
 
 
@@ -1775,6 +1841,13 @@ class OverlayConfig(ConfigSection):
         le=7,
         description="Вариант эффекта стыковки шапок (1..7)",
     )
+    icosa_palette: str = Field(
+        default="violet",
+        description=(
+            "Облик фигуры: «violet» — текущий (глубокий контраст), "
+            "«legacy» — прежний (ярче и целиком залит светом)"
+        ),
+    )
     # -- экономия анимаций -------------------------------------------------
     animations: bool = Field(default=True, description="Анимации сферы (общий тумблер)")
     rotation: bool = Field(default=True, description="Анимация: вращение сферы")
@@ -1841,6 +1914,15 @@ class OverlayConfig(ConfigSection):
         text = value.strip().lower()
         if text not in ("sphere", "icosa"):
             raise ValueError("avatar должен быть «sphere» или «icosa»")
+        return text
+
+    @field_validator("icosa_palette")
+    @classmethod
+    def _check_icosa_palette(cls, value: str) -> str:
+        """Облик фигуры — только «violet» (сейчас) или «legacy» (раньше)."""
+        text = value.strip().lower()
+        if text not in ("violet", "legacy"):
+            raise ValueError("icosa_palette должен быть «violet» или «legacy»")
         return text
 
 
@@ -2128,13 +2210,7 @@ def _read_document(path: Path) -> TOMLDocument:
     Raises:
         ConfigError: The file cannot be read or is not valid TOML.
     """
-    try:
-        raw = path.read_bytes()
-    except OSError as exc:
-        raise ConfigError(
-            f"cannot read {path}: {exc}",
-            user_message=f"Не удалось прочитать файл настроек:\n{path}",
-        ) from exc
+    raw = _read_settings_bytes(path)
     try:
         # utf-8-sig: Notepad writes a BOM, and tomlkit refuses to parse it.
         text = raw.decode("utf-8-sig")
@@ -2150,6 +2226,104 @@ def _read_document(path: Path) -> TOMLDocument:
             f"{path} is not valid TOML: {exc}",
             user_message=f"Файл настроек повреждён и не читается:\n{exc}",
         ) from exc
+
+
+#: Reading ``config.toml`` can race another Ayris instance swapping the file: the
+#: launcher kills the running process and starts a new one, so the fresh instance
+#: may read while the old one still holds the file. On Windows that read either
+#: raises ``OSError`` (a sharing violation) or glimpses the file at zero bytes
+#: mid-replace. The OS still reports the real size on disk throughout, so a file
+#: that is non-empty on disk yet reads empty or unreadable is ALWAYS a transient
+#: glimpse — never "no settings". We wait it out with backoff rather than let the
+#: whole configuration silently fall back to schema defaults, which is what left
+#: the LLM worker with an empty ``model_path`` and answered «не выбран файл модели».
+#: A genuinely absent or zero-byte file is a real first run and returns at once.
+_READ_RETRY_BUDGET_SEC: Final = 5.0
+_READ_RETRY_START_DELAY_SEC: Final = 0.02
+_READ_RETRY_MAX_DELAY_SEC: Final = 0.25
+
+#: How long the file must stay *continuously* absent before a read concludes
+#: "first run" and returns defaults. A concurrent :func:`os.replace` makes the
+#: target vanish for only a few milliseconds, so a quarter second of steady
+#: absence tells a real first run (no file at all) apart from the launcher's
+#: relaunch race (the file is back almost at once).
+_ABSENT_CONFIRM_SEC: Final = 0.25
+
+
+def _write_in_progress(path: Path) -> bool:
+    """Whether another instance is mid-write of ``path``.
+
+    :func:`_atomic_write` writes a ``<name>.tmp`` sibling and then renames it over
+    the target, so while a racing instance saves, that temp file is on disk. Its
+    presence means a settings file is on its way: an absent read right now is a
+    glimpse to wait out, not a first run.
+    """
+    try:
+        return path.with_name(f"{path.name}.tmp").exists()
+    except OSError:
+        return False
+
+
+def _read_settings_bytes(path: Path) -> bytes:
+    """Read ``path``'s bytes, waiting out another instance swapping the file.
+
+    The launcher kills the running Ayris and starts a new one, so a fresh
+    instance can read ``config.toml`` while the old one is replacing it. Measured
+    on this machine, a concurrent :func:`os.replace` makes an open of the target
+    come back **zero bytes** for a moment (and, more rarely, raise ``OSError`` —
+    a sharing violation — or resolve to nothing). None of these means "no
+    settings": a real ``config.toml`` is never empty, and treating a glimpse as
+    empty is what silently reset the whole configuration to schema defaults and
+    left the LLM worker with an empty ``model_path`` («не выбран файл модели»).
+
+    So the rule is: **a file that is present never yields defaults.** A present
+    file that reads empty, or an open that errors, is retried with backoff until
+    the real bytes appear; only a genuinely absent file (a real first run, with no
+    write in flight) returns ``b""`` here, which the caller turns into defaults.
+
+    Raises:
+        ConfigError: The file is present yet still unreadable/empty after the
+            whole retry budget. Flagged ``transient`` so the caller waits and
+            keeps the current settings instead of quarantining a healthy file and
+            degrading every setting to its default.
+    """
+    deadline = time.monotonic() + _READ_RETRY_BUDGET_SEC
+    delay = _READ_RETRY_START_DELAY_SEC
+    absent_since: float | None = None
+    last = "present but read empty (mid-replace glimpse)"
+    while True:
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            # Absent right now. A concurrent os.replace makes the target vanish
+            # for a few milliseconds, so absence alone is not a first run: only
+            # conclude "no file" once it has stayed gone past the confirm window
+            # and no .tmp write is landing. Otherwise wait for the rename.
+            moment = time.monotonic()
+            if absent_since is None:
+                absent_since = moment
+            if not _write_in_progress(path) and moment - absent_since >= _ABSENT_CONFIRM_SEC:
+                return b""
+            last = "briefly absent (mid-replace or first run)"
+        except OSError as exc:
+            absent_since = None
+            last = str(exc)  # sharing violation while another process holds it
+        else:
+            absent_since = None
+            if raw:
+                return raw
+            # Present but zero bytes: a real config.toml is never empty, so this
+            # is a glimpse of the mid-replace window. Wait for the content.
+            last = "present but read empty (mid-replace glimpse)"
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(delay)
+        delay = min(delay * 2.0, _READ_RETRY_MAX_DELAY_SEC)
+    raise ConfigError(
+        f"cannot read {path} after {_READ_RETRY_BUDGET_SEC:.0f}s: {last}",
+        user_message=f"Не удалось прочитать файл настроек:\n{path}",
+        transient=True,
+    )
 
 
 def _removable_path(payload: Mapping[str, Any], loc: tuple[int | str, ...]) -> tuple[str, ...]:
@@ -2220,8 +2394,13 @@ def load_settings(path: Path) -> tuple[Settings, tuple[str, ...]]:
         ConfigError: The file exists but cannot be parsed. The caller decides
             whether to rescue it — see :meth:`ConfigManager.load`.
     """
-    if not path.is_file():
-        return Settings(), ()
+    # No ``is_file()`` short-circuit here on purpose: during the launcher's
+    # kill-and-relaunch, a single ``stat``/``is_file`` can transiently say "not a
+    # file" for a config that is really there, and returning defaults on that is
+    # exactly the «не выбран файл модели» race. :func:`_read_settings_bytes` is the
+    # one place that decides present-vs-absent, and it does so with retries; a
+    # genuinely absent or empty file comes back as an empty document and the usual
+    # defaults, a racing one is waited out.
     document = _read_document(path)
     return settings_from_mapping(document.unwrap())
 
@@ -2580,6 +2759,21 @@ class ConfigManager:
             try:
                 settings, dropped = load_settings(self._path)
             except ConfigError as exc:
+                if exc.transient:
+                    # A healthy file we could not read in time because another
+                    # instance was swapping it (the launcher's kill-and-relaunch).
+                    # Quarantining it would destroy a good config, and accepting
+                    # defaults would start the workers with an empty model_path —
+                    # the «не выбран файл модели» bug. Do neither: keep the
+                    # settings we already hold and report it loudly.
+                    _log.error(
+                        "Не удалось прочитать настройки (временная блокировка файла): %s; "
+                        "оставляю текущие значения, файл не трогаю",
+                        exc.technical,
+                    )
+                    self._loaded = True
+                    self._remember_state()
+                    return self._settings
                 self._quarantine(exc)
                 settings, dropped = Settings(), ("*",)
 

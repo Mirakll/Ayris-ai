@@ -34,6 +34,16 @@ the player shared with the macro sounds — see :mod:`ayris.audio.tts.app_router
 as its :class:`~ayris.core.pipeline.SpeechOutput`, so a matched command's answer
 is spoken. When no router could be built the pipeline gets ``None`` and runs
 silently instead.
+
+The **chat/understanding** side is wired the same way: with a manager,
+:func:`install_pipeline` sets a :class:`~ayris.core.worker_llm.WorkerLlmClient`
+over it (:meth:`~ayris.core.pipeline.Pipeline.set_llm`), so a free-chat turn and
+hybrid understanding run against the LLM worker's warmed local model instead of
+the default :class:`~ayris.nlu.llm.base.NullLlmClient` — which is why a typed
+«привет» used to come back «модель не настроена». Its cached readiness verdict is
+invalidated on every :class:`~ayris.core.events.ConfigChanged`, since a model or
+provider change restarts that worker. A text-only pipeline (no manager) keeps the
+null client, as the unit tests expect.
 """
 
 from __future__ import annotations
@@ -96,9 +106,13 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
     from ayris.audio.tts.app_router import active_tts_router
     from ayris.core.app import Component, LifecycleStage
     from ayris.core.models import TriggerType
+    from ayris.core.pipeline import NluMode
+    from ayris.core.worker_llm import WorkerLlmClient
     from ayris.core.worker_speech import WorkerPhraseSource, WorkerSttSource
     from ayris.nlu.index import TriggerIndex
+    from ayris.nlu.llm.prompts import clear_template_cache
     from ayris.nlu.matcher import Matcher, trigger_from_db
+    from ayris.workers.registry import WorkerKind
 
     repos = app.repositories
     # A one-element holder so the profile-switch handler can retarget the loader
@@ -144,6 +158,24 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
     stt = WorkerSttSource(manager) if manager is not None else None
     phrase_source = WorkerPhraseSource(manager) if manager is not None else None
 
+    def prewarm(mode: NluMode) -> None:
+        """Warm the answer path while STT is still transcribing (task: early warm).
+
+        Called off-thread by the pipeline the instant it enters TRANSCRIBING, so
+        the TTS voice's cold load — and, in a mode that may ask the model, the LLM
+        worker's start — overlap recognition instead of landing in series after
+        it. The voice is the embedded router that actually speaks in-process (not
+        the TTS worker); ``warm()`` is idempotent and a no-op once the engine is
+        loaded, so re-warming each turn only matters when an idle unload emptied
+        the slot. The LLM worker is started lazily, so a HYBRID/AI turn that will
+        consult the model does not wait for a cold process at understanding time.
+        """
+        router = active_tts_router()
+        if router is not None:
+            router.warm()
+        if manager is not None and mode.uses_llm:
+            manager.ensure_started(WorkerKind.LLM.value)
+
     pipeline = Pipeline(
         app.bus,
         state=app.state,
@@ -153,7 +185,22 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
         tts=active_tts_router(),
         stt=stt,
         phrase_source=phrase_source,
+        prewarm=prewarm,
     )
+
+    # The chat/understanding consumer. Without a manager (the text-only test
+    # pipeline) the default NullLlmClient stays, which is what those tests expect.
+    # With one, the pipeline talks to the LLM worker's warmed model through the
+    # proxy — so a typed «привет» is answered locally instead of «модель не
+    # настроена». Its configured-cache is dropped on every config change below.
+    llm_proxy = WorkerLlmClient(manager) if manager is not None else None
+    if llm_proxy is not None:
+        pipeline.set_llm(llm_proxy)
+        # Warm the «configured» verdict off the first phrase. The verdict is a
+        # synchronous status RPC that can block for seconds while the worker loads
+        # a cold GGUF; probing it on a background thread now caches the positive
+        # result before the user speaks, so the first hybrid/chat turn pays nothing.
+        llm_proxy.prewarm()
 
     def sync_voice_loop(settings: Settings) -> None:
         # attach()/detach() are idempotent, so this can run on every config
@@ -169,11 +216,22 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
         # library is per-profile too, so it has to follow.
         profile_box["id"] = event.profile.id
         index.replace_all(load(None))
+        # A profile can carry its own chat.txt/nlu.txt override, so drop any
+        # template the previous profile cached and let the next turn reread.
+        clear_template_cache()
 
     def on_config(event: ConfigChanged) -> None:
         # The «ИИ» toggles decide command-only / hybrid / model-only, and they can
         # change mid-session; the mode is read off the settings the pipeline holds.
         pipeline.apply_settings(event.diff.settings)
+        # The user may have edited a prompt template; forget the cached text so the
+        # next turn picks up the edit instead of speaking the stale template.
+        clear_template_cache()
+        # A model swap or provider change restarts the LLM worker (RestartScope.LLM),
+        # so the proxy's cached «configured» verdict may be stale — drop it and let
+        # the next turn re-probe the (possibly freshly warmed) worker.
+        if llm_proxy is not None:
+            llm_proxy.invalidate()
         # The voice toggles (wake word, mic mode) can flip the input loop on or
         # off between sessions; follow them so a muted microphone stops listening.
         sync_voice_loop(event.diff.settings)

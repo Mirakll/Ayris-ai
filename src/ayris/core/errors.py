@@ -92,6 +92,21 @@ class ConfigError(AyrisError):
 
     default_user_message = "Не удалось прочитать настройки. Применены значения по умолчанию."
 
+    def __init__(
+        self,
+        technical: str,
+        *,
+        user_message: str | None = None,
+        recoverable: bool = True,
+        transient: bool = False,
+    ) -> None:
+        super().__init__(technical, user_message=user_message, recoverable=recoverable)
+        #: A transient *read* failure — the file was locked or glimpsed mid-swap
+        #: by another Ayris instance, not corrupted. The caller must wait and
+        #: retry rather than quarantine a healthy file and fall back to defaults
+        #: (which is what left the LLM worker with an empty model_path).
+        self.transient = transient
+
 
 class SecretsError(AyrisError):
     """Credential store is unavailable or rejected a read/write.

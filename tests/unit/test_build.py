@@ -140,9 +140,23 @@ def test_explicit_includes_present(options: BuildOptions) -> None:
 
 # PLACEHOLDER_TESTS2
 @pytest.mark.unit
-@pytest.mark.parametrize("extra", ["llama_cpp", "playwright", "paddleocr", "torch", "TTS"])
+@pytest.mark.parametrize("extra", ["playwright", "paddleocr", "torch", "TTS"])
 def test_heavy_optional_extras_do_not_leak(options: BuildOptions, extra: str) -> None:
     assert f"--nofollow-import-to={extra}" in nuitka_arguments(options)
+
+
+@pytest.mark.unit
+def test_llama_cpp_engine_is_shipped_in_the_box(options: BuildOptions) -> None:
+    """Встроенный движок llama.cpp вшивается в дистрибутив: локальная модель должна
+    работать без отдельной программы. Ayris импортирует его строкой (``importlib``),
+    поэтому Nuitka сама его не найдёт — только явный include; а нативная
+    ``llama.dll`` идёт как данные пакета."""
+    args = nuitka_arguments(options)
+    assert "llama_cpp" in INCLUDE_PACKAGES
+    assert "--include-package=llama_cpp" in args
+    assert "--include-package-data=llama_cpp" in args
+    assert "llama_cpp" not in NOFOLLOW_PACKAGES
+    assert "--nofollow-import-to=llama_cpp" not in args
 
 
 @pytest.mark.unit
@@ -301,9 +315,23 @@ def test_main_reports_missing_nuitka(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
 
 @pytest.mark.unit
+def test_main_reports_missing_llama_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Движок вшивается в дистрибутив, поэтому без него сборку нельзя начинать:
+    Nuitka всё равно упала бы на ``--include-package=llama_cpp``, но ранняя проверка
+    даёт понятное сообщение и код 3, а не трассировку компилятора."""
+    monkeypatch.setattr("build.nuitka_build.nuitka_available", lambda: True)
+    monkeypatch.setattr("build.nuitka_build.llama_engine_available", lambda: False)
+    runner = FakeRunner(tmp_path)
+    code = main(["--output-dir", str(tmp_path)], runner=runner)
+    assert code == 3
+    assert runner.calls == []
+
+
+@pytest.mark.unit
 def test_main_happy_path_returns_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = tmp_path / "out"
     monkeypatch.setattr("build.nuitka_build.nuitka_available", lambda: True)
+    monkeypatch.setattr("build.nuitka_build.llama_engine_available", lambda: True)
     runner = FakeRunner(out / "ayris.dist")
     code = main(["--output-dir", str(out)], runner=runner)
     assert code == 0

@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QObject, QSignalBlocker, Signal
 from PySide6.QtWidgets import (
-    QDialog,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -20,7 +19,6 @@ from ayris.core.errors import AudioError
 from ayris.core.events import AudioLevelChanged
 from ayris.gui.tabs.voice import AsyncRunner, combo_options
 from ayris.gui.widgets import (
-    ConfirmDialog,
     LevelMeter,
     SliderField,
     ThemedComboBox,
@@ -66,6 +64,9 @@ class AudioInputSection:
         self._runner = AsyncRunner(tab)
         self._runner.finished.connect(self._on_calibrated)
         self._runner.failed.connect(self._on_calibration_failed)
+        #: Values calibration overwrote on the last run, so «Вернуть прежние
+        #: значения» can undo an auto-applied recommendation the user disliked.
+        self._previous: dict[str, object] | None = None
 
         self._signals = _AudioSignals(tab)
         self._signals.level.connect(self._on_level)
@@ -163,9 +164,15 @@ class AudioInputSection:
         self._calibrate_status.setProperty("role", "muted")
         self._calibrate_status.setWordWrap(True)
         layout.addWidget(self._calibrate_status)
+        self._undo_button = QPushButton("Вернуть прежние значения")
+        self._undo_button.setToolTip("Отменить только что применённую калибровку")
+        self._undo_button.clicked.connect(self._revert_recommendation)
+        self._undo_button.hide()
+        layout.addWidget(self._undo_button)
         tab.add_block(
             "Калибровка микрофона",
-            "Измерит шум комнаты и вашу речь, затем предложит усиление, порог и шумоподавление.",
+            "Измерит шум комнаты и вашу речь и сразу применит усиление, порог и "
+            "шумоподавление — их можно поправить ползунками выше.",
             body,
         )
 
@@ -290,20 +297,43 @@ class AudioInputSection:
 
         if not isinstance(result, CalibrationReport):
             return
-        self._calibrate_status.setText(result.summary)
-        dialog = ConfirmDialog(
-            "Применить рекомендованные значения?",
-            result.summary + "\n\n" + "\n".join(result.messages),
-            self._tab.theme,
-            confirm_text="Применить",
-            parent=self._tab,
+        # Auto-apply: the measured values go straight into the fields, and the
+        # bound sliders above update to show them, so the user fine-tunes from a
+        # measured starting point instead of first confirming a dialog. «Вернуть
+        # прежние значения» keeps the change reversible.
+        self._previous = self._current_values()
+        self.apply_recommendation(result.recommended)
+        self._meter.set_threshold(result.recommended.vad_threshold)
+        self._calibrate_status.setText(
+            result.summary + " Значения применены — поправьте ползунками выше при необходимости."
         )
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.apply_recommendation(result.recommended)
+        self._undo_button.show()
 
     def _on_calibration_failed(self, message: str) -> None:
         self._calibrate_button.setEnabled(self._calibration_factory() is not None)
         self._calibrate_status.setText(f"Калибровка не удалась: {message}")
+
+    def _current_values(self) -> dict[str, object]:
+        """Snapshot the audio-input fields calibration is about to overwrite."""
+        audio = self._tab.manager.settings.voice.audio_input
+        return {
+            "voice.audio_input.gain": audio.gain,
+            "voice.audio_input.vad_threshold": audio.vad_threshold,
+            "voice.audio_input.noise_floor_db": audio.noise_floor_db,
+            "voice.audio_input.silence_ms": audio.silence_ms,
+            "voice.audio_input.denoise": audio.denoise,
+        }
+
+    def _revert_recommendation(self) -> None:
+        """Restore the values calibration replaced, for a user who preferred them."""
+        if self._previous is None:
+            return
+        previous = self._previous
+        self._previous = None
+        self._tab.manager.apply(previous)
+        self._meter.set_threshold(self._tab.manager.settings.voice.audio_input.vad_threshold)
+        self._undo_button.hide()
+        self._calibrate_status.setText("Возвращены прежние значения.")
 
     def apply_recommendation(self, recommendation: Recommendation) -> None:
         """Write calibration results into the audio-input fields."""

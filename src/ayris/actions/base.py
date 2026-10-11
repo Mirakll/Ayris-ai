@@ -108,6 +108,7 @@ class ActionCategory(StrEnum):
     MEDIA = "media"
     CAPTURE = "capture"
     CLIPBOARD = "clipboard"
+    FILES = "files"
     TIMERS = "timers"
     NOTIFY = "notify"
     LOGIC = "logic"
@@ -130,6 +131,7 @@ _CATEGORY_TITLES: Final[Mapping[ActionCategory, str]] = {
     ActionCategory.MEDIA: "Музыка и медиа",
     ActionCategory.CAPTURE: "Скриншоты и распознавание",
     ActionCategory.CLIPBOARD: "Буфер обмена",
+    ActionCategory.FILES: "Файлы и папки",
     ActionCategory.TIMERS: "Таймеры и напоминания",
     ActionCategory.NOTIFY: "Уведомления",
     ActionCategory.LOGIC: "Логика и переменные",

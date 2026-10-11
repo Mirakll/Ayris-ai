@@ -24,8 +24,10 @@ from ayris.audio.stt.base import STT_SAMPLE_RATE, AudioBuffer, TranscriptResult
 from ayris.core.errors import SttError
 from ayris.core.worker_speech import (
     _PHRASE_TIMEOUT_SEC,
+    _WARM_TIMEOUT_SEC,
     WorkerPhraseSource,
     WorkerSttSource,
+    make_transcribe_once,
 )
 from ayris.workers.protocol import (
     WorkerCrashError,
@@ -165,6 +167,40 @@ def test_stt_source_tolerates_a_non_mapping_reply() -> None:
     assert result.is_empty
 
 
+def test_stt_source_warm_asks_the_worker_to_load_the_model() -> None:
+    caller = _FakeCaller(reply={"started": True})
+
+    WorkerSttSource(caller).warm()
+
+    assert len(caller.calls) == 1
+    call = caller.calls[0]
+    assert call.worker == WorkerKind.STT.value
+    assert call.method == "load_model"
+    # Fired on an activation thread so the cold load overlaps the phrase; bounded
+    # so a wedged worker cannot pin the warm thread forever.
+    assert call.timeout == _WARM_TIMEOUT_SEC
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        WorkerUnavailableError("stt not started"),
+        WorkerTimeoutError("no answer in time"),
+        WorkerCrashError("worker died"),
+        FutureTimeoutError(),
+        SttError("no model", user_message="Модель не загружена."),
+    ],
+)
+def test_stt_source_warm_is_best_effort(failure: BaseException) -> None:
+    # Warming is an optimisation: a worker that cannot answer is swallowed, never
+    # raised — the phrase still recognises, it just pays the cold load as before.
+    caller = _FakeCaller(reply=failure)
+
+    WorkerSttSource(caller).warm()  # must not raise
+
+    assert len(caller.calls) == 1
+
+
 # --------------------------------------------------------------------------- #
 # WorkerPhraseSource
 # --------------------------------------------------------------------------- #
@@ -240,3 +276,171 @@ def test_worker_manager_reply_shape_round_trips() -> None:
     params = TranscriptResult(text="привет", engine="vosk", confidence=0.0).to_params()
     assert isinstance(params, Mapping)
     assert WorkerSttSource(_FakeCaller(reply=params)).transcribe(_buffer()).text == "привет"
+
+
+# --------------------------------------------------------------------------- #
+# make_transcribe_once — the «Тест распознавания» self-test
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _ScriptedCaller:
+    """A ``WorkerCaller`` whose answer depends on the method called.
+
+    ``segment_replies`` is consumed one per audio ``segment`` call, so a test can
+    script "nothing stale, nothing yet, then a phrase"; the last entry is reused
+    once the script runs out. ``stt_reply`` answers every STT ``transcribe`` call,
+    and the PCM handed to it is recorded so a test can prove *which* phrase was
+    recognised — the fresh one, not a drained stale segment. ``status_reply``
+    answers the microphone pre-check (a running capture by default) and
+    ``read_reply`` answers the raw-window fallback (nothing by default, so a test
+    opts in to it explicitly).
+    """
+
+    segment_replies: list[object]
+    stt_reply: object = None
+    status_reply: object = field(default_factory=lambda: {"running": True, "state": "running"})
+    read_reply: object = None
+    segment_calls: int = 0
+    transcribe_calls: int = 0
+    transcribe_audio: bytes | None = None
+    status_calls: int = 0
+    read_calls: int = 0
+
+    def call_sync(
+        self,
+        worker: str,
+        method: str,
+        params: Any = None,
+        *,
+        timeout: float | None = None,
+        audio: bytes | None = None,
+        sample_rate: int = STT_SAMPLE_RATE,
+        channels: int = 1,
+        sample_format: str = "int16",
+    ) -> Any:
+        if method == "status":
+            self.status_calls += 1
+            reply = self.status_reply
+        elif method == "read":
+            self.read_calls += 1
+            reply = self.read_reply
+        elif method == "segment":
+            index = min(self.segment_calls, len(self.segment_replies) - 1)
+            self.segment_calls += 1
+            reply = self.segment_replies[index]
+        else:
+            self.transcribe_calls += 1
+            self.transcribe_audio = audio
+            reply = self.stt_reply
+        if isinstance(reply, BaseException):
+            raise reply
+        return reply
+
+
+_NO_PHRASE = {"available": False}
+
+
+def _phrase(pcm: bytes) -> dict[str, object]:
+    return {"available": True, "pcm": pcm, "sample_rate": STT_SAMPLE_RATE}
+
+
+# __SELF_TEST_CASES__
+
+
+def test_self_test_recognises_the_next_spoken_phrase() -> None:
+    caller = _ScriptedCaller(
+        segment_replies=[_NO_PHRASE, _NO_PHRASE, _phrase(b"\x01\x02\x03\x04")],
+        stt_reply=TranscriptResult(text="открой блокнот", engine="vosk").to_params(),
+    )
+
+    text, elapsed_ms = make_transcribe_once(caller, listen_sec=1.0, poll_sec=0.0)()
+
+    assert text == "открой блокнот"
+    assert elapsed_ms >= 0
+    assert caller.transcribe_calls == 1
+
+
+def test_self_test_drains_a_stale_segment_before_listening() -> None:
+    # A phrase buffered before the button was pressed must be discarded: the test
+    # recognises the fresh phrase, not the click or an earlier sentence.
+    caller = _ScriptedCaller(
+        segment_replies=[_phrase(b"STAL"), _phrase(b"FRES")],
+        stt_reply=TranscriptResult(text="да", engine="vosk").to_params(),
+    )
+
+    make_transcribe_once(caller, listen_sec=1.0, poll_sec=0.0)()
+
+    assert caller.transcribe_audio == b"FRES"
+    assert caller.segment_calls >= 2
+
+
+def test_self_test_raises_when_nothing_is_heard() -> None:
+    # Neither the VAD path nor the raw-window fallback found audio: a genuinely
+    # silent window is the one case where «не услышала» is the honest answer.
+    caller = _ScriptedCaller(segment_replies=[_NO_PHRASE])
+
+    with pytest.raises(SttError):
+        make_transcribe_once(caller, listen_sec=0.02, poll_sec=0.0)()
+
+    assert caller.transcribe_calls == 0
+    assert caller.read_calls >= 1  # the window fallback was tried before giving up
+
+
+def test_self_test_raises_on_an_empty_transcript() -> None:
+    # Silence comes back as an empty result; the self-test turns that into a clear
+    # message rather than showing «»  ·  N мс.
+    caller = _ScriptedCaller(
+        segment_replies=[_NO_PHRASE, _phrase(b"\x01\x02\x03\x04")],
+        stt_reply=TranscriptResult(text="   ", engine="vosk").to_params(),
+    )
+
+    with pytest.raises(SttError):
+        make_transcribe_once(caller, listen_sec=1.0, poll_sec=0.0)()
+
+
+def test_self_test_propagates_a_real_recognition_failure() -> None:
+    # A model that would not load reaches the user unchanged, so «Не удалось
+    # распознать» names the real reason instead of «не услышала».
+    caller = _ScriptedCaller(
+        segment_replies=[_NO_PHRASE, _phrase(b"\x01\x02\x03\x04")],
+        stt_reply=SttError("no model", user_message="Модель не загружена."),
+    )
+
+    with pytest.raises(SttError) as excinfo:
+        make_transcribe_once(caller, listen_sec=1.0, poll_sec=0.0)()
+    assert excinfo.value.user_message == "Модель не загружена."
+
+
+def test_self_test_reports_a_dead_microphone_instead_of_no_phrase() -> None:
+    # Capture that is not running is named as a device problem, not flattened to
+    # «не услышала» — and the test never even reaches the listen loop or STT.
+    caller = _ScriptedCaller(
+        segment_replies=[_phrase(b"\x01\x02\x03\x04")],
+        stt_reply=TranscriptResult(text="да", engine="vosk").to_params(),
+        status_reply={"running": False, "state": "device_lost"},
+    )
+
+    with pytest.raises(SttError) as excinfo:
+        make_transcribe_once(caller, listen_sec=1.0, poll_sec=0.0)()
+
+    assert "Микрофон недоступен" in excinfo.value.user_message
+    assert caller.segment_calls == 0
+    assert caller.transcribe_calls == 0
+
+
+def test_self_test_falls_back_to_the_raw_window_when_the_gate_finds_no_phrase() -> None:
+    # The VAD gate accepts nothing (a quiet mic, a gate set too high), so the
+    # segment poll times out; the raw window is read and recognised instead, and
+    # its PCM — not a segment's — reaches STT.
+    caller = _ScriptedCaller(
+        segment_replies=[_NO_PHRASE],
+        stt_reply=TranscriptResult(text="привет", engine="vosk").to_params(),
+        read_reply={"pcm": b"WNDW", "sample_rate": STT_SAMPLE_RATE},
+    )
+
+    text, _elapsed = make_transcribe_once(caller, listen_sec=0.05, poll_sec=0.0)()
+
+    assert text == "привет"
+    assert caller.read_calls >= 1
+    assert caller.transcribe_audio == b"WNDW"

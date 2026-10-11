@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 
 from ayris.core.config import AiConfig, ConfigManager, RestartScope
 from ayris.core.config import ConfigChanged as SettingsDiff
-from ayris.core.errors import AyrisError, SecretsError
+from ayris.core.errors import AyrisError, ConfigError, SecretsError
 from ayris.core.events import (
     EventBus,
     ModelDownloadFailed,
@@ -60,9 +60,11 @@ from ayris.gui.widgets import (
     BusyIndicator,
     ConfirmDialog,
     DownloadProgress,
+    ModelPicker,
     SettingCard,
     SliderField,
     ThemedComboBox,
+    ToggleSwitch,
     active_worker_control,
 )
 from ayris.gui.widgets.llm_test_panel import LlmTestPanel, TestRequest
@@ -82,6 +84,7 @@ from ayris.nlu.llm.factory import (
     is_cloud_provider,
     is_local_provider,
 )
+from ayris.nlu.llm.local_models import LocalModel, discover_local_models, local_model_dirs
 from ayris.nlu.llm.modes import describe_mode
 from ayris.nlu.llm.ollama_client import OllamaPullProgress
 from ayris.nlu.llm.prompts import build_chat_prompt, build_nlu_prompt
@@ -136,6 +139,23 @@ def _no_cards() -> tuple[CommandCard, ...]:
     return ()
 
 
+def _scan_local_models(current_path: str) -> tuple[LocalModel, ...]:
+    """Файлы ``.gguf`` для пикера: папка профиля плюс папка уже выбранного файла.
+
+    Отдельной функцией, а не методом, чтобы тест подменил её полем
+    :attr:`AiServices.local_models` и не зависел ни от профиля, ни от диска.
+    Недоступные пути — это пустой список, а не исключение во вкладке.
+    """
+    models_dir: Path | None = None
+    try:
+        from ayris.core.paths import get_paths
+
+        models_dir = get_paths().llm_models_dir
+    except Exception:
+        _log.debug("папка моделей профиля недоступна", exc_info=True)
+    return discover_local_models(local_model_dirs(models_dir=models_dir, current_path=current_path))
+
+
 @dataclass(slots=True)
 class AiServices:
     """Внешние зависимости вкладки: секреты, фабрика клиентов, команды, память, ОЗУ.
@@ -146,6 +166,8 @@ class AiServices:
     ``backend`` нужен только пути llama.cpp: через него скачивается GGUF из каталога
     моделей. Строится лениво при первой загрузке; ``None`` — менеджер моделей
     недоступен, и загрузка из каталога выключена (свой файл выбрать всё равно можно).
+    ``local_models`` отдаёт пикеру файлы ``.gguf`` с диска — это весь список моделей
+    встроенного движка, спрашивать их не у кого.
     """
 
     secrets: SecretsStore = field(default_factory=get_secrets)
@@ -154,6 +176,7 @@ class AiServices:
     clear_history: Callable[[], None] | None = None
     total_ram_mb: int = 0
     backend: ModelManagerBackend | None = None
+    local_models: Callable[[str], Sequence[LocalModel]] = _scan_local_models
 
 
 def _default_backend(bus: EventBus | None) -> ModelManagerBackend | None:
@@ -420,6 +443,120 @@ class _CatalogRow(QFrame):
         self.button.setEnabled(downloadable)
 
 
+class _AllowedDirsEditor(QWidget):
+    """Белый список папок для файловых действий (``actions.files.allowed_dirs``).
+
+    Структурный список, как варианты слова активации: не через ``bind_*``, а
+    прямой записью в конфиг. Пустой список = «файловым действиям доступ закрыт»,
+    поэтому заполняет его только пользователь — нативным выбором папки.
+    ``refresh()`` перечитывает конфиг, чтобы внешняя правка (импорт профиля,
+    сброс) перестроила строки, а ``_last_written`` гасит перестроение в ответ на
+    собственную запись.
+    """
+
+    _CONFIG_PATH = "actions.files.allowed_dirs"
+
+    def __init__(
+        self, manager: ConfigManager, theme: ThemeManager, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._manager = manager
+        self._theme = theme
+        self._last_written: tuple[str, ...] = ()
+        self.setProperty("transparent", True)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(theme.metric("spacing_sm"))
+
+        self._rows_container = QWidget()
+        self._rows_container.setProperty("transparent", True)
+        self._rows_layout = QVBoxLayout(self._rows_container)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(theme.metric("spacing_xs"))
+        layout.addWidget(self._rows_container)
+
+        add_row = QHBoxLayout()
+        add_row.setSpacing(theme.metric("spacing_sm"))
+        self._add_button = QPushButton("Добавить папку…")
+        self._add_button.setProperty("kind", "primary")
+        self._add_button.clicked.connect(self._add_dir)
+        add_row.addWidget(self._add_button)
+        add_row.addStretch(1)
+        layout.addLayout(add_row)
+
+        self._status = QLabel("")
+        self._status.setProperty("role", "muted")
+        self._status.setWordWrap(True)
+        layout.addWidget(self._status)
+
+        self._rebuild_rows()
+
+    def _current(self) -> list[str]:
+        return list(self._manager.settings.actions.files.allowed_dirs)
+
+    # <<<EDITOR>>>
+
+    def _rebuild_rows(self) -> None:
+        while self._rows_layout.count():
+            item = self._rows_layout.takeAt(0)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.deleteLater()
+        dirs = self._current()
+        if not dirs:
+            empty = QLabel("Папки не добавлены — файловым действиям доступ закрыт.")
+            empty.setProperty("role", "muted")
+            empty.setWordWrap(True)
+            self._rows_layout.addWidget(empty)
+        for path in dirs:
+            self._rows_layout.addWidget(self._make_row(path))
+        self._last_written = tuple(dirs)
+
+    def _make_row(self, path: str) -> QWidget:
+        row = QWidget()
+        row.setProperty("transparent", True)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(self._theme.metric("spacing_sm"))
+        label = QLabel(path)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        row_layout.addWidget(label, 1)
+        remove = QPushButton("Удалить")
+        remove.clicked.connect(lambda: self._remove_dir(path))
+        row_layout.addWidget(remove)
+        return row
+
+    def _apply(self, dirs: list[str]) -> bool:
+        try:
+            self._manager.apply({self._CONFIG_PATH: dirs})
+        except ConfigError as exc:
+            self._status.setText(exc.user_message)
+            return False
+        self._status.setText("")
+        self._rebuild_rows()
+        return True
+
+    def _add_dir(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Выберите папку, доступную файловым действиям", str(Path.home())
+        )
+        if not chosen:
+            return
+        resolved = str(Path(chosen))
+        if resolved in self._current():
+            self._status.setText("Эта папка уже в списке.")
+            return
+        self._apply([*self._current(), resolved])
+
+    def _remove_dir(self, path: str) -> None:
+        self._apply([item for item in self._current() if item != path])
+
+    def refresh(self) -> None:
+        if tuple(self._current()) != self._last_written:
+            self._rebuild_rows()
+
+
 class AiTab(SettingsTab):
     """Настройки языковой модели: режим, провайдеры, генерация, память, промпты, проба.
 
@@ -457,6 +594,20 @@ class AiTab(SettingsTab):
         self._probe_runner = AsyncRunner(self)
         self._probe_runner.finished.connect(self._on_probe_done)
         self._probe_runner.failed.connect(self._on_probe_failed)
+        # Список моделей для пикера тянется в фоне при открытии выпадашки и
+        # кэшируется по «поставщик|адрес|ключ»: пока сигнатура та же, повторное
+        # открытие мгновенно и без сети.
+        self._models_runner = AsyncRunner(self)
+        self._models_runner.finished.connect(self._on_models_loaded)
+        self._models_runner.failed.connect(self._on_models_failed)
+        self._model_cache: dict[str, tuple[str, ...]] = {}
+        self._models_loading = False
+        self._models_signature = ""
+        #: Для встроенного llama.cpp список моделей — это файлы на диске:
+        #: «имя пункта → абсолютный путь». Пересобирается при каждом обновлении
+        #: вкладки и при открытии выпадашки, чтобы свежескачанный файл появился
+        #: без перезапуска.
+        self._local_models: dict[str, str] = {}
         self._pull_runner = _PullRunner(self)
         self._pull_runner.progress.connect(self._on_pull_progress)
         self._pull_runner.finished.connect(self._on_pull_finished)
@@ -495,12 +646,14 @@ class AiTab(SettingsTab):
         self._build_provider_section()
         self._build_generation_section()
         self._build_history_section()
+        self._build_agent_section()
         self._build_prompts_section()
         self._build_test_section()
         self.content.addStretch(1)
 
         self.register_refresh(self._sync_mode)
         self.register_refresh(self._sync_provider)
+        self.register_refresh(self._sync_model_picker)
         self.register_refresh(self._chat_editor.refresh_preview)
         self.register_refresh(self._nlu_editor.refresh_preview)
 
@@ -756,23 +909,42 @@ class AiTab(SettingsTab):
             self._host_edit,
         )
 
-        self._model_edit = QLineEdit()
-        self._model_edit.setPlaceholderText("qwen2.5:7b-instruct")
-        self.bind_line_edit(self._model_edit, "ai.model", "Модель")
-        self._model_card(
-            "Модель",
-            "Название модели у поставщика. Проверка ниже подтянет список прямо с сервера.",
-            self._model_edit,
-        )
+        self._model_picker = ModelPicker()
+        self.tame_combo(self._model_picker)
+        self._model_picker.list_requested.connect(self._request_model_list)
+        self._model_picker.model_chosen.connect(self._on_model_chosen)
+        self._model_picker.add_new_requested.connect(self._on_add_new_requested)
 
-        self._model_combo = ThemedComboBox()
-        self._model_combo.setEnabled(False)
-        self._model_combo.addItem("Список появится после проверки", "")
-        self._model_combo.activated.connect(self._pick_model)
-        self._models_card = self._model_card(
-            "Модели с сервера",
-            "Выберите из того, что вернул сервис при проверке.",
-            self._model_combo,
+        body = self.panel()
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(self._theme.metric("spacing_sm"))
+        layout.addWidget(self._model_picker)
+
+        # Строка ручного ввода: скрыта, пока не выбрали «➕ Добавить свою модель…».
+        self._new_model_row = self.panel()
+        add_layout = QHBoxLayout(self._new_model_row)
+        add_layout.setContentsMargins(0, 0, 0, 0)
+        add_layout.setSpacing(self._theme.metric("spacing_sm"))
+        self._new_model_edit = QLineEdit()
+        self._new_model_edit.setPlaceholderText("например, gpt-4o или qwen2.5:7b-instruct")
+        self._new_model_edit.returnPressed.connect(self._commit_new_model)
+        add_layout.addWidget(self._new_model_edit, 1)
+        self._new_model_add = QPushButton("Добавить")
+        self._new_model_add.setProperty("kind", "primary")
+        self._new_model_add.clicked.connect(self._commit_new_model)
+        add_layout.addWidget(self._new_model_add)
+        self._new_model_cancel = QPushButton("Отмена")
+        self._new_model_cancel.clicked.connect(self._cancel_new_model)
+        add_layout.addWidget(self._new_model_cancel)
+        self._new_model_row.hide()
+        layout.addWidget(self._new_model_row)
+
+        self._model_block(
+            "Модель",
+            "Откройте список — покажутся установленные и недавние модели. "
+            "«Добавить свою» — чтобы ввести имя облачной модели вручную.",
+            body,
         )
 
         self._build_key_block()
@@ -883,11 +1055,156 @@ class AiTab(SettingsTab):
         line.setStyleSheet(f"background-color: {self._theme.theme.color('border')}; border: none;")
         return line
 
-    def _pick_model(self, _index: int) -> None:
-        model = self._model_combo.currentData()
+    # -- выбор модели через пикер -------------------------------------------
+
+    #: Сколько недавних моделей помнить на каждого поставщика.
+    _MAX_HISTORY = 12
+
+    def _provider_signature(self) -> str:
+        """Ключ кэша списка моделей: у разных ключей/адресов свой список."""
+        ai = self._manager.settings.ai
+        return f"{ai.provider}|{ai.host}|{ai.credential_ref}"
+
+    def _merge_history(self, provider: str, model: str) -> dict[str, list[str]]:
+        """Новый словарь истории с ``model`` в начале списка ``provider``."""
+        history = {k: list(v) for k, v in self._manager.settings.ai.model_history.items()}
+        recent = [model, *(m for m in history.get(provider, ()) if m != model)]
+        history[provider] = recent[: self._MAX_HISTORY]
+        return history
+
+    def _apply_model(self, model: str) -> None:
+        """Записать выбранную модель в конфиг и запомнить её для поставщика.
+
+        Для встроенного llama.cpp одного имени мало: движок открывает файл, а не
+        имя, поэтому вместе с ``ai.model`` пишется и ``ai.model_path`` выбранного
+        пункта — обе правки под :class:`RestartScope.LLM`, так что воркер
+        перезапустится и старая модель выгрузится вместе с его процессом. Имя,
+        которого нет среди найденных файлов (введено вручную), путь не трогает.
+        """
+        model = model.strip()
         if not model:
             return
-        self._manager.apply({"ai.model": str(model)})
+        provider = self._manager.settings.ai.provider
+        updates: dict[str, object] = {
+            "ai.model": model,
+            "ai.model_history": self._merge_history(provider, model),
+        }
+        path = self._local_models.get(model, "")
+        if provider == LLAMACPP_PROVIDER and path:
+            updates["ai.model_path"] = path
+        self._manager.apply(updates)
+        if provider == LLAMACPP_PROVIDER:
+            self._refresh_model_path_label()
+
+    def _on_model_chosen(self, model: str) -> None:
+        self._cancel_new_model()
+        self._apply_model(model)
+
+    def _on_add_new_requested(self) -> None:
+        self._new_model_row.show()
+        self._new_model_edit.setFocus()
+
+    def _commit_new_model(self) -> None:
+        model = self._new_model_edit.text().strip()
+        if not model:
+            return
+        self._new_model_edit.clear()
+        self._new_model_row.hide()
+        self._apply_model(model)
+
+    def _cancel_new_model(self) -> None:
+        self._new_model_edit.clear()
+        self._new_model_row.hide()
+
+    def _refresh_local_models(self) -> None:
+        """Пересобрать карту «имя пункта → файл .gguf» для встроенного движка.
+
+        Сбой чтения диска оставляет прежнюю карту, а не обнуляет её: пропавший на
+        секунду сетевой том не должен стирать из списка модель, которой человек
+        пользуется.
+        """
+        ai = self._manager.settings.ai
+        if ai.provider != LLAMACPP_PROVIDER:
+            self._local_models = {}
+            return
+        try:
+            found = self.services.local_models(ai.model_path)
+        except Exception:
+            _log.exception("не удалось просмотреть папку с моделями")
+            return
+        self._local_models = {model.name: str(model.path) for model in found}
+
+    def _current_local_name(self) -> str:
+        """Какой пункт отметить активным: тот, чей файл совпал с ``ai.model_path``.
+
+        В конфиге имя модели и имя файла расходятся (например «Qwen2.5 3B
+        Instruct» против стема скачанного GGUF), а движок работает с файлом, —
+        поэтому отметка идёт по пути, и только если такого файла в списке нет,
+        показываем то имя, что записано в конфиге.
+        """
+        ai = self._manager.settings.ai
+        if ai.model_path:
+            wanted = Path(ai.model_path)
+            for name, candidate in self._local_models.items():
+                if Path(candidate) == wanted:
+                    return name
+        return ai.model
+
+    def _sync_model_picker(self) -> None:
+        """Свести список пикера из кэша сервера и истории, отметить текущую модель."""
+        ai = self._manager.settings.ai
+        if ai.provider == LLAMACPP_PROVIDER:
+            # У встроенного движка список спрашивать не у кого: это файлы на
+            # диске. История чужих поставщиков (теги Ollama, имена облачных
+            # моделей) в нём только мешала бы — её не подставить в model_path.
+            self._refresh_local_models()
+            self._model_picker.set_models(list(self._local_models), loading=False)
+            self._model_picker.set_current_model(self._current_local_name())
+            return
+        remembered = list(ai.model_history.get(ai.provider, ()))
+        cached = list(self._model_cache.get(self._provider_signature(), ()))
+        self._model_picker.set_models([*cached, *remembered], loading=self._models_loading)
+        self._model_picker.set_current_model(ai.model)
+
+    def _request_model_list(self) -> None:
+        """Подтянуть модели с сервера при открытии списка — один раз на сигнатуру."""
+        if not mode_from_config(self._manager.settings).uses_llm:
+            return
+        if self._manager.settings.ai.provider == LLAMACPP_PROVIDER:
+            # Пересматриваем диск на каждое открытие: только что скачанный файл
+            # должен появиться сразу, а стоит это один glob по двум папкам.
+            self._sync_model_picker()
+            self._model_picker.reload_open()
+            return
+        signature = self._provider_signature()
+        if self._models_loading or signature in self._model_cache:
+            return
+        self.flush_pending()
+        client = self._build_client()
+        self._models_loading = True
+        self._models_signature = signature
+        self._model_picker.set_loading(True)
+
+        def work() -> tuple[str, ...]:
+            try:
+                return tuple(client.list_models())
+            finally:
+                client.close()
+
+        self._models_runner.run(work)
+
+    def _on_models_loaded(self, result: object) -> None:
+        self._models_loading = False
+        models = tuple(result) if isinstance(result, tuple | list) else ()
+        self._model_cache[self._models_signature] = models
+        self._sync_model_picker()
+        self._model_picker.reload_open()
+
+    def _on_models_failed(self, _message: str) -> None:
+        # Не кэшируем неудачу — повторное открытие попробует снова; текст ошибки
+        # пользователь увидит в блоке «Проверка», список молча остаётся прежним.
+        self._models_loading = False
+        self._model_picker.set_loading(False)
 
     def _sync_provider(self) -> None:
         settings = self._manager.settings
@@ -925,17 +1242,34 @@ class AiTab(SettingsTab):
         return False
 
     def _refresh_model_path_label(self) -> None:
-        """Показать выбранный файл модели или подсказку «файл не выбран»."""
+        """Показать выбранный файл модели, пропажу файла или подсказку «не выбран»."""
         path = self._manager.settings.ai.model_path
-        if path:
-            self._model_path_label.setText(f"Выбран файл: {Path(path).name}")
-        else:
+        if not path:
             self._model_path_label.setText("Файл модели не выбран — скачайте или укажите .gguf.")
+            return
+        file = Path(path)
+        try:
+            exists = file.is_file()
+        except OSError:  # недоступный том — честнее сказать «не найден», чем промолчать
+            exists = False
+        if exists:
+            self._model_path_label.setText(f"Выбран файл: {file.name}")
+        else:
+            self._model_path_label.setText(f"Файл не найден: {path}")
 
     # -- проба соединения и списка моделей -----------------------------------
 
     def _build_client(self) -> LlmClient:
         ai = self._manager.settings.ai
+        extra: dict[str, object] | None = None
+        if ai.provider == LLAMACPP_PROVIDER:
+            # Встроенный движок открывает файл, а не адрес: без `extra` тестовая
+            # панель строила бы клиента без модели и всегда отвечала «не настроено».
+            extra = {
+                "model_path": ai.model_path,
+                "n_ctx": ai.n_ctx,
+                "n_gpu_layers": ai.n_gpu_layers,
+            }
         return self.services.client_factory(
             ai.provider,
             model=ai.model,
@@ -945,6 +1279,7 @@ class AiTab(SettingsTab):
             max_tokens=ai.max_tokens,
             read_timeout_sec=ai.request_timeout_sec,
             store=self.services.secrets,
+            extra=extra,
         )
 
     def _run_probe(self) -> None:
@@ -987,17 +1322,9 @@ class AiTab(SettingsTab):
         self._probe_status.setText(f"Не удалось проверить: {message}")
 
     def _populate_models(self, models: Sequence[str]) -> None:
-        self._model_combo.clear()
-        if not models:
-            self._model_combo.addItem("Сервис не вернул список моделей", "")
-            self._model_combo.setEnabled(False)
-            return
-        for name in models:
-            self._model_combo.addItem(name, name)
-        self._model_combo.setEnabled(True)
-        index = self._model_combo.findData(self._manager.settings.ai.model)
-        if index >= 0:
-            self._model_combo.setCurrentIndex(index)
+        """Проверка вернула список — прогреть кэш пикера, чтобы открылся мгновенно."""
+        self._model_cache[self._provider_signature()] = tuple(models)
+        self._sync_model_picker()
 
     # -- загрузка модели через Ollama ---------------------------------------
 
@@ -1148,6 +1475,7 @@ class AiTab(SettingsTab):
             updates["ai.model"] = spec.name
         self._manager.apply(updates)
         self._refresh_model_path_label()
+        self._sync_model_picker()
         backend = self.services.backend
         if backend is not None and record is not None:
             try:
@@ -1179,10 +1507,24 @@ class AiTab(SettingsTab):
         self._set_local_model(path)
 
     def _set_local_model(self, path: str) -> None:
-        """Указать свой файл модели: пишем абсолютный путь в конфиг, минуя реестр."""
+        """Указать свой файл модели: пишем абсолютный путь в конфиг, минуя реестр.
+
+        Вместе с путём обновляем и ``ai.model``: имя модели — это то, что видно в
+        пикере и в отчётах об использовании, и оставлять там прежнее значение,
+        когда файл уже другой, значит врать про то, чем Айрис думает.
+        """
         resolved = str(Path(path))
-        self._manager.apply({"ai.model_path": resolved})
+        name = Path(resolved).stem
+        self._local_models[name] = resolved
+        self._manager.apply(
+            {
+                "ai.model_path": resolved,
+                "ai.model": name,
+                "ai.model_history": self._merge_history(LLAMACPP_PROVIDER, name),
+            }
+        )
         self._refresh_model_path_label()
+        self._sync_model_picker()
         self._catalog_status.setText(f"Выбран файл: {Path(resolved).name}")
 
     # -- секция параметров генерации ----------------------------------------
@@ -1296,6 +1638,29 @@ class AiTab(SettingsTab):
         self._clear_status.setText("История диалога очищена.")
 
     # -- секция промптов ----------------------------------------------------
+
+    def _build_agent_section(self) -> None:
+        self.add_header("Агентный режим")
+
+        self._agent_toggle = ToggleSwitch(self._theme, label="Агентный режим")
+        self.bind_toggle(self._agent_toggle, "ai.agent_mode", "Агентный режим")
+        self.add_card(
+            "Самостоятельные действия",
+            "Модель сама вызывает действия в несколько шагов, пока не выполнит "
+            "задачу. Нужна облачная модель. Разрешённые для файловых действий "
+            "папки — ниже.",
+            self._agent_toggle,
+        )
+
+        self._allowed_dirs = _AllowedDirsEditor(self._manager, self._theme)
+        self.register_refresh(self._allowed_dirs.refresh)
+        self.add_block(
+            "Папки для файловых действий",
+            "Белый список: читать, писать и удалять файлы Айрис может только "
+            "внутри этих папок. Пусто — файловые действия отключены. Относится "
+            "и к агенту, и к обычным командам.",
+            self._allowed_dirs,
+        )
 
     def _build_prompts_section(self) -> None:
         self._model_header("Промпты")

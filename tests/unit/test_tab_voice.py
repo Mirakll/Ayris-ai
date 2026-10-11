@@ -686,6 +686,53 @@ def test_calibration_recommendation_applied(app: QApplication, manager: ConfigMa
     tab.close()
 
 
+def test_calibration_auto_applies_and_can_revert(app: QApplication, manager: ConfigManager) -> None:
+    from ayris.audio.calibration import CalibrationReport, Recommendation, Verdict
+    from ayris.audio.denoise import DenoiseMode
+
+    manager.apply(
+        {
+            "voice.audio_input.gain": 1.0,
+            "voice.audio_input.vad_threshold": 0.5,
+            "voice.audio_input.noise_floor_db": -45.0,
+            "voice.audio_input.silence_ms": 700,
+            "voice.audio_input.denoise": "off",
+        }
+    )
+    tab = _make_tab(manager, ThemeManager(app))
+    audio = tab._sections[3]
+
+    report = CalibrationReport(
+        verdict=Verdict.GOOD,
+        recommended=Recommendation(
+            gain=2.5,
+            vad_threshold=0.6,
+            noise_floor_db=-42.0,
+            silence_ms=900,
+            denoise=DenoiseMode.SPECTRAL,
+        ),
+    )
+    # No dialog: the recommendation is applied straight away, and «Вернуть
+    # прежние значения» appears so the user can still undo it.
+    audio._on_calibrated(report)
+    applied = manager.settings.voice.audio_input
+    assert applied.gain == pytest.approx(2.5)
+    assert applied.vad_threshold == pytest.approx(0.6)
+    assert applied.denoise == "spectral"
+    assert not audio._undo_button.isHidden()
+    assert "применены" in audio._calibrate_status.text().lower()
+
+    audio._revert_recommendation()
+    reverted = manager.settings.voice.audio_input
+    assert reverted.gain == pytest.approx(1.0)
+    assert reverted.vad_threshold == pytest.approx(0.5)
+    assert reverted.denoise == "off"
+    assert audio._undo_button.isHidden()
+    assert "прежние" in audio._calibrate_status.text().lower()
+    tab.dispose()
+    tab.close()
+
+
 def test_worker_status_summary_is_ignored_gracefully(
     app: QApplication, manager: ConfigManager
 ) -> None:

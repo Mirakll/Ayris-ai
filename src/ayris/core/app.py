@@ -45,6 +45,7 @@ from ayris.core.config import ConfigManager, RestartScope, init_config, reset_co
 from ayris.core.database import Database, init_database, reset_database
 from ayris.core.errors import AyrisError
 from ayris.core.events import (
+    ActiveModelChanged,
     ConfigChanged,
     EventBus,
     MicModeRequested,
@@ -1094,9 +1095,16 @@ class AyrisApp:
             if target is not None:
                 self._profile = self.profile_manager.switch(target)
 
+        def sync_active_llm_model(event: ActiveModelChanged) -> None:
+            # The model manager (tab «Обновления») is the other place a local
+            # model is chosen; mirror its choice into config so the LLM worker
+            # restarts on the new file (RestartScope.LLM on `ai.model_path`).
+            _sync_llm_model_path(self.config, event)
+
         self._state_unsubscribers = (
             self._bus.subscribe(MicModeRequested, set_mic_mode, weak=False),
             self._bus.subscribe(ProfileSwitchRequested, switch_profile, weak=False),
+            self._bus.subscribe(ActiveModelChanged, sync_active_llm_model, weak=False),
         )
 
     def _stop_state(self) -> None:
@@ -1107,6 +1115,21 @@ class AyrisApp:
 
     def __repr__(self) -> str:
         return f"AyrisApp(running={self._running}, stages={len(self._stages_started)})"
+
+
+def _sync_llm_model_path(config: ConfigManager, event: ActiveModelChanged) -> None:
+    """Mirror the active local model into ``ai.model_path`` when llama.cpp is in use.
+
+    Only the embedded llama.cpp engine cares about a weights file — a cloud
+    provider's ``ai.model`` is a remote name we must not clobber — and a cleared
+    slot carries no path to write. The write is tagged ``RestartScope.LLM``, so
+    the worker reloads on the new GGUF.
+    """
+    if event.kind != "llm" or event.cleared:
+        return
+    if str(config.settings.ai.provider).strip().lower() != "llamacpp":
+        return
+    config.apply({"ai.model_path": event.path, "ai.model": event.name})
 
 
 #: Built-in work per stage. Components registered by the subsystems run after

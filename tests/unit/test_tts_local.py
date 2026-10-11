@@ -985,6 +985,25 @@ class TestSileroEngine:
         with pytest.raises(TtsError):
             engine.load(VoiceSpec(engine="silero", voice_id="нет такого"), TtsOptions())
 
+    def test_a_non_ascii_model_path_without_a_short_name_is_explained(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """torch.package opens the file through a narrow fopen, so a Cyrillic
+        profile folder (``C:\\Users\\Артём\\…``) with 8.3 names off has to be
+        reported, not fail deep in native code - see native_path."""
+        model = tmp_path / "v4_ru.pt"
+        model.write_bytes(b"not a real package")
+        engine = engine_class("silero")()
+        # torch is absent on CI; the path guard must fire before it is reached.
+        monkeypatch.setattr(type(engine), "_import", lambda *_a, **_k: object())
+        monkeypatch.setattr("ayris.audio.tts.silero_engine.native_path", lambda _p: None)
+        with pytest.raises(TtsError) as excinfo:
+            engine.load(
+                VoiceSpec(engine="silero", voice_id="baya", path=str(model)),
+                TtsOptions(),
+            )
+        assert "латин" in excinfo.value.user_message
+
 
 class TestCoquiEngine:
     """XTTS is optional, and its absence must be quiet."""

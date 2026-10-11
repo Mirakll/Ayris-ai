@@ -25,6 +25,7 @@ from ayris.core.events import EventBus
 from ayris.gui.theme import ThemeManager
 from ayris.onboarding.services import WizardServices
 from ayris.onboarding.steps.audio import AudioStep
+from ayris.onboarding.steps.llm import LlmStep
 from ayris.onboarding.steps.mode import ModeStep
 from ayris.onboarding.steps.models import ModelsStep, reconcile_wake
 from ayris.onboarding.steps.profile import ProfileStep
@@ -244,8 +245,9 @@ def build_services(
 def build_default_steps(services: WizardServices) -> list[WizardStep]:
     """Штатная последовательность шагов первого запуска, в порядке показа.
 
-    Приветствие → Тема → Режим → Микрофон → Модели → Профиль → Проба. Шаг моделей
-    появляется только при наличии бэкенда каталога — без него скачивать нечего.
+    Приветствие → Тема → Режим → Микрофон → Модели → Языковая модель → Профиль →
+    Проба. Шаги моделей и языковой модели появляются только при наличии бэкенда
+    каталога — без него скачивать нечего.
     """
     theme = services.theme
     config = services.config
@@ -257,6 +259,7 @@ def build_default_steps(services: WizardServices) -> list[WizardStep]:
     ]
     if services.backend is not None:
         steps.append(ModelsStep(theme, config, services.backend, services.bus))
+        steps.append(LlmStep(theme, config, services.backend, services.bus))
     steps.append(ProfileStep(theme, services.importer))
     steps.append(TutorialStep(theme, services.bus, services.submit_text))
     return steps

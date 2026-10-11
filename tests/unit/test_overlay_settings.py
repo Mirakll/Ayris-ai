@@ -471,6 +471,7 @@ def test_apply_overlay_pushes_icosa_config_when_icosa() -> None:
         icosa_think_twist=1.2,
         icosa_speak_twist=1.4,
         icosa_dock_variant=5,
+        icosa_palette="legacy",
     )
     apply_overlay_appearance(sphere, overlay)
     assert sphere.calls[0] == ("set_avatar", "icosa")
@@ -484,6 +485,7 @@ def test_apply_overlay_pushes_icosa_config_when_icosa() -> None:
         },
         "twist": {"calm": 0.3, "listen": 0.6, "think": 1.2, "speak": 1.4},
         "dockVariant": 5,
+        "palette": "legacy",
     }
 
 

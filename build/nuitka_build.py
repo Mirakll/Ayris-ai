@@ -16,11 +16,18 @@ Two design decisions drive everything here:
   executable's *real* directory, which only ``--standalone`` gives.
 * **Explicit includes and excludes, no guessing.** Nuitka follows imports, but the
   ones that matter here are invisible to static analysis: engines loaded through a
-  string (``openwakeword.model``), backends discovered by entry point
-  (``keyring.backends``), and native data shipped beside a wheel's Python
-  (PortAudio inside ``sounddevice``). Those are listed by hand below, and so are
-  the heavy optional extras (``torch``, ``llama_cpp``, ``playwright``,
-  ``paddleocr`` …) that must *not* leak into the shipped dist.
+  string (``openwakeword.model``, ``llama_cpp`` via ``importlib``), backends
+  discovered by entry point (``keyring.backends``), and native data shipped beside
+  a wheel's Python (PortAudio inside ``sounddevice``, the ``llama.dll`` beside
+  ``llama_cpp``). Those are listed by hand below, and so are the heavy optional
+  extras (``torch``, ``playwright``, ``paddleocr`` …) that must *not* leak into the
+  shipped dist.
+* **The local LLM engine ships in the box.** ``llama_cpp`` is bundled on purpose so
+  the built app runs a downloaded GGUF with no separate program (no Ollama, no
+  ``llama-server.exe``): it is an explicit include (string import — Nuitka can't see
+  it) together with its native library as package data. The build therefore requires
+  the CPU ``llama-cpp-python`` wheel installed in the build environment; ``main``
+  checks that up front and fails with a clear message if it is missing.
 
 The actual Nuitka call goes through an injected ``runner`` (defaulting to
 :func:`subprocess.run`) so the whole composition — arguments, post-steps, report —
@@ -52,6 +59,7 @@ __all__ = [
     "clean_outputs",
     "describe_build",
     "embed_manifest",
+    "llama_engine_available",
     "main",
     "nuitka_arguments",
     "nuitka_available",
@@ -83,19 +91,22 @@ QT_PLUGINS = "sensible"
 #: Packages Nuitka would miss because nothing imports them by a static name:
 #: the app tree itself (much of it reached through strings and plugins), the
 #: keyring Windows backend (found via entry points), its ``win32ctypes`` helper,
-#: and ``tzdata`` (zoneinfo finds it only by the distribution being present).
+#: ``tzdata`` (zoneinfo finds it only by the distribution being present), and the
+#: in-process ``llama_cpp`` engine (Ayris imports it through ``importlib`` so the
+#: local LLM stays optional in source, but the shipped app must carry it).
 INCLUDE_PACKAGES = (
     "ayris",
     "keyring.backends",
     "win32ctypes",
     "tzdata",
+    "llama_cpp",
 )
 
 #: Packages whose *non-code* payload — a bundled DLL or model — sits beside the
 #: Python and would otherwise be left behind. sounddevice carries PortAudio, vosk
 #: its libvosk, openwakeword its melspectrogram/embedding ONNX, tzdata the zoneinfo
-#: database, pyrnnoise its RNNoise library; the ONNX/CTranslate2/av stacks ship
-#: their runtimes as data too.
+#: database, pyrnnoise its RNNoise library, llama_cpp its ``llama.dll``/``ggml`` CPU
+#: runtime; the ONNX/CTranslate2/av stacks ship their runtimes as data too.
 INCLUDE_PACKAGE_DATA = (
     "sounddevice",
     "vosk",
@@ -108,22 +119,24 @@ INCLUDE_PACKAGE_DATA = (
     "tzdata",
     "pyrnnoise",
     "webrtcvad",
+    "llama_cpp",
 )
 
 #: Heavy optional extras that must never reach the main dist. Each is an extra in
-#: ``pyproject.toml`` (llm-local, web, ocr, tts-extra, wake-extra, games, cuda) or
-#: a training-only transitive of a shipped engine (``torch`` via openwakeword's
+#: ``pyproject.toml`` (web, ocr, tts-extra, wake-extra, games, cuda) or a
+#: training-only transitive of a shipped engine (``torch`` via openwakeword's
 #: ``data``/``train``; ``matplotlib`` via the pyrnnoise wrapper). The app imports
 #: them lazily, so cutting them here just makes the unshipped feature raise a clear
 #: ImportError instead of bloating the download by hundreds of megabytes. NB:
 #: ``scipy``/``sklearn`` are deliberately absent — openwakeword's ``__init__`` pulls
-#: them on every wake-word load, so they are genuinely runtime, not optional.
+#: them on every wake-word load, so they are genuinely runtime, not optional. So is
+#: ``llama_cpp`` now — the local LLM engine is shipped (see INCLUDE_PACKAGES), not
+#: cut.
 NOFOLLOW_PACKAGES = (
     "torch",
     "torchaudio",
     "torchvision",
     "TTS",
-    "llama_cpp",
     "playwright",
     "paddle",
     "paddleocr",
@@ -266,6 +279,17 @@ def build_command(options: BuildOptions) -> list[str]:
 def nuitka_available() -> bool:
     """Whether Nuitka is importable, without importing it. Guards the real build."""
     return importlib.util.find_spec("nuitka") is not None
+
+
+def llama_engine_available() -> bool:
+    """Whether the in-process llama.cpp engine is importable in the build env.
+
+    The shipped app is meant to run a local model with no separate program, so the
+    engine must be present at *build* time for Nuitka to bundle it (see
+    ``INCLUDE_PACKAGES``). Checked without importing, like :func:`nuitka_available`,
+    so the guard costs nothing and stays mockable in tests.
+    """
+    return importlib.util.find_spec("llama_cpp") is not None
 
 
 def clean_outputs(options: BuildOptions) -> list[Path]:
@@ -461,6 +485,15 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
             "Nuitka не установлен. Поставьте сборочную зависимость: pip install -e .[build]\n"
         )
         return 2
+
+    if not llama_engine_available():
+        sys.stderr.write(
+            "Движок llama.cpp не найден в сборочном окружении, а он вшивается в дистрибутив.\n"
+            "Поставьте CPU-колесо перед сборкой:\n"
+            "  pip install llama-cpp-python==0.3.19 "
+            "--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu\n"
+        )
+        return 3
 
     try:
         result = run_build(options, runner, previous_report=namespace.previous_report)

@@ -100,7 +100,7 @@ class OpenWakeWordEngine(WakeWordEngine):
         module = self._import("openwakeword.model")
         self._numpy = self._import("numpy")
 
-        paths = {phrase.text: self._resolve(phrase, spec.models_dir) for phrase in phrases}
+        paths = self._resolve_all(phrases, spec.models_dir)
         framework = spec.option("inference_framework", _DEFAULT_FRAMEWORK)
         try:
             self._model = module.Model(
@@ -212,6 +212,46 @@ class OpenWakeWordEngine(WakeWordEngine):
             if candidate.is_file():
                 found[keyword] = str(candidate)
         return found
+
+    def _resolve_all(
+        self, phrases: tuple[WakePhrase, ...], models_dir: Path | None
+    ) -> dict[str, str]:
+        """Model file per phrase, skipping variants that have none.
+
+        A user adds pronunciation variants in the settings window
+        (``айрис``/``аирис``/``ирис``) faster than a model can be trained for
+        each, and openWakeWord keys on a model file per variant rather than on
+        the text.  Letting one unmatched variant abort :meth:`load` used to take
+        the whole detector down - the microphone went deaf and the wake test
+        stuck on zero hits - even when the main phrase had a perfectly good
+        model.  So a variant without a model is logged and dropped; only an empty
+        result is fatal, and then the last phrase's own message - it names the
+        folder a model belongs in - is what the user sees.
+        """
+        paths: dict[str, str] = {}
+        last_error: WakeWordError | None = None
+        for phrase in phrases:
+            try:
+                paths[phrase.text] = self._resolve(phrase, models_dir)
+            except WakeWordError as exc:
+                _log.warning(
+                    "openwakeword: у варианта %r нет модели, пропущен: %s", phrase.text, exc
+                )
+                last_error = exc
+        if not paths:
+            # Not one variant resolved: the genuine "download a model" case.
+            # _require_phrases guaranteed a non-empty list, so a total failure
+            # always left an error to re-raise.
+            if last_error is not None:
+                raise last_error
+            raise WakeWordError(  # pragma: no cover - defensive; list is non-empty
+                "openwakeword: no phrase resolved to a model",
+                user_message=(
+                    "Не найдена ни одна модель слова активации. "
+                    "Скачайте или обучите модель и положите её в папку профиля."
+                ),
+            )
+        return paths
 
     def _resolve(self, phrase: WakePhrase, models_dir: Path | None) -> str:
         """Find the model file for one phrase.

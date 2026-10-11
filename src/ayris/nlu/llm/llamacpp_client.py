@@ -29,6 +29,7 @@ covered without the native wheel or a real GGUF on disk.
 from __future__ import annotations
 
 import importlib.util
+import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -142,6 +143,44 @@ def _default_factory(options: LlamaCppOptions) -> _ChatModel:
     return handle
 
 
+def _fold_system_into_user(payload: Sequence[JsonObject]) -> list[JsonObject] | None:
+    """Merge every ``system`` message into the first ``user`` turn.
+
+    Some GGUF chat templates — the Gemma-2 family (and its Russian fine-tunes
+    such as Vikhr-Gemma) among them — raise «System role not supported» rather
+    than accept a separate system message. The system prompt still has to reach
+    the model, and the convention those templates expect is to carry it as the
+    opening of the first user message. This keeps model switching free: templates
+    that *do* accept a system role (Gemma-3, Qwen, Llama) never go through here
+    and lose no quality.
+
+    Returns a fresh payload, or ``None`` when there is no system content to move,
+    so the caller re-raises the real error instead of masking an unrelated one.
+    """
+    system_parts = [
+        str(message.get("content", ""))
+        for message in payload
+        if message.get("role") == "system" and message.get("content")
+    ]
+    if not system_parts:
+        return None
+    blob = "\n\n".join(system_parts)
+    folded: list[JsonObject] = []
+    merged = False
+    for message in payload:
+        if message.get("role") == "system":
+            continue
+        if not merged and message.get("role") == "user":
+            text = str(message.get("content", ""))
+            folded.append({**message, "content": f"{blob}\n\n{text}" if text else blob})
+            merged = True
+        else:
+            folded.append(dict(message))
+    if not merged:  # a request with no user turn at all — give the prompt one
+        folded.insert(0, {"role": "user", "content": blob})
+    return folded
+
+
 class LlamaCppLlmClient(LlmClient):
     """A GGUF model run in-process through the optional llama.cpp binding."""
 
@@ -157,6 +196,14 @@ class LlamaCppLlmClient(LlmClient):
         self._injected = factory is not None
         self._handle: _ChatModel | None = None
         self._last_used = 0.0
+        # Serialises the lazy load: `warm()` (a startup thread) and `stream()`
+        # (the request thread) can both reach `_handle_model`, and without this
+        # they could each open the GGUF and leak one native handle.
+        self._load_lock = threading.Lock()
+        # Set the first time a GGUF's chat template rejects a system role: from
+        # then on this client folds the system prompt into the first user turn
+        # upfront instead of failing and retrying. See :func:`_fold_system_into_user`.
+        self._fold_system = False
 
     # ------------------------------------------------------------------
     # availability and configuration
@@ -210,19 +257,44 @@ class LlamaCppLlmClient(LlmClient):
     # ------------------------------------------------------------------
 
     def _handle_model(self) -> _ChatModel:
-        """Load the model on first use, then reuse the held handle."""
-        if self._handle is None:
-            reason = self._unconfigured_reason()
-            if reason:
-                raise LlmError(f"llamacpp: not configured: {reason}", user_message=reason)
-            try:
-                self._handle = self._factory(self._options)
-            except Exception as exc:
-                raise LlmError(
-                    f"llamacpp: failed to load {self._options.model_path!r}: {exc}",
-                    user_message="Не удалось загрузить локальную модель.",
-                ) from exc
+        """Load the model on first use, then reuse the held handle.
+
+        The load is guarded by :attr:`_load_lock` and double-checked: the fast
+        path (handle already open) never touches the lock, and two threads racing
+        the first load open the file once between them.
+        """
+        if self._handle is not None:
+            return self._handle
+        with self._load_lock:
+            if self._handle is None:
+                reason = self._unconfigured_reason()
+                if reason:
+                    raise LlmError(f"llamacpp: not configured: {reason}", user_message=reason)
+                try:
+                    self._handle = self._factory(self._options)
+                except Exception as exc:
+                    raise LlmError(
+                        f"llamacpp: failed to load {self._options.model_path!r}: {exc}",
+                        user_message="Не удалось загрузить локальную модель.",
+                    ) from exc
         return self._handle
+
+    def warm(self) -> bool:
+        """Load the GGUF now instead of waiting for the first answer.
+
+        The one thing a supervisor calls at startup to make «запускается вместе с
+        Айрис» literally true: opening the model file is the slow «первый ответ»,
+        and pulling it forward off the request path means the first chat is fast.
+        Idempotent — a second call reuses the handle :meth:`_handle_model` already
+        holds. Returns whether a model is loaded afterwards; a caller that warms an
+        unconfigured client gets ``False`` rather than an exception, because a
+        missing file at boot is not a request that failed.
+        """
+        if not self.configured:
+            return False
+        self._handle_model()
+        self._last_used = monotonic()
+        return self._handle is not None
 
     def _pick_temperature(self, override: float | None) -> float:
         picked = override if override is not None else self._options.temperature
@@ -230,6 +302,44 @@ class LlamaCppLlmClient(LlmClient):
 
     def _pick_max_tokens(self, override: int | None) -> int | None:
         return override if override is not None else self._options.max_tokens
+
+    def _open_chat(
+        self,
+        model: _ChatModel,
+        payload: list[JsonObject],
+        *,
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> Iterator[Mapping[str, Any]]:
+        """Start the streaming completion, tolerant of system-less templates.
+
+        The template is applied synchronously when the completion is created, so
+        a «System role not supported» raise surfaces here before any token is
+        emitted — which makes it safe to fold the system prompt into the first
+        user turn and retry once. The first such failure is remembered
+        (:attr:`_fold_system`) so later calls fold upfront instead of paying the
+        failed attempt again. See :func:`_fold_system_into_user`.
+        """
+        kwargs: dict[str, Any] = {
+            "temperature": self._pick_temperature(temperature),
+            "max_tokens": self._pick_max_tokens(max_tokens),
+            "stream": True,
+        }
+        if self._fold_system:
+            payload = _fold_system_into_user(payload) or payload
+        try:
+            return model.create_chat_completion(messages=payload, **kwargs)
+        except Exception:
+            folded = _fold_system_into_user(payload)
+            if folded is None:
+                raise  # no system message to move: this is a real failure
+            chunks = model.create_chat_completion(messages=folded, **kwargs)
+            self._fold_system = True
+            _log.info(
+                "llamacpp: GGUF chat template rejects a system role; folding the "
+                "system prompt into the first user message from now on"
+            )
+            return chunks
 
     def stream(
         self,
@@ -246,12 +356,7 @@ class LlamaCppLlmClient(LlmClient):
         self._last_used = monotonic()
         finish_reason: str | None = None
         try:
-            chunks = model.create_chat_completion(
-                messages=payload,
-                temperature=self._pick_temperature(temperature),
-                max_tokens=self._pick_max_tokens(max_tokens),
-                stream=True,
-            )
+            chunks = self._open_chat(model, payload, temperature=temperature, max_tokens=max_tokens)
             for chunk in chunks:
                 if predicate():
                     yield LlmDoneDelta(finish_reason=FinishReason.CANCELLED)

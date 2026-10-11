@@ -25,6 +25,7 @@ from PySide6.QtWidgets import QApplication, QFrame, QWidget
 from ayris.core.config import ConfigManager
 from ayris.core.events import (
     ActionFailed,
+    AssistantReplied,
     EventBus,
     MicToggleRequested,
     ModeChanged,
@@ -226,6 +227,57 @@ def test_bus_events_reflect_on_the_window(theme: ThemeManager, manager: ConfigMa
         assert (DialogKind.HEARD, "привет") in kinds
         assert (DialogKind.ANSWER, "здравствуйте") in kinds
         assert (DialogKind.ERROR, "не вышло") in kinds
+    finally:
+        window.exit()
+
+
+def test_reply_prints_without_a_voice(theme: ThemeManager, manager: ConfigManager) -> None:
+    """Ответ пайплайна печатается из ``AssistantReplied``, не дожидаясь озвучки."""
+    bus = EventBus(thread_id=None)
+    window = _window(theme, manager, bus=bus)
+    try:
+        bus.publish(AssistantReplied(text="сделала", failed=False, spoken=False))
+        kinds = [(e.kind, e.text) for e in window._dialog.log.entries]
+        assert (DialogKind.ANSWER, "сделала") in kinds
+    finally:
+        window.exit()
+
+
+def test_failure_reply_prints_as_an_error(theme: ThemeManager, manager: ConfigManager) -> None:
+    """Ошибка пайплайна теперь доходит до чата, а не только до динамиков."""
+    bus = EventBus(thread_id=None)
+    window = _window(theme, manager, bus=bus)
+    try:
+        bus.publish(AssistantReplied(text="модель не настроена", failed=True, spoken=False))
+        kinds = [(e.kind, e.text) for e in window._dialog.log.entries]
+        assert (DialogKind.ERROR, "модель не настроена") in kinds
+    finally:
+        window.exit()
+
+
+def test_a_spoken_reply_is_not_doubled_by_its_tts_echo(
+    theme: ThemeManager, manager: ConfigManager
+) -> None:
+    """Одна фраза — одна строка: ``TtsStarted`` того же ответа не дублирует её."""
+    bus = EventBus(thread_id=None)
+    window = _window(theme, manager, bus=bus)
+    try:
+        bus.publish(AssistantReplied(text="готово", failed=False, spoken=True))
+        bus.publish(TtsStarted(text="готово"))
+        answers = [e for e in window._dialog.log.entries if e.text == "готово"]
+        assert len(answers) == 1
+    finally:
+        window.exit()
+
+
+def test_speech_without_a_reply_still_logs(theme: ThemeManager, manager: ConfigManager) -> None:
+    """Озвучка вне сессии (действие «скажи», проба голоса) печатается как ответ."""
+    bus = EventBus(thread_id=None)
+    window = _window(theme, manager, bus=bus)
+    try:
+        bus.publish(TtsStarted(text="тестовая фраза"))
+        kinds = [(e.kind, e.text) for e in window._dialog.log.entries]
+        assert (DialogKind.ANSWER, "тестовая фраза") in kinds
     finally:
         window.exit()
 

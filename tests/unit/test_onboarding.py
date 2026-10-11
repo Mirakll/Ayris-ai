@@ -57,7 +57,7 @@ _SHA = "0" * 64
 #: произвольных программ — ничего из этого учебные команды не делают.
 _FORBIDDEN_BLOCKS = {"PowerAction", "RunApp"}
 #: Полный набор ключей шагов в штатном порядке показа.
-_FULL_SEQUENCE = ["welcome", "theme", "mode", "audio", "models", "profile", "tutorial"]
+_FULL_SEQUENCE = ["welcome", "theme", "mode", "audio", "models", "llm", "profile", "tutorial"]
 
 _EXAMPLE_FILES = sorted(EXAMPLES_DIR.glob("*.ayris"))
 

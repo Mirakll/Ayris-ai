@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AYRIS — главный экран (веб-копия)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* ── токены темы «Тёмная фиолетовая» (resources/themes/dark_purple.json) ── */
+  :root {
+    --background:#16131F; --surface:#1C1830; --surface-hi:#29223C; --border:#2E2742;
+    --accent:#9B6DFF; --accent-hover:#B092FF; --on-accent:#140D22;
+    --text:#ECE7F6; --text-2:#C3BAD9; --muted:#948AAC;
+    --r-md:12px; --r-lg:20px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px;
+    --ctl:36px;
+    --font:"Inter","Segoe UI Variable","Segoe UI",Arial,sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { height:100%; }
+  body { font-family:var(--font); background:#000; color:var(--text); overflow:hidden; }
+
+  .app { position:fixed; inset:0; display:grid; grid-template-columns:56fr 44fr; }
+
+  /* ───────────── левая колонка: витрина ───────────── */
+  .showcase { position:relative; background:var(--background); padding:var(--sp-xl);
+    display:grid; grid-template-rows:auto 1fr auto; overflow:hidden; }
+  .brand { z-index:2; }
+  .brand .word { font-size:28px; font-weight:700; letter-spacing:2px; color:var(--text); line-height:1; }
+  .brand .clock { font-size:14px; font-weight:500; letter-spacing:1px; color:var(--text-2);
+    text-align:center; margin-top:6px; }
+  .stage { position:relative; margin:0 calc(var(--sp-xl) * -1); }
+  .stage iframe { position:absolute; inset:0; width:100%; height:100%; border:0; display:block; }
+  .sc-foot { display:flex; align-items:center; z-index:2; }
+  .sc-foot .cap { flex:1; text-align:center; font-size:12px; letter-spacing:4px; color:var(--muted); }
+  .ghost { width:var(--ctl); height:var(--ctl); display:grid; place-items:center; border:0;
+    background:transparent; color:var(--muted); font-size:20px; border-radius:var(--r-md); cursor:pointer;
+    transition:.18s; }
+  .ghost:hover { color:var(--text); background:var(--surface-hi); }
+  .foot-spacer { width:var(--ctl); height:var(--ctl); }
+
+  /* ───────────── правая колонка: диалог ───────────── */
+  .dialog { background:var(--surface); padding:var(--sp-xl); display:grid;
+    grid-template-rows:auto 1fr auto; gap:var(--sp-md); min-width:0; }
+  .bar { display:flex; align-items:flex-start; gap:var(--sp-sm); }
+  .bar .tb { width:var(--ctl); height:var(--ctl); display:grid; place-items:center; border:0;
+    background:transparent; color:var(--text-2); font-size:23px; border-radius:var(--r-md); cursor:pointer; transition:.18s; }
+  .bar .tb:hover { color:var(--text); background:var(--surface-hi); }
+  .bar .tb.close { color:var(--accent); font-size:20px; }
+  .bar .grow { flex:1; }
+  .profile-col { display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .profile { background:transparent; border:0; color:var(--text); font-weight:500; font-size:14px; cursor:pointer; }
+  .profile:hover { color:var(--accent); }
+  .offline { font-size:12px; color:var(--muted); }
+  .stats { display:flex; gap:14px; align-items:center; font-size:12px; color:var(--muted);
+    align-self:center; white-space:nowrap; letter-spacing:.02em; }
+  .stats b { color:var(--text-2); font-weight:600; }
+
+  .body { display:grid; place-items:center; }
+  .empty { display:flex; flex-direction:column; align-items:center; gap:var(--sp-lg); }
+  .avatar { width:56px; height:56px; }
+  .status { font-size:28px; font-weight:700; color:var(--text); text-align:center; }
+
+  .input { background:var(--surface-hi); border:1px solid var(--border); border-radius:var(--r-lg);
+    padding:6px 8px 10px; display:grid; gap:2px; }
+  .input:focus-within { border-color:var(--accent); }
+  .input .field { background:transparent; border:0; outline:0; color:var(--text); font-size:15px;
+    font-family:var(--font); padding:6px 6px 2px; }
+  .input .field::placeholder { color:var(--muted); }
+  .input .ctrls { display:flex; align-items:center; gap:4px; }
+  .input .ctrls .grow { flex:1; }
+  .ig { width:var(--ctl); height:var(--ctl); display:grid; place-items:center; border:0; background:transparent;
+    color:var(--text-2); border-radius:var(--r-md); cursor:pointer; }
+  .ig.code { font-weight:600; font-size:16px; }
+  .ig:hover { color:var(--text); }
+  .send { width:var(--ctl); height:var(--ctl); display:grid; place-items:center; border:0; cursor:pointer;
+    background:var(--accent); color:var(--on-accent); border-radius:var(--r-md); }
+  .send:hover { background:var(--accent-hover); }
+  .icon { width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:1.75;
+    stroke-linecap:round; stroke-linejoin:round; }
+</style>
+</head>
+<body>
+  <div class="app">
+    <!-- витрина -->
+    <section class="showcase">
+      <div class="brand">
+        <div class="word">AYRIS</div>
+        <div class="clock" id="clock">00:00</div>
+      </div>
+      <div class="stage">
+        <iframe src="_sphere.html#a=5236a6&b=52a8f0&e=b7ccf2&bg=16131F" title="Сфера состояния Айрис"></iframe>
+      </div>
+      <div class="sc-foot">
+        <button class="ghost" title="Во весь экран" aria-label="Полноэкранный режим">⤢</button>
+        <div class="cap">A Y R I S &nbsp; A S S I S T A N T</div>
+        <div class="foot-spacer"></div>
+      </div>
+    </section>
+
+    <!-- диалог -->
+    <section class="dialog">
+      <div class="bar">
+        <button class="tb" title="Настройки" aria-label="Открыть настройки">≡</button>
+        <span class="grow"></span>
+        <div class="profile-col">
+          <button class="profile">По умолчанию&nbsp; ▾</button>
+          <span class="offline">Офлайн</span>
+        </div>
+        <span class="grow"></span>
+        <div class="stats" aria-hidden="true">
+          <span>кадров/с <b>N/A</b></span><span>ГП <b>8&nbsp;%</b></span>
+          <span>ЦП <b>16&nbsp;%</b></span><span>LAT <b>N/A</b></span>
+        </div>
+        <button class="tb" title="Свернуть" aria-label="Свернуть окно">–</button>
+        <button class="tb close" title="Закрыть" aria-label="Закрыть окно">✕</button>
+      </div>
+
+      <div class="body">
+        <div class="empty">
+          <svg class="avatar" viewBox="0 0 100 100" aria-label="Статус ассистента">
+            <defs><linearGradient id="tri" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#C6B8E8" stop-opacity="0.7"/>
+              <stop offset="1" stop-color="#9E8FC7" stop-opacity="0.58"/>
+            </linearGradient></defs>
+            <path d="M50 18 L82 74 L18 74 Z" fill="url(#tri)" stroke="#B4A6D9" stroke-opacity="0.66"
+              stroke-width="6" stroke-linejoin="round"/>
+          </svg>
+          <div class="status">Привет, чем помочь?</div>
+        </div>
+      </div>
+
+      <div class="input">
+        <input class="field" type="text" placeholder="Чем могу помочь сегодня?" aria-label="Поле ввода фразы">
+        <div class="ctrls">
+          <button class="ig code" title="Режим команды или кода">&lt;/&gt;</button>
+          <span class="grow"></span>
+          <button class="ig" title="Голосовой ввод" aria-label="Голосовой ввод">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4M9 21h6"/></svg>
+          </button>
+          <button class="send" title="Отправить" aria-label="Отправить команду">
+            <svg class="icon" viewBox="0 0 24 24" style="stroke:var(--on-accent)"><path d="M12 20V5M6 11l6-6 6 6"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const pad = n => String(n).padStart(2, '0');
+    function tick(){ const d = new Date(); document.getElementById('clock').textContent = pad(d.getHours())+':'+pad(d.getMinutes()); }
+    tick(); setInterval(tick, 1000);
+  </script>
+</body>
+</html>

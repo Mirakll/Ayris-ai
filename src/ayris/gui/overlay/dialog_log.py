@@ -30,18 +30,21 @@ class DialogKind(StrEnum):
     HEARD = "heard"
     ANSWER = "answer"
     ERROR = "error"
+    STEP = "step"
 
 
 _PREFIX: Final[dict[DialogKind, str]] = {
     DialogKind.HEARD: "Вы",
     DialogKind.ANSWER: "Айрис",
     DialogKind.ERROR: "Ошибка",
+    DialogKind.STEP: "",
 }
 
 _COLOR_TOKEN: Final[dict[DialogKind, str]] = {
     DialogKind.HEARD: "text_secondary",
     DialogKind.ANSWER: "text_primary",
     DialogKind.ERROR: "error",
+    DialogKind.STEP: "text_muted",
 }
 
 
@@ -53,7 +56,9 @@ class DialogEntry:
 
     def render(self) -> str:
         stamp = self.at.astimezone().strftime("%H:%M")
-        return f"{stamp}  {_PREFIX[self.kind]}: {self.text}"
+        prefix = _PREFIX[self.kind]
+        body = f"{prefix}: {self.text}" if prefix else self.text
+        return f"{stamp}  {body}"
 
 
 class DialogLog(QWidget):

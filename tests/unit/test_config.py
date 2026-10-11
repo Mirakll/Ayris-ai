@@ -323,6 +323,136 @@ class TestRecovery:
         assert manager.settings.general.theme == "light"
         assert not manager.path.with_name("config.toml.broken").exists()
 
+    def test_a_transient_read_error_is_retried_not_defaulted(
+        self, config_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A sharing violation during another instance's atomic replace must be
+        retried, not read as "no settings" — the race that silently reset the
+        LLM model to defaults and showed «не выбран файл модели»."""
+        config_path.write_text('[general]\ntheme = "light"\n', encoding="utf-8")
+        real = Path.read_bytes
+        calls = {"n": 0}
+
+        def flaky(self: Path) -> bytes:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise OSError(32, "sharing violation")
+            return real(self)
+
+        monkeypatch.setattr("pathlib.Path.read_bytes", flaky)
+        monkeypatch.setattr("ayris.core.config.time.sleep", lambda _s: None)
+
+        settings, dropped = load_settings(config_path)
+
+        assert settings.general.theme == "light"
+        assert dropped == ()
+        assert calls["n"] >= 3
+
+    def test_a_zero_byte_glimpse_mid_replace_is_retried(
+        self, config_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A read that catches the file at zero bytes mid-replace must retry and
+        pick up the real content, not fall back to defaults."""
+        config_path.write_text('[general]\ntheme = "light"\n', encoding="utf-8")
+        real = Path.read_bytes
+        calls = {"n": 0}
+
+        def flaky(self: Path) -> bytes:
+            calls["n"] += 1
+            return b"" if calls["n"] == 1 else real(self)
+
+        monkeypatch.setattr("pathlib.Path.read_bytes", flaky)
+        monkeypatch.setattr("ayris.core.config.time.sleep", lambda _s: None)
+
+        settings, _dropped = load_settings(config_path)
+
+        assert settings.general.theme == "light"
+        assert calls["n"] >= 2
+
+    def test_a_brief_absence_during_os_replace_is_waited_out(
+        self, config_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The measured failure mode: a concurrent ``os.replace`` makes the target
+        momentarily vanish, so an open raises ``FileNotFoundError`` for a few
+        milliseconds. That must be waited out — treating it as "first run" is what
+        reset every setting to its default and showed «не выбран файл модели»."""
+        config_path.write_text('[general]\ntheme = "light"\n', encoding="utf-8")
+        real = Path.read_bytes
+        calls = {"n": 0}
+
+        def vanishing(self: Path) -> bytes:
+            calls["n"] += 1
+            if calls["n"] <= 3:
+                raise FileNotFoundError(2, "no such file")  # mid-replace glimpse
+            return real(self)
+
+        # A real first run keeps the file absent; the race brings it back at once.
+        # Demand real persistence so a transient miss can never read as first run.
+        monkeypatch.setattr("ayris.core.config._ABSENT_CONFIRM_SEC", 10.0)
+        monkeypatch.setattr("pathlib.Path.read_bytes", vanishing)
+        monkeypatch.setattr("ayris.core.config.time.sleep", lambda _s: None)
+
+        settings, dropped = load_settings(config_path)
+
+        assert settings.general.theme == "light"
+        assert dropped == ()
+        assert calls["n"] >= 4
+
+    def test_a_persistent_read_error_raises_transient_without_quarantine(
+        self, config_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A file that never becomes readable is a lock, not corruption: the error
+        surfaces flagged ``transient`` so the caller waits and keeps the user's
+        settings, rather than quarantining a healthy file and dropping to
+        defaults — the «не выбран файл модели» regression."""
+        config_path.write_text('[general]\ntheme = "light"\n', encoding="utf-8")
+        monkeypatch.setattr("ayris.core.config._READ_RETRY_BUDGET_SEC", 0.1)
+
+        def always_fail(self: Path) -> bytes:
+            raise OSError(32, "sharing violation")
+
+        monkeypatch.setattr("pathlib.Path.read_bytes", always_fail)
+        monkeypatch.setattr("ayris.core.config.time.sleep", lambda _s: None)
+
+        with pytest.raises(ConfigError) as caught:
+            load_settings(config_path)
+        assert caught.value.transient is True
+
+    def test_a_persistent_zero_byte_read_of_a_nonempty_file_raises_transient(
+        self, config_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-empty file (per the OS) that keeps reading as zero bytes is a
+        mid-swap glimpse that never settled — never "no settings"."""
+        config_path.write_text('[general]\ntheme = "light"\n', encoding="utf-8")
+        monkeypatch.setattr("ayris.core.config._READ_RETRY_BUDGET_SEC", 0.1)
+        monkeypatch.setattr("ayris.core.config.time.sleep", lambda _s: None)
+        monkeypatch.setattr("pathlib.Path.read_bytes", lambda _self: b"")
+
+        with pytest.raises(ConfigError) as caught:
+            load_settings(config_path)
+        assert caught.value.transient is True
+
+    def test_load_keeps_current_settings_on_a_transient_read(
+        self, manager: ConfigManager, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``ConfigManager.load`` must not quarantine a file it merely could not
+        read in time, nor reset to defaults: it keeps the settings it holds. This
+        is the launch-race guard — a relaunch that reads config.toml while the old
+        instance still holds it must never start the workers on schema defaults."""
+        manager.apply({"ai.provider": "llamacpp", "ai.model_path": "D:/m/model.gguf"})
+        monkeypatch.setattr("ayris.core.config._READ_RETRY_BUDGET_SEC", 0.1)
+        monkeypatch.setattr("ayris.core.config.time.sleep", lambda _s: None)
+        monkeypatch.setattr(
+            "pathlib.Path.read_bytes",
+            lambda _self: (_ for _ in ()).throw(OSError(32, "sharing violation")),
+        )
+
+        kept = manager.load()
+
+        assert kept.ai.model_path == "D:/m/model.gguf"
+        assert kept.ai.provider == "llamacpp"
+        assert not manager.path.with_name("config.toml.broken").exists()
+
 
 class TestPersistence:
     def test_round_trip_after_changing_several_sections(self, config_path: Path) -> None:
@@ -338,6 +468,42 @@ class TestPersistence:
 
         assert dropped == ()
         assert restored == settings
+
+    def test_local_llm_fields_survive_a_round_trip(self, config_path: Path) -> None:
+        settings = Settings.model_validate(
+            {
+                "ai": {
+                    "provider": "llamacpp",
+                    "model_path": "C:/m/x.gguf",
+                    "n_ctx": 8192,
+                    "n_gpu_layers": 20,
+                }
+            }
+        )
+
+        save_settings(settings, config_path)
+        restored, dropped = load_settings(config_path)
+
+        assert dropped == ()
+        assert restored.ai.provider == "llamacpp"
+        assert restored.ai.model_path == "C:/m/x.gguf"
+        assert restored.ai.n_ctx == 8192
+        assert restored.ai.n_gpu_layers == 20
+
+    def test_llm_threads_survive_a_round_trip(self, config_path: Path) -> None:
+        """The CPU-core count for the in-process engine must persist unclamped."""
+        settings = Settings.model_validate({"performance": {"llm_threads": 6}})
+
+        save_settings(settings, config_path)
+        restored, dropped = load_settings(config_path)
+
+        assert dropped == ()
+        assert restored.performance.llm_threads == 6
+
+    @pytest.mark.parametrize("count", [0, 65])
+    def test_llm_threads_reject_values_outside_the_range(self, count: int) -> None:
+        with pytest.raises(ValueError, match="llm_threads"):
+            Settings.model_validate({"performance": {"llm_threads": count}})
 
     def test_saving_preserves_a_comment_the_user_wrote(self, config_path: Path) -> None:
         ConfigManager(config_path).load()
@@ -380,6 +546,9 @@ class TestRestartScopes:
             ("voice.tts.engine", RestartScope.TTS),
             ("voice.wake.engine", RestartScope.WAKE),
             ("ai.model", RestartScope.LLM),
+            ("ai.model_path", RestartScope.LLM),
+            ("ai.n_ctx", RestartScope.LLM),
+            ("ai.n_gpu_layers", RestartScope.LLM),
             ("general.always_run_as_admin", RestartScope.APP),
             ("voice.tts.speed", RestartScope.NONE),
             ("overlay.rotation_speed", RestartScope.NONE),

@@ -814,6 +814,48 @@ class TestRegistry:
         assert audio.spec.heartbeat_timeout == pytest.approx(3.0)
         assert audio.spec.restart_scope is RestartScope.AUDIO
 
+    def test_llm_spec_carries_model_path_and_local_knobs(self):
+        settings = settings_with(
+            {"ai": {"model_path": "C:/m/x.gguf", "n_ctx": 8192, "n_gpu_layers": 20}}
+        )
+        plan = plan_workers(settings, include_unavailable=True)
+        llm = plan.by_kind(WorkerKind.LLM)
+        assert llm is not None
+        extra = llm.spec.params["extra"]
+        assert extra["model_path"] == "C:/m/x.gguf"
+        assert extra["n_ctx"] == 8192
+        assert extra["n_gpu_layers"] == 20
+        # STT/TTS parity: the worker measures and unloads the model itself.
+        assert llm.spec.params["ram_limit_mb"] == settings.performance.ram_limit_mb
+        assert llm.spec.params["model_idle_sec"] == settings.performance.model_idle_sec
+        assert llm.spec.restart_scope is RestartScope.LLM
+
+    def test_llm_spec_search_dirs_cover_current_and_remembered_paths(self):
+        """The folders to recover a .gguf from: the current model's and every
+        remembered full path, so an empty or stale `model_path` is rescued from
+        where the user actually keeps models — not left to «не выбран файл»."""
+        settings = settings_with(
+            {
+                "ai": {
+                    "model_path": "D:/ayris-models/llm/current.gguf",
+                    "model_history": {
+                        "llamacpp": [
+                            "E:/other/old.gguf",
+                            "just-a-display-name",
+                        ]
+                    },
+                }
+            }
+        )
+        plan = plan_workers(settings, include_unavailable=True)
+        llm = plan.by_kind(WorkerKind.LLM)
+        assert llm is not None
+        dirs = {d.replace("\\", "/") for d in llm.spec.params["extra"]["model_search_dirs"]}
+        assert "D:/ayris-models/llm" in dirs
+        assert "E:/other" in dirs
+        # A bare display name is not a path and contributes no directory.
+        assert not any("display" in d for d in dirs)
+
     def test_no_credentials_are_copied_into_a_spec(self):
         """Only the name of a credential travels; the key stays in Windows."""
         plan = plan_workers(Settings(), include_unavailable=True)

@@ -105,6 +105,7 @@
   import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
   import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
   import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+  import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
   // ---------------------------------------------------------------------------
   // Сцена / камера / рендер
@@ -320,9 +321,43 @@
   // Постобработка: bloom даёт мягкое неоновое свечение
   // ---------------------------------------------------------------------------
   const composer = new EffectComposer(renderer);
-  composer.addPass(new RenderPass(scene, camera));
+  const renderPass = new RenderPass(scene, camera);
+  renderPass.clearColor = new THREE.Color(0x000000);
+  renderPass.clearAlpha = 0;                       // кадр стартует полностью прозрачным
+  composer.addPass(renderPass);
   const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.55, 0.6, 0.22);
   composer.addPass(bloom);
+  // Финальный проход: альфа пикселя = его яркость — пустые (чёрные) места кадра
+  // получают α=0 и исчезают, фигура и свечение берут α по яркости. Так фон уходит
+  // совсем, без заливки цветом окна. Цвет домножаем на α (канвас premultiplied).
+  const alphaFromLuma = new ShaderPass({
+    uniforms: {
+      tDiffuse: { value: null },
+      uLo: { value: 0.16 }, uHi: { value: 0.46 },
+      uGlow: { value: 1.10 },                 // сила мягкого ореола (0 — выкл.)
+      uGlowR0: { value: 0.66 }, uGlowR1: { value: 1.00 },  // гасить лишь дальние углы
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform sampler2D tDiffuse; uniform float uLo; uniform float uHi;
+      uniform float uGlow; uniform float uGlowR0; uniform float uGlowR1; varying vec2 vUv;
+      void main(){
+        vec4 c = texture2D(tDiffuse, vUv);
+        float v = max(max(c.r, c.g), c.b);
+        // Плотная фигура: чёрная точка по альфе отрезает тусклый хвост bloom.
+        float core = smoothstep(uLo, uHi, v);
+        // Мягкий ореол: естественный спад bloom по силуэту, тает наружу по окну (не
+        // «шар»). Нижний порог 0.025 срезает равномерный пол mip; дальняя страховка — углы.
+        float glow = smoothstep(0.025, 0.30, v) * uGlow;
+        float d = distance(vUv, vec2(0.5));
+        glow *= 1.0 - smoothstep(uGlowR0, uGlowR1, d);
+        float a = clamp(max(core, glow), 0.0, 1.0);
+        gl_FragColor = vec4(c.rgb * a, a);
+      }`,
+  });
+  composer.addPass(alphaFromLuma);
 
   // ---------------------------------------------------------------------------
   // Режимы. Каждый — целевые значения uniform, между ними плавно интерполируем.
@@ -501,14 +536,13 @@
     if (p) p.style.display = show ? 'flex' : 'none';
     if (h) h.style.display = show ? 'block' : 'none';
   };
-  // EffectComposer + bloom выдают непрозрачный кадр, поэтому пустые места канваса
-  // становятся чёрными. Красим фон сцены в цвет панели-хоста — чёрного квадрата
-  // не остаётся. Пусто/null — вернуть прозрачный клир (для standalone-демо).
+  // Фон всегда прозрачный. Прозрачность кадра обеспечивает финальный проход
+  // alphaFromLuma (α по яркости), поэтому раньше нужную тут заливку цветом окна
+  // (чтобы не было «коробки») убрали — цвет игнорируем, держим клир прозрачным.
   window.setBackground = (hex) => {
-    if (!hex) { scene.background = null; renderer.setClearColor(0x000000, 0); return; }
-    const c = new THREE.Color(hex);
-    scene.background = c;
-    renderer.setClearColor(c, 1);
+    void hex;
+    scene.background = null;
+    renderer.setClearColor(0x000000, 0);
   };
 
   // --- управление обликом/экономией из OverlayConfig (задача 56) --------------

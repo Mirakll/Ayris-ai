@@ -62,6 +62,28 @@ _ENUMERATION_PREFIX: Final = re.compile(r"\(\s*\d+\s*-\s*")
 
 _WHITESPACE: Final = re.compile(r"\s+")
 
+#: Host APIs Ayris cannot actually open, filtered out of the device list.
+#:
+#: PortAudio exposes every physical device once per host API. WDM-KS is the raw
+#: kernel-streaming layer: it has no blocking API and refuses the callback path
+#: Ayris opens streams through — ``check_input_settings`` rejects 16 kHz with
+#: "Invalid sample rate" (-9997) and an actual open fails with "Invalid device"
+#: (-9996) / "Blocking API not supported yet" (-9999). Every device it lists is
+#: also reachable through MME, DirectSound or WASAPI, which do open, so dropping
+#: WDM-KS removes only duplicate entries that could never be captured from.
+#:
+#: Leaving them in is what let a microphone "stop being caught": once a WDM-KS
+#: variant was stored in the settings, capture could never open it and the
+#: device monitor retried it forever, so no level events were emitted and the
+#: signal meter stayed empty though the microphone was fine on MME.
+_UNUSABLE_HOST_APIS: Final = ("wdm-ks",)
+
+
+def _is_unusable_host_api(host_api: str) -> bool:
+    """Whether Ayris's stream path cannot open devices on this host API."""
+    api = host_api.casefold()
+    return any(marker in api for marker in _UNUSABLE_HOST_APIS)
+
 
 class DeviceDirection(StrEnum):
     """Which side of the sound card a device sits on."""
@@ -710,6 +732,10 @@ class SoundDeviceBackend:
             api_name = ""
             if 0 <= api_index < len(host_apis):
                 api_name = str(host_apis[api_index].get("name", ""))
+            if _is_unusable_host_api(api_name):
+                # WDM-KS variants cannot be opened the way Ayris captures; skip
+                # them so a stale one cannot be picked and wedge capture.
+                continue
             devices.append(
                 RawDevice(
                     index=index,

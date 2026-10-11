@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterator
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -321,6 +322,80 @@ def test_a_text_only_pipeline_ignores_wake_words(app: _FakeApp) -> None:
     try:
         app.bus.publish(WakeWordDetected(phrase="айрис"))
         assert pipeline.session_id == ""
+    finally:
+        if stop is not None:
+            stop()
+
+
+# --------------------------------------------------------------------------- #
+# the chat/understanding consumer (the LLM worker proxy)
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class _LlmManager:
+    """A supervisor answering the LLM worker's ``status`` from memory.
+
+    Enough for the wiring test: :class:`~ayris.core.worker_llm.WorkerLlmClient`
+    reaches for ``call``/``cancel`` (never ``call_sync``), and this pipeline test
+    only needs the readiness probe, not a real generation.
+    """
+
+    status: object = None
+    status_calls: int = 0
+
+    def call(
+        self,
+        worker: str,
+        method: str,
+        params: Any = None,
+        *,
+        timeout: float | None = None,
+        autostart: bool = True,
+    ) -> Future[Any]:
+        future: Future[Any] = Future()
+        if method == "status":
+            self.status_calls += 1
+            future.set_result(self.status)
+        else:
+            future.set_result({"text": "", "finish_reason": "stop"})
+        return future
+
+    def cancel(self, worker: str, request_id: int | None = None) -> None:
+        pass
+
+
+def test_a_managed_pipeline_talks_to_the_llm_worker(app: _FakeApp) -> None:
+    from ayris.core.worker_llm import WorkerLlmClient
+
+    manager = _LlmManager(status={"configured": True})
+    pipeline = install_pipeline(app, manager)  # type: ignore[arg-type]
+    stop = app.components[-1].stop
+    try:
+        # The pipeline no longer holds the default NullLlmClient — a typed «привет»
+        # now reaches the warmed local model instead of «модель не настроена».
+        assert isinstance(pipeline._llm, WorkerLlmClient)
+        assert pipeline._llm.configured is True
+        probed = manager.status_calls
+
+        # A config change restarts the LLM worker (RestartScope.LLM); the proxy's
+        # cached readiness verdict is dropped, so the next read re-probes.
+        changed = Settings.model_validate({"ai": {"free_chat": True}})
+        app.bus.publish(ConfigChanged(diff=diff_settings(app.settings, changed)))
+        assert pipeline._llm.configured is True
+        assert manager.status_calls == probed + 1
+    finally:
+        if stop is not None:
+            stop()
+
+
+def test_a_text_only_pipeline_keeps_the_null_llm_client(app: _FakeApp) -> None:
+    from ayris.nlu.llm.base import NullLlmClient
+
+    pipeline = install_pipeline(app)
+    stop = app.components[-1].stop
+    try:
+        assert isinstance(pipeline._llm, NullLlmClient)
     finally:
         if stop is not None:
             stop()

@@ -22,6 +22,7 @@ Echo-воркер живёт в ``tests/fixtures/echo_worker.py`` (под ``spaw
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -157,3 +158,64 @@ def test_unhandled_scope_stays_pending(rig: _Rig) -> None:
     # Чужая область не задела уже поднятые воркеры.
     assert rig.manager.is_ready("stt_echo")
     assert rig.manager.is_ready("tts_echo")
+
+
+def test_live_change_reaches_running_worker(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """«Живое» поле доезжает до УЖЕ запущенного воркера через ``configure``.
+
+    Регрессия на «сколько ни крути, ничего не меняется»: смена поля без области
+    перезапуска (скорость речи) обязана дойти до работающего воркера БЕЗ
+    пересоздания процесса — через подписку, которую вешает ``install_workers``:
+    ``refresh_spec`` принимает свежую спеку, затем воркеру шлётся ``configure``.
+    Это тот самый шов, которого раньше не было: воркер читал параметры только на
+    старте. Планировщик подменён на echo-воркера, чтобы шов проверялся без
+    реальных движков, а менять ему нужно одно поле ``speed``.
+    """
+    from dataclasses import replace as _replace
+
+    from ayris.workers import registry
+    from ayris.workers.manager import install_workers
+    from ayris.workers.registry import PlannedWorker, WorkerPlan
+
+    def fake_plan(settings, *, log_dir=None, include_unavailable=False):  # noqa: ANN202
+        """Один echo-воркер, чья единственная настройка — текущая скорость речи."""
+        spec = _replace(
+            _spec("tts_echo", RestartScope.NONE),
+            params={"speed": settings.voice.tts.speed},
+        )
+        return WorkerPlan(workers=(PlannedWorker(spec=spec, needed=True, autostart=True),))
+
+    monkeypatch.setattr(registry, "plan_workers", fake_plan)
+
+    options = AppOptions(
+        profile=tmp_path / "profile",
+        watch_config=False,
+        single_instance=False,
+        log_level="DEBUG",
+    )
+    app = AyrisApp(options).startup()
+    manager = install_workers(app)  # сам поднимет echo-воркера на фоне
+    try:
+        deadline = time.monotonic() + START_TIMEOUT
+        while not manager.is_ready("tts_echo"):
+            if time.monotonic() > deadline:
+                raise AssertionError("echo-воркер не поднялся за отведённое время")
+            time.sleep(0.05)
+
+        pid = next(s.pid for s in manager.status() if s.name == "tts_echo")
+        before = manager.call_sync("tts_echo", "inherited", timeout=20.0)
+        assert before["params"].get("speed") != 1.2  # есть куда меняться
+
+        diff = app.config.apply({"voice.tts.speed": 1.2})
+        assert diff  # поле действительно сменилось
+        assert not (diff.restart_scopes - {RestartScope.NONE})  # и это «живое» поле
+
+        after = manager.call_sync("tts_echo", "inherited", timeout=20.0)
+        assert after["params"].get("speed") == 1.2  # настройка доехала на лету
+        same_pid = next(s.pid for s in manager.status() if s.name == "tts_echo")
+        assert same_pid == pid  # и БЕЗ перезапуска процесса
+    finally:
+        manager.shutdown()
+        app.shutdown()
