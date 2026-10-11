@@ -32,6 +32,13 @@ class GeminiLlmClient(OpenAiCompatibleClient):
     # resolves to the current Flash model, which new projects can reach.
     default_model: ClassVar[str] = "gemini-flash-latest"
 
+    #: Model-id prefixes Google's endpoint actually serves. A configured id that
+    #: matches none of these is stale config carried over from another provider —
+    #: the single ``ai.model`` field is kept when the provider switches — so fall
+    #: back to the default and keep answering, instead of 404-ing a local model
+    #: name (``Vikhr-…``) against Google.
+    _FAMILIES: ClassVar[tuple[str, ...]] = ("gemini", "gemma", "learnlm")
+
     def __init__(self, options: CloudOptions) -> None:
         super().__init__(options)
         # Google's model list (``/models``) names models ``models/gemini-flash-latest``,
@@ -42,3 +49,5 @@ class GeminiLlmClient(OpenAiCompatibleClient):
         prefix = "models/"
         if self._model.startswith(prefix):
             self._model = self._model[len(prefix) :]
+        if not self._model.lower().startswith(self._FAMILIES):
+            self._model = self.default_model

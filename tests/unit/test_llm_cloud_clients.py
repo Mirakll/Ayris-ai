@@ -420,6 +420,19 @@ class TestOpenAiCompatible:
         list(client.stream([LlmMessage.user("hi")]))
         assert recorder.body_of(recorder.last)["model"] == "gemini-3.8-flash"
 
+    def test_gemini_falls_back_to_the_default_on_a_foreign_model_id(
+        self, make_client: Callable[..., LlmClient]
+    ) -> None:
+        # Switching provider keeps the single ai.model field, so Gemini can inherit
+        # a local model name (Vikhr-…). Google 404s on it; the client answers with
+        # its default instead of carrying the stale id over.
+        recorder = Recorder(stream=openai_sse(("ok",)))
+        client = make_client(
+            recorder, provider="gemini", model="Vikhr-Qwen-2.5-1.5b-Instruct-Q4_K_M"
+        )
+        list(client.stream([LlmMessage.user("hi")]))
+        assert recorder.body_of(recorder.last)["model"] == "gemini-flash-latest"
+
     def test_openrouter_sends_attribution_headers(
         self, make_client: Callable[..., LlmClient]
     ) -> None:
