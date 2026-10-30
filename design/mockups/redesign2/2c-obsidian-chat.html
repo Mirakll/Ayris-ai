@@ -62,8 +62,8 @@ html.runtime-env body.full .app, html.runtime-env .app.full, body.runtime.full .
 }
 /* жидкий хром — фон окна */
 .metal{position:absolute;inset:0;z-index:0;overflow:hidden;background:linear-gradient(165deg,#1B1527 0%,#120F1C 55%,#0A0812 100%)}
-.metal canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.82}
-.metal .sheen{position:absolute;inset:-35%;background:conic-gradient(from 120deg at 55% 42%,transparent 10deg,rgba(176,146,255,.13) 90deg,transparent 180deg,rgba(124,83,224,.09) 260deg,transparent 345deg);
+.metal canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.88}
+.metal .sheen{position:absolute;inset:-35%;background:conic-gradient(from 120deg at 55% 42%,transparent 10deg,rgba(176,146,255,.14) 90deg,transparent 180deg,rgba(124,83,224,.10) 260deg,transparent 345deg);
   filter:blur(42px);animation:spin 58s linear infinite;mix-blend-mode:screen;opacity:1}
 .metal .vign{position:absolute;inset:0;background:radial-gradient(120% 100% at 50% 0%,transparent 50%,rgba(0,0,0,.55))}
 .grain{position:absolute;inset:0;z-index:1;opacity:.05;mix-blend-mode:overlay;pointer-events:none;
@@ -115,9 +115,15 @@ html.runtime-env body.full .app, html.runtime-env .app.full, body.runtime.full .
   transform-origin:center;transition:transform .9s cubic-bezier(.22,1,.36,1),opacity .65s ease;will-change:transform,opacity}
 .hero.dim .hero-av{transform:translateY(48px) scale(1.8);opacity:.32}
 #hero-icosa{width:480px;height:480px;margin-top:-80px;margin-bottom:-62px}
-.hero-av iframe{width:100%;height:100%;border:0;display:block}
+.hero-av iframe{width:100%;height:100%;border:0;display:block;pointer-events:none !important}
+@media(max-height:800px){
+  #hero-icosa{width:400px;height:400px;margin-top:-65px;margin-bottom:-50px}
+}
+@media(max-height:700px){
+  #hero-icosa{width:320px;height:320px;margin-top:-45px;margin-bottom:-35px}
+}
 .subcap{color:var(--t2);font-size:12px;line-height:1.5;letter-spacing:.42em;margin-top:20px;text-transform:uppercase}
-.cta{display:flex;gap:16px}
+.cta{display:flex;gap:16px;position:relative;z-index:2}
 .cta button{display:flex;align-items:center;justify-content:center;gap:11px;min-width:148px;padding:16px 32px;border-radius:14px;font-size:18px;font-weight:600;
   background:rgba(255,255,255,.05);border:1px solid var(--line2);color:var(--t1);transition:.18s}
 .cta button svg{width:20px;height:20px}
@@ -404,7 +410,7 @@ button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px so
       </div>
       <div class="hero" id="hero">
         <div class="hero-av" id="hero-sphere" aria-hidden="true" hidden><iframe data-src="../home/_sphere.html#a=4A2C8F&b=9B6DFF&e=C7B4FF&bg=transparent&mode=calm" title="Сфера состояния" tabindex="-1"></iframe></div>
-        <div class="hero-av" id="hero-icosa" aria-hidden="true"><iframe data-src="_icosa-app.html" title="Икосаэдр Айрис" tabindex="-1"></iframe></div>
+        <div class="hero-av" id="hero-icosa" aria-hidden="true"><iframe src="_icosa-app.html" title="Икосаэдр Айрис" tabindex="-1"></iframe></div>
         <div class="cta">
           <button id="btn-chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.5 8.5 0 0 1-12.3 7.6L3 21l1.9-5.7A8.5 8.5 0 1 1 21 11.5z"/></svg>Чат</button>
           <button class="prim" id="btn-launch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M6 11a6 6 0 0 0 12 0M12 17v4"/></svg>Запуск</button>
@@ -682,8 +688,10 @@ button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px so
 </div>
 
 <div class="sgroup"><div class="gh">История диалога</div>
+  <div class="srow"><div class="lbl"><div class="t">Режим памяти</div><div class="d">Тип хранения диалога: простое скользящее окно или долговременная память MemGPT (факты + архив прошлых разговоров).</div></div><div class="ctl"><div class="sel" id="ai-memory-mode-sel"><button class="sel-btn" id="ai-memory-mode-btn"><span id="ai-memory-mode-text">Скользящее окно (по умолчанию)</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu" id="ai-memory-mode-menu"><button data-val="sliding_window">Скользящее окно (по умолчанию)</button><button data-val="memgpt">Долговременная память MemGPT (факты + архив)</button></div></div></div></div>
   <div class="srow"><div class="lbl"><div class="t">Сколько помнить</div><div class="d">Сколько последних реплик держать в контексте. 0 — не помнить ничего.</div></div><div class="ctl"><div class="slider"><input type="range" id="ai-history-turns-slider" min="0" max="100" value="10" data-unit=" реплик"><span class="sval" id="ai-history-turns-val">10 реплик</span></div></div></div>
   <div class="srow"><div class="lbl"><div class="t">Когда сворачивать</div><div class="d">После скольких реплик сворачивать историю в краткий пересказ. 0 — никогда; иначе не меньше длины истории.</div></div><div class="ctl"><div class="slider"><input type="range" id="ai-summary-turns-slider" min="0" max="500" value="30" data-unit=" реплик"><span class="sval" id="ai-summary-turns-val">30 реплик</span></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Подмешивание из архива</div><div class="d">Сколько релевантных реплик из архива прошлых разговоров подмешивать в запрос к модели (в режиме MemGPT).</div></div><div class="ctl"><div class="slider"><input type="range" id="ai-recall-limit-slider" min="0" max="10" value="3" data-unit=" записей"><span class="sval" id="ai-recall-limit-val">3 записи</span></div></div></div>
   <div class="srow"><div class="lbl"><div class="t">Сброс истории</div><div class="d">Забыть текущий разговор с моделью. На заготовленные команды не влияет.</div></div><div class="ctl"><div class="sbtns"><button class="btn danger" id="btn-clear-chat">Очистить историю диалога</button><span class="badge2 ok" id="ai-clear-history-status" style="display:none;">История диалога очищена.</span></div></div></div>
 </div>
 <div class="sgroup"><div class="gh">Агентный режим</div>
@@ -1057,7 +1065,12 @@ const pad=n=>String(n).padStart(2,'0');
 const cv=$('#metal');
 const gl=cv.getContext('webgl')||cv.getContext('experimental-webgl');
 let W,H,DPR=Math.min(1.4,devicePixelRatio||1);
-function size(){const r=cv.getBoundingClientRect();W=cv.width=Math.max(1,Math.round(r.width*DPR));H=cv.height=Math.max(1,Math.round(r.height*DPR));if(gl)gl.viewport(0,0,W,H);}
+function size(){
+  const r=cv.getBoundingClientRect();
+  W=cv.width=Math.max(1,Math.round(r.width*DPR));
+  H=cv.height=Math.max(1,Math.round(r.height*DPR));
+  if(gl)gl.viewport(0,0,W,H);
+}
 size();addEventListener('resize',size);
 if(gl){
   const vs='attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
@@ -1086,7 +1099,7 @@ if(gl){
   const lp=gl.getAttribLocation(prog,'p');gl.enableVertexAttribArray(lp);gl.vertexAttribPointer(lp,2,gl.FLOAT,false,0,0);
   const uRes=gl.getUniformLocation(prog,'uRes'),uT=gl.getUniformLocation(prog,'uT');
   let mlast=0;
-  function draw(ts){requestAnimationFrame(draw);if(document.hidden||(ts-mlast)<40)return;mlast=ts;
+  function draw(ts){requestAnimationFrame(draw);if(document.hidden||(ts-mlast)<33)return;mlast=ts;
     gl.uniform2f(uRes,W,H);gl.uniform1f(uT,ts*0.001);gl.drawArrays(gl.TRIANGLES,0,3);}
   requestAnimationFrame(draw);
 }
@@ -1240,6 +1253,9 @@ function send(){
   const text=cmd.value.trim();if(!text)return;
   cmd.value='';
   if(window.isAyrisRuntime){
+    const c=currentConversation(),now=Date.now();
+    c.messages.push({role:'you',text,at:now});c.draft='';c.updatedAt=now;
+    persistConversations();renderMessages();renderHistory();
     fetch('/api/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})
       .catch(()=>{});
     return;
@@ -1328,7 +1344,7 @@ addEventListener('keydown',e=>{if(e.key==='/'&&document.activeElement!==cmd){e.p
   if(e.key==='Escape'&&chat.classList.contains('show'))show('home');
   if(e.key==='F11'){e.preventDefault();toggleFull();}});
 // ─── Интеграция с рабочим ядром Ayris ───
-window.isAyrisRuntime = false;
+window.isAyrisRuntime = Boolean(location.search.includes('runtime') || navigator.userAgent.includes('QtWebEngine') || window.location.port !== '');
 fetch('/api/ping').then(r=>r.json()).then(data=>{
   if(data && data.status === 'ok') {
     window.isAyrisRuntime = true;
@@ -1343,6 +1359,37 @@ function syncAyrisInit(){
     if(data.profile && window.ayrisAPI) window.ayrisAPI.setProfile(data.profile);
     if(data.profiles && data.profiles.length && window.ayrisAPI) window.ayrisAPI.setProfiles(data.profiles);
   }).catch(()=>{});
+}
+
+function updateAiModeUI(mode) {
+  const m = String(mode || '').toLowerCase();
+  const isAi = (m === 'ai' || m === 'chat' || m === 'ии');
+  const isCmd = (m === 'commands' || m === 'команды');
+  const norm = isAi ? 'ai' : (isCmd ? 'commands' : 'hybrid');
+
+  // NLU buttons in hero
+  document.querySelectorAll('#nlu button').forEach(b => {
+    const bm = String(b.dataset.m || '').toLowerCase();
+    const bNorm = (bm === 'ии' || bm === 'ai' || bm === 'chat') ? 'ai' : ((bm === 'команды' || bm === 'commands') ? 'commands' : 'hybrid');
+    const active = (bNorm === norm);
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-selected', String(active));
+  });
+
+  // Mode segment buttons in settings
+  document.querySelectorAll('#ai-mode-seg button').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === norm);
+  });
+
+  // Mode description rows: show "выбрано" badge ONLY on the active mode row
+  document.querySelectorAll('[data-mode-row]').forEach(row => {
+    const isCurrent = (row.dataset.modeRow === norm);
+    const badge = row.querySelector('.badge2');
+    if (badge) {
+      badge.style.display = isCurrent ? '' : 'none';
+      badge.textContent = 'выбрано';
+    }
+  });
 }
 
 window.ayrisAPI = {
@@ -1388,24 +1435,7 @@ window.ayrisAPI = {
     }
   },
   setMode(mode){
-    const m = String(mode).toLowerCase();
-    const isAi = (m === 'ai' || m === 'chat' || m === 'ии');
-    const isCmd = (m === 'commands' || m === 'команды');
-    const norm = isAi ? 'ai' : (isCmd ? 'commands' : 'hybrid');
-    document.querySelectorAll('#nlu button').forEach(b=>{
-      const bm = String(b.dataset.m || '').toLowerCase();
-      const bNorm = (bm === 'ии' || bm === 'ai' || bm === 'chat') ? 'ai' : ((bm === 'команды' || bm === 'commands') ? 'commands' : 'hybrid');
-      const active = (bNorm === norm);
-      b.classList.toggle('active', active);
-      b.setAttribute('aria-selected', String(active));
-    });
-    document.querySelectorAll('#ai-mode-seg button').forEach(b=>{
-      b.classList.toggle('active', b.dataset.mode === norm);
-    });
-    const badge = document.getElementById('ai-mode-status-badge');
-    if (badge) {
-      badge.textContent = norm === 'commands' ? 'Только команды' : (norm === 'ai' ? 'Только ИИ' : 'выбрано');
-    }
+    updateAiModeUI(mode);
   },
   setProfile(name){
     const pfName = document.querySelector('#pfname');
@@ -1893,15 +1923,13 @@ function loadAiSettings(cfg) {
   if (!cfg || !cfg.ai) return;
   const ai = cfg.ai;
 
-  // 1. Mode Segment
+  // 1. Mode Segment & Row badges
   const modeSeg = document.getElementById('ai-mode-seg');
   if (modeSeg) {
     const isCommands = !ai.fallback_to_llm && !ai.free_chat;
     const isAi = !ai.fallback_to_llm && ai.free_chat;
     const activeMode = isCommands ? 'commands' : (isAi ? 'ai' : 'hybrid');
-    modeSeg.querySelectorAll('button').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === activeMode);
-    });
+    updateAiModeUI(activeMode);
   }
 
   // 2. Provider dropdown & Host
@@ -1965,6 +1993,20 @@ function loadAiSettings(cfg) {
     if (timeoutVal) timeoutVal.textContent = timeoutSlider.value + ' с';
   }
 
+  // 5b. Memory Mode
+  const memModeBtn = document.getElementById('ai-memory-mode-btn');
+  const memModeText = document.getElementById('ai-memory-mode-text');
+  const memModeMenu = document.getElementById('ai-memory-mode-menu');
+  if (memModeText && ai.memory_mode) {
+    const btn = memModeMenu ? memModeMenu.querySelector(`button[data-val="${ai.memory_mode}"]`) : null;
+    memModeText.textContent = btn ? btn.textContent.trim() : (ai.memory_mode === 'memgpt' ? 'Долговременная память MemGPT (факты + архив)' : 'Скользящее окно (по умолчанию)');
+    if (memModeMenu) {
+      memModeMenu.querySelectorAll('button').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-val') === ai.memory_mode);
+      });
+    }
+  }
+
   // 6. History Sliders
   const histSlider = document.getElementById('ai-history-turns-slider');
   const histVal = document.getElementById('ai-history-turns-val');
@@ -1980,6 +2022,14 @@ function loadAiSettings(cfg) {
     sumSlider.value = ai.summarize_after_turns;
     fillSlider(sumSlider);
     if (sumVal) sumVal.textContent = sumSlider.value + ' реплик';
+  }
+
+  const recallSlider = document.getElementById('ai-recall-limit-slider');
+  const recallVal = document.getElementById('ai-recall-limit-val');
+  if (recallSlider && ai.long_term_recall_limit !== undefined) {
+    recallSlider.value = ai.long_term_recall_limit;
+    fillSlider(recallSlider);
+    if (recallVal) recallVal.textContent = recallSlider.value + ' записей';
   }
 
   // 7. Agent Switch
@@ -2051,6 +2101,30 @@ function initAiTab() {
     });
   }
 
+  // 1b. Memory Mode
+  const memModeSel = document.getElementById('ai-memory-mode-sel');
+  const memModeBtn = document.getElementById('ai-memory-mode-btn');
+  const memModeText = document.getElementById('ai-memory-mode-text');
+  const memModeMenu = document.getElementById('ai-memory-mode-menu');
+  if (memModeBtn && memModeMenu) {
+    memModeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (memModeSel) memModeSel.classList.toggle('open');
+    });
+    memModeMenu.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const val = btn.getAttribute('data-val');
+        if (memModeText) memModeText.textContent = btn.textContent.trim();
+        memModeMenu.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        if (memModeSel) memModeSel.classList.remove('open');
+        saveSetting('ai.memory_mode', val);
+        say(`Режим памяти: ${btn.textContent.trim()}`);
+      });
+    });
+  }
+
   // 2. History Sliders
   const histSlider = document.getElementById('ai-history-turns-slider');
   const histVal = document.getElementById('ai-history-turns-val');
@@ -2078,6 +2152,21 @@ function initAiTab() {
       saveSetting('ai.summarize_after_turns', intVal);
       say(`Порог сжатия контекста: ${intVal} реплик`);
     });
+  }
+
+  const recallSlider = document.getElementById('ai-recall-limit-slider');
+  const recallVal = document.getElementById('ai-recall-limit-val');
+  if (recallSlider) {
+    recallSlider.addEventListener('input', () => {
+      fillSlider(recallSlider);
+      if (recallVal) recallVal.textContent = recallSlider.value + ' записей';
+    });
+    recallSlider.addEventListener('change', () => {
+      const intVal = parseInt(recallSlider.value, 10);
+      saveSetting('ai.long_term_recall_limit', intVal);
+      say(`Подмешивание из архива: ${intVal} записей`);
+    });
+  
   }
 
   // 3. Clear History Button
@@ -2111,23 +2200,19 @@ function initAiTab() {
     });
   }
 
-  // 5. Recognition Mode Segments
+  // 5. Recognition Mode Segments & Row clicks
   const modeSeg = document.getElementById('ai-mode-seg');
   if (modeSeg) {
     modeSeg.querySelectorAll('button').forEach(btn => {
       btn.addEventListener('click', () => {
-        modeSeg.querySelectorAll('button').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
         const mode = btn.dataset.mode;
+        updateAiModeUI(mode);
         if (window.isAyrisRuntime) {
           fetch('/api/set-mode', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({mode})
           }).catch(()=>{});
-        }
-        if (window.ayrisAPI && window.ayrisAPI.setMode) {
-          window.ayrisAPI.setMode(mode);
         }
         if (mode === 'commands') {
           saveSetting('ai.fallback_to_llm', false);
@@ -2145,6 +2230,14 @@ function initAiTab() {
           saveSetting('ai.free_chat', false);
           say('Режим: гибридный');
         }
+      });
+    });
+
+    document.querySelectorAll('[data-mode-row]').forEach(row => {
+      row.addEventListener('click', () => {
+        const targetMode = row.dataset.modeRow;
+        const btn = modeSeg.querySelector(`button[data-mode="${targetMode}"]`);
+        if (btn) btn.click();
       });
     });
   }
@@ -2429,6 +2522,11 @@ function initAiTab() {
     });
   }
 }
+
+let loadProfilesData = async () => {};
+let loadCommandsData = async () => {};
+let loadDevToolsState = async () => {};
+let loadModelsData = async () => {};
 
 async function loadAllSettings() {
   try {
@@ -2812,7 +2910,7 @@ function initActionButtons() {
 
   // --- Profiles Tab Handling ---
     // --- Commands Tab Handling ---
-  async function loadCommandsData() {
+  loadCommandsData = async function() {
     try {
       const res = await fetch('/api/commands/list');
       const data = await res.json();
@@ -2907,7 +3005,7 @@ function initActionButtons() {
   }
 
 
-  async function loadProfilesData() {
+  loadProfilesData = async function() {
     try {
       const res = await fetch('/api/profiles/list');
       const data = await res.json();
@@ -3221,7 +3319,7 @@ function initActionButtons() {
     }
   }
 
-  async function loadDevToolsState() {
+  loadDevToolsState = async function() {
     try {
       const res = await fetch('/api/devtools/state');
       const state = await res.json();
@@ -3808,7 +3906,7 @@ function initActionButtons() {
     });
   }
 
-  async function loadModelsData() {
+  loadModelsData = async function() {
     try {
       if (window._modelsState.pollTimer) {
         clearTimeout(window._modelsState.pollTimer);
@@ -4000,66 +4098,6 @@ function initActionButtons() {
     btnDownloadInterception.addEventListener('click', () => {
       say('Открытие страницы загрузки драйвера Interception…');
       window.open('https://github.com/oblitum/Interception/releases', '_blank');
-    });
-  }
-
-  // --- Commands Tab Handling ---
-  const btnCreateCmd = document.getElementById('btn-create-command');
-  if (btnCreateCmd) {
-    btnCreateCmd.addEventListener('click', async () => {
-      const name = prompt('Имя новой команды:', 'Новая команда');
-      if (name && name.trim()) {
-        try {
-          const res = await fetch('/api/commands/create', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({name: name.trim()})
-          });
-          const d = await res.json();
-          if (d.status === 'ok') {
-            say('Команда «' + name.trim() + '» успешно создана');
-          } else {
-            say('Ошибка создания: ' + (d.error || 'сбой'));
-          }
-        } catch(err) {
-          say('Ошибка: ' + err);
-        }
-      }
-    });
-  }
-
-  const btnEditCmd = document.getElementById('btn-edit-command');
-  if (btnEditCmd) {
-    btnEditCmd.addEventListener('click', () => {
-      say('Редактор макросов открыт');
-    });
-  }
-
-  const btnCreateFolder = document.getElementById('btn-create-folder');
-  if (btnCreateFolder) {
-    btnCreateFolder.addEventListener('click', () => {
-      const folderName = prompt('Имя новой папки команд:');
-      if (folderName && folderName.trim()) {
-        say('Папка «' + folderName.trim() + '» создана');
-      }
-    });
-  }
-
-  const btnImportCmd = document.getElementById('btn-import-command');
-  if (btnImportCmd) {
-    btnImportCmd.addEventListener('click', () => {
-      say('Импорт команд из файла…');
-    });
-  }
-
-  const segCmdView = document.getElementById('seg-command-view');
-  if (segCmdView) {
-    segCmdView.querySelectorAll('button').forEach(btn => {
-      btn.addEventListener('click', () => {
-        segCmdView.querySelectorAll('button').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        say('Вид редактора: ' + btn.textContent.trim());
-      });
     });
   }
 
