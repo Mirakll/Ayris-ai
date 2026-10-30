@@ -1,25 +1,22 @@
 <div class="sptitle">Горячие клавиши</div>
-<div class="spsub">Системные сочетания ассистента и хоткеи команд. Назначайте и меняйте комбинации, разрешайте конфликты и включайте перехват клавиш для полноэкранных игр.</div>
+<div class="spsub">Системные сочетания ассистента и горячие клавиши команд. Назначайте и меняйте комбинации, разрешайте конфликты и включайте перехват клавиш для полноэкранных игр.</div>
 
-<div class="sgroup"><div class="gh">Системные сочетания</div>
-  <div class="hkrow"><span class="hk-nm">Показать / скрыть окно</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">A</span></span><button class="btn sm">Изменить</button></div>
-  <div class="hkrow"><span class="hk-nm">Говорить (push-to-talk)</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Space</span></span><button class="btn sm">Изменить</button></div>
-  <div class="hkrow"><span class="hk-nm">Активация голосом вкл / выкл</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Alt</span><span class="kbd">V</span></span><button class="btn sm">Изменить</button></div>
-  <div class="hkrow"><span class="hk-nm">Остановить озвучку</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">S</span></span><button class="btn sm">Изменить</button></div>
-  <div class="hkrow"><span class="hk-nm">Открыть чат</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Alt</span><span class="kbd">C</span></span><button class="btn sm">Изменить</button></div>
-  <div class="hkrow"><span class="hk-nm">Открыть настройки</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">,</span></span><button class="btn sm">Изменить</button></div>
-  <div class="hkrow"><span class="hk-nm">Выключить микрофон</span><span class="hk-ks"><button class="btn sm">Назначить</button></span></div>
-  <div class="hkrow"><span class="hk-nm">Вернуть системные сочетания к значениям по умолчанию</span><span class="hk-ks"><button class="btn danger sm">Сбросить все системные</button></span></div>
+<div class="sgroup"><div class="gh">Системные горячие клавиши</div>
+  <div class="hkrow"><span class="hk-nm">Push-to-Talk</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">Space</span></span><button class="btn sm" data-action="edit-hotkey" data-key="ptt">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Режим Wake Word</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">A</span></span><button class="btn sm" data-action="edit-hotkey" data-key="wake">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Оверлей</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">O</span></span><button class="btn sm" data-action="edit-hotkey" data-key="overlay">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Mute микрофона</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Shift</span><span class="kbd">M</span></span><button class="btn sm" data-action="edit-hotkey" data-key="mute">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Отмена действия</span><span class="hk-ks"><span class="kbd">Esc</span></span><button class="btn sm" data-action="edit-hotkey" data-key="cancel">Изменить</button></div>
+  <div class="hkrow"><span class="hk-nm">Сбросить системные к значениям по умолчанию</span><span class="hk-ks"><button class="btn danger sm" id="btn-reset-system-hotkeys">Сбросить все системные</button></span></div>
 </div>
 
-<div class="sgroup"><div class="gh">Команды</div>
-  <div class="hkrow"><span class="hk-nm">Открыть YouTube</span><span class="hk-ks"><span class="kbd">Alt</span><span class="kbd">Y</span></span><button class="btn sm">Изменить</button><button class="btn sm">Очистить</button></div>
-  <div class="hkrow"><span class="hk-nm">Режим фокуса</span><span class="hk-ks"><span class="kbd">Ctrl</span><span class="kbd">Alt</span><span class="kbd">F</span></span><button class="btn sm">Изменить</button><button class="btn sm">Очистить</button></div>
-  <div class="hkrow"><span class="hk-nm">Заблокировать экран</span><span class="hk-ks"><span class="kbd">Win</span><span class="kbd">L</span></span><button class="btn sm">Изменить</button><button class="btn sm">Очистить</button></div>
-  <div class="hkrow"><span class="hk-nm">Сделать скриншот</span><span class="hk-ks"><button class="btn sm">Назначить</button></span></div>
+<div class="sgroup"><div class="gh">Горячие клавиши команд</div>
+  <div class="hkrow"><span class="hk-nm">Открыть YouTube</span><span class="hk-ks"><span class="kbd">Alt</span><span class="kbd">Y</span></span><button class="btn sm" data-action="edit-cmd-hotkey" data-cmd="Открыть YouTube">Изменить</button><button class="btn sm" data-action="clear-cmd-hotkey" data-cmd="Открыть YouTube">Очистить</button></div>
+  <div class="hkrow"><span class="hk-nm">Заблокировать компьютер</span><span class="hk-ks"><span class="kbd">Win</span><span class="kbd">L</span></span><button class="btn sm" data-action="edit-cmd-hotkey" data-cmd="Заблокировать компьютер">Изменить</button><button class="btn sm" data-action="clear-cmd-hotkey" data-cmd="Заблокировать компьютер">Очистить</button></div>
+  <div class="hkrow"><span class="hk-nm">Снимок экрана</span><span class="hk-ks"><button class="btn sm" data-action="assign-cmd-hotkey" data-cmd="Снимок экрана">Назначить</button></span></div>
 </div>
 
-<div class="sgroup"><div class="gh">Игровой режим</div>
-  <div class="srow"><div class="lbl"><div class="t">Перехват клавиш в играх (Interception)</div><div class="d">Перехватывать клавиши драйвером Interception, чтобы сочетания срабатывали в полноэкранных играх, которые прячут обычные горячие клавиши Windows.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
-  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Нужен драйвер Interception. Пока он не установлен, перехват в играх недоступен, а глобальные сочетания могут не срабатывать поверх полноэкранных окон.<button class="btn sm">Скачать драйвер</button></div>
+<div class="sgroup"><div class="gh">Работа в играх</div>
+  <div class="srow"><div class="lbl"><div class="t">Работа в играх через Interception</div><div class="d">Перехватывать клавиши драйвером Interception, чтобы хоткеи срабатывали в полноэкранных играх, которые прячут обычные горячие клавиши Windows.</div></div><div class="ctl"><button class="sw" id="sw-interception-toggle" aria-pressed="false"><i></i></button></div></div>
+  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Нужен драйвер Interception. Пока он не установлен, перехват в играх недоступен, а глобальные сочетания могут не срабатывать поверх полноэкранных окон.<button class="btn sm" id="btn-download-interception">Скачать драйвер Interception</button></div>
 </div>

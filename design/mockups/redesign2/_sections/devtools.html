@@ -1,44 +1,62 @@
 <div class="sptitle">Логи / DevTools</div>
-<div class="spsub">Живое окно в работающий Ayris — журнал, здоровье воркеров и Python-консоль. Значения уже замаскированы: секреты сюда не попадают. Без запущенного приложения виджеты показывают пустую форму.</div>
+<div class="spsub">Живое окно в работающий Ayris — журнал, таблица пайплайна, Python-консоль и здоровье воркеров. Значения уже замаскированы: секреты сюда не попадают. Без запущенного приложения виджеты показывают пустую форму.</div>
 
 <div class="sgroup"><div class="gh">Журнал</div>
-  <div class="srow"><div class="lbl"><div class="t">Уровень</div><div class="d">Фильтр записей по уровню. Меняется на лету, перезапускать Ayris не нужно.</div></div><div class="ctl"><div class="seg"><button class="active">Всё</button><button>Инфо</button><button>Предупр.</button><button>Ошибки</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Общий уровень</div><div class="d">Меняет уровень логирования на лету и сохраняет его — перезапускать Ayris не нужно.</div></div><div class="ctl"><div class="sel" id="devtools-common-level-sel"><button class="sel-btn"><span>INFO</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button>DEBUG</button><button class="sel-on">INFO</button><button>WARNING</button><button>ERROR</button><button>CRITICAL</button></div></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Уровень модуля</div><div class="d">Точечное переопределение уровня для одного модуля. «Задать» — применить, «Сбросить» — снять.</div></div>
+    <div class="ctl" style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+      <input class="ti mono" id="devtools-module-name" placeholder="напр. ayris.core.pipeline" style="flex:1 1 220px; min-width:180px;">
+      <div class="sel" id="devtools-module-level-sel" style="flex:0 0 130px;">
+        <button class="sel-btn" style="min-width:120px;"><span>DEBUG</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button>
+        <div class="sel-menu"><button class="sel-on">DEBUG</button><button>INFO</button><button>WARNING</button><button>ERROR</button><button>CRITICAL</button></div>
+      </div>
+      <div class="sbtns" style="display:flex; gap:8px;">
+        <button class="btn" id="btn-devtools-set-module-level">Задать</button>
+        <button class="btn" id="btn-devtools-reset-module-level">Сбросить</button>
+      </div>
+    </div>
+    <div id="devtools-module-overrides" class="d" style="margin-top:6px; color:var(--t3);">Сейчас переопределений по модулям нет.</div>
+  </div>
   <div class="srow"><div class="lbl"><div class="t">Автопрокрутка</div><div class="d">Держать прокрутку внизу, у самых свежих строк.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Показывать время</div><div class="d">Добавлять к каждой строке отметку времени.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
-  <div class="srow col"><div class="lbl"><div class="t">Последние события</div><div class="d">Формат строки: время · уровень · модуль · сообщение. Цвет — по уровню.</div></div><div class="ctl"><textarea class="ta ro" rows="7" readonly>14:27:58 INFO  app: Ayris запущен, воркеры подняты
-14:28:03 INFO  пайплайн: команда «Открыть YouTube» выполнена
-14:29:40 DEBUG stt: сегмент 1.8 с → «поставь музыку»
-14:30:11 WARN  STT: переподключение к облаку
-14:30:12 INFO  stt: соединение восстановлено
-14:31:02 ERROR LLM: таймаут 30с
-14:31:05 INFO  llm: ответ получен за 2.4 с</textarea></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Файл логов</div><div class="d">Открыть журнал в проводнике, скопировать видимое или очистить вид.</div></div><div class="ctl"><div class="sbtns"><button class="btn">Открыть файл логов</button><button class="btn">Скопировать</button><button class="btn danger">Очистить</button></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Последние события</div><div class="d">Формат строки: время · уровень · модуль · [request_id] · сообщение. Цвет — по уровню.</div></div><div class="ctl"><textarea class="ta ro" id="devtools-recent-logs" rows="7" readonly>14:27:58  INFO   ayris.core.app  Ayris запущен, воркеры подняты
+14:28:03  INFO   ayris.core.pipeline  [r-7f3a] команда «Открыть YouTube» выполнена
+14:29:40  DEBUG  ayris.audio.stt  сегмент 1.8 с → «поставь музыку»
+14:30:11  WARN   ayris.audio.stt  переподключение к облаку
+14:30:12  INFO   ayris.audio.stt  соединение восстановлено
+14:31:02  ERROR  ayris.nlu.llm  [r-7f41] таймаут 30 с
+14:31:05  INFO   ayris.nlu.llm  ответ получен за 2.4 с</textarea></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Действия с журналом</div><div class="d">Открыть каталог логов в проводнике, скопировать видимые строки или очистить вид.</div></div><div class="ctl"><div class="sbtns"><button class="btn" data-folder="logs">Открыть папку логов</button><button class="btn" id="btn-devtools-copy-logs">Скопировать видимое</button><button class="btn" id="btn-devtools-clear-logs">Очистить</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Экспорт для баг-репорта</div><div class="d">Собрать zip-архив с логами (значения замаскированы). Отправьте файл разработчику вручную — Ayris ничего никуда не загружает.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary" id="btn-export-report">Экспорт лога для баг-репорта…</button><button class="btn" data-folder="root">Открыть папку архива</button><span class="badge2" id="export-status-badge"></span></div></div></div>
 </div>
 
-<div class="sgroup"><div class="gh">Статус воркеров</div>
-  <div class="restab">
-    <div class="rr"><span class="nm">Захват звука</span><span class="vv"><span class="badge2 ok">работает</span></span></div>
-    <div class="rr"><span class="nm">Распознавание речи <span style="color:var(--t4)">· GigaAM</span></span><span class="vv"><span class="badge2 ok">работает</span></span></div>
-    <div class="rr"><span class="nm">Синтез речи <span style="color:var(--t4)">· Piper</span></span><span class="vv"><span class="badge2 warn">простаивает</span></span></div>
-    <div class="rr"><span class="nm">Языковая модель <span style="color:var(--t4)">· Qwen2.5 7B</span></span><span class="vv"><span class="badge2 ok">работает</span></span></div>
-  </div>
-  <div class="srow"><div class="lbl"><div class="t">Управление</div><div class="d">Каждая подсистема живёт в своём процессе. При активной сессии Ayris сначала предупредит о перезапуске.</div></div><div class="ctl"><button class="btn">Перезапустить воркеры</button></div></div>
+<div class="sgroup"><div class="gh">Пайплайн</div>
+  <div class="srow col"><div class="lbl"><div class="t">Проходы</div><div class="d">Каждый проход: распознавание → интент → действие → результат, с таймингами. Двойной клик по строке — перейти к её логу.</div></div><div class="ctl"><textarea class="ta ro" rows="5" readonly>14:31:02  r-7f41  «поставь музыку»   media.play   ЯндексМузыка    успех          420 мс
+14:30:11  r-7f3a  «который час»      time.now     —               успех           38 мс
+14:29:40  r-7f39  «ткрой ют»         —            —               не распознано   12 мс</textarea></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Фильтр по результату</div><div class="d">Показать только проходы с выбранным исходом; «К логу» — открыть выбранный проход в журнале.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Все результаты</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Все результаты</button><button>Успех</button><button>Ошибка</button><button>Отменено</button><button>Таймаут</button><button>Отклонено</button><button>Не распознано</button></div></div><button class="btn" id="btn-goto-log">К логу</button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Команда текстом</div><div class="d">Идёт тем же путём, что голос: опасное действие спросит подтверждение. Up/Down — история, Enter — выполнить.</div></div><div class="ctl"><input class="ti full" id="devtools-cmd-input" placeholder="Команда текстом, напр. «который час»"></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Сухой прогон</div><div class="d">Разобрать команду, но не выполнять её.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Выполнить команду</div><div class="d">Прогнать введённую команду через пайплайн или повторить последнюю из истории.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary" id="btn-devtools-run">Выполнить</button><button class="btn" id="btn-devtools-repeat">Повторить последнюю</button></div></div></div>
 </div>
 
 <div class="sgroup"><div class="gh">Консоль (REPL)</div>
-  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Консоль выполняет любой код Python в контексте приложения — с полным доступом к настройкам, базе и командам. Ошибка здесь может повредить данные; каждый ввод пишется в журнал безопасности.</div>
-  <div class="srow col"><div class="lbl"><div class="t">Команда Python</div><div class="d">Enter — выполнить, Up/Down — история. Выполнение идёт в фоновом потоке.</div></div><div class="ctl"><input class="ti full mono" placeholder="напр. pipeline.run_text(«который час»)"><button class="btn primary">Выполнить</button></div></div>
-  <div class="srow col"><div class="lbl"><div class="t">Вывод</div><div class="d">Эхо ввода, результат и ошибки. Только чтение.</div></div><div class="ctl"><textarea class="ta ro" rows="4" readonly>>>> app.config.voice.wake.enabled
+  <div class="notice warn" id="notice-repl-consent"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Консоль выполняет любой код Python в контексте приложения — с полным доступом к настройкам, базе и командам. Ошибка здесь может повредить данные. Автозапуска сохранённых сниппетов нет; каждый ввод пишется в журнал безопасности.<button class="btn sm" id="btn-repl-consent">Понимаю риски</button></div>
+  <div class="srow col"><div class="lbl"><div class="t">Ввод Python</div><div class="d">Enter — выполнить, Shift+Enter — перенос, Up/Down — история, Tab — автодополнение, Esc — прервать. Выполнение идёт в фоновом потоке.</div></div><div class="ctl"><textarea class="ta" id="devtools-repl-input" rows="2" placeholder="напр. pipeline.run_text(«который час»)"></textarea><button class="btn primary" id="btn-devtools-repl-run">Выполнить</button></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Вывод</div><div class="d">Эхо ввода, результат и ошибки. Только чтение.</div></div><div class="ctl"><textarea class="ta ro" id="devtools-repl-output" rows="4" readonly>>>> app.config.voice.wake.enabled
 True
 >>> list(app.commands.all())[:2]
 ['Открыть YouTube', 'Поставь музыку']
 >>> pipeline.run_text(«который час»)
 Результат: успех · интент: time.now · ответ: «Сейчас 14:31»</textarea></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Сухой прогон (dry-run)</div><div class="d">Разобрать команду, но не выполнять её.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Аудит</div><div class="d">Полный журнал всех вводов в консоль с временем и результатом.</div></div><div class="ctl"><button class="btn">Аудит действий</button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Управление выводом</div><div class="d">Прервать выполняющуюся команду (best-effort) или очистить область вывода.</div></div><div class="ctl"><div class="sbtns"><button class="btn" id="btn-devtools-repl-cancel">Прервать</button><button class="btn" id="btn-devtools-repl-clear">Очистить вывод</button></div></div></div>
 </div>
 
-<div class="sgroup"><div class="gh">Диагностика</div>
-  <div class="srow"><div class="lbl"><div class="t">Отчёт для разработчика</div><div class="d">Собрать zip с логами и конфигом (значения замаскированы). Отправьте файл вручную — Ayris ничего никуда не загружает.</div></div><div class="ctl"><div class="sbtns"><button class="btn primary">Собрать отчёт</button><button class="btn">Открыть папку данных</button></div></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Подробные логи (debug)</div><div class="d">Повышает детальность журнала. Может немного замедлить работу.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+<div class="sgroup"><div class="gh">Воркеры</div>
+  <div class="restab" id="devtools-workers-table">
+    <div class="rr"><span class="nm">Захват звука</span><span class="vv"><span class="badge2 ok">работает</span></span></div>
+    <div class="rr"><span class="nm">Распознавание речи</span><span class="vv"><span class="badge2 ok">работает</span></span></div>
+    <div class="rr"><span class="nm">Синтез речи</span><span class="vv"><span class="badge2 ok">работает</span></span></div>
+    <div class="rr"><span class="nm">Языковая модель</span><span class="vv"><span class="badge2 ok">готова</span></span></div>
+  </div>
+  <div class="srow"><div class="lbl"><div class="t">Управление</div><div class="d">Каждая подсистема живёт в своём процессе. Перезапуск или пауза во время активной сессии прервёт её — Ayris сначала предупредит.</div></div><div class="ctl"><div class="sbtns"><button class="btn" id="btn-devtools-workers-restart">Перезапустить</button><button class="btn" id="btn-devtools-workers-pause">Пауза</button></div></div></div>
 </div>

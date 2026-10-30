@@ -2,32 +2,46 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "sphere-prototype",
-      "runtimeExecutable": "_tools/venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "http.server", "8777", "--directory", "design/prototype"],
-      "port": 8777,
-      "url": "http://localhost:8777"
+      "name": "tray-mockup",
+      "runtimeExecutable": "E:/мистер бит ест рис/_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8777", "--directory", "E:/мистер бит ест рис/design/mockups"],
+      "port": 8777
     },
     {
-      "name": "sphere-ref",
-      "runtimeExecutable": "_tools/venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "http.server", "8778", "--directory", "design/sphere_ref"],
-      "port": 8778,
-      "url": "http://localhost:8778"
+      "name": "home-mockups",
+      "runtimeExecutable": "E:/мистер бит ест рис/_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["E:/мистер бит ест рис/design/mockups/_serve_nocache.py", "8778", "E:/мистер бит ест рис/design/mockups/home"],
+      "port": 8778
     },
     {
-      "name": "mockups",
-      "runtimeExecutable": "_tools/venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "http.server", "8779", "--directory", "design/mockups"],
-      "port": 8779,
-      "url": "http://localhost:8779"
+      "name": "redesign2",
+      "runtimeExecutable": "E:/мистер бит ест рис/_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["E:/мистер бит ест рис/design/mockups/_serve_nocache.py", "8779", "E:/мистер бит ест рис/design/mockups"],
+      "port": 8779
+    },
+    {
+      "name": "icosa-mockup",
+      "runtimeExecutable": "E:/мистер бит ест рис/_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8790", "--directory", "E:/мистер бит ест рис/design/mockups"],
+      "port": 8790
     },
     {
       "name": "sphere-assets",
-      "runtimeExecutable": "_tools/venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "http.server", "8780", "--directory", "src/ayris/gui/widgets/sphere/assets"],
-      "port": 8780,
-      "url": "http://localhost:8780"
+      "runtimeExecutable": "E:/мистер бит ест рис/_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8791", "--directory", "E:/мистер бит ест рис/src/ayris/gui/widgets/sphere/assets"],
+      "port": 8791
+    },
+    {
+      "name": "sphere-assets-verify",
+      "runtimeExecutable": "E:/мистер бит ест рис/_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8812", "--directory", "E:/мистер бит ест рис/src/ayris/gui/widgets/sphere/assets"],
+      "port": 8812
+    },
+    {
+      "name": "avatar",
+      "runtimeExecutable": "E:/мистер бит ест рис/_tools/venv/Scripts/python.exe",
+      "runtimeArgs": ["E:/мистер бит ест рис/design/mockups/_serve_nocache.py", "8780", "E:/мистер бит ест рис/design/mockups/avatar"],
+      "port": 8780
     }
   ]
 }

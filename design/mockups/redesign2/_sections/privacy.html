@@ -1,30 +1,62 @@
 <div class="sptitle">Приватность</div>
-<div class="spsub">Что Айрис хранит на диске, когда обращается в сеть, где лежат ключи сервисов и почему телеметрии нет. Все данные остаются на вашем компьютере.</div>
-
-<div class="sgroup"><div class="gh">Данные и история</div>
-  <div class="srow"><div class="lbl"><div class="t">Хранить историю диалога</div><div class="d">Сохранять распознанные фразы и ответы Айрис в локальной базе. Нужно для команды «повтори» и трасс во вкладке «Логи».</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Хранить аудиозаписи распознавания</div><div class="d">Оставлять на диске короткие фрагменты звука, по которым сработало распознавание. Занимают место, нужны в основном для отладки.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Вести журнал команд (аудит)</div><div class="d">Записывать, какая команда и с какими параметрами выполнена, с результатом и временем.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Срок хранения истории</div><div class="d">Записи старше выбранного срока удаляются автоматически — при запуске и раз в сутки. 0 — хранить без ограничения.</div></div><div class="ctl"><div class="slider"><input type="range" min="0" max="90" value="30" data-unit=" дн."><span class="sval">30 дн.</span></div></div></div>
-  <div class="srow col"><div class="lbl"><div class="t">Удаление данных</div><div class="d">Переключатели выше действуют только на новые записи. Уже сохранённое удаляется здесь — каждое действие необратимо и просит подтверждения с точным числом записей.</div></div><div class="ctl"><div class="sbtns"><button class="btn danger">Очистить историю</button><button class="btn danger">Удалить аудиозаписи</button><button class="btn danger">Очистить журнал</button></div></div></div>
-</div>
-
-<div class="sgroup"><div class="gh">Ключи и доступ</div>
-  <div class="srow col"><div class="lbl"><div class="t">Сохранённые ключи сервисов</div><div class="d">Ключи и токены облачных сервисов, которые уже заданы в приложении.</div></div><div class="ctl"><div class="restab">
-    <div class="rr"><span class="nm">OpenAI</span><span class="vv"><span class="badge2 ok">сохранён</span> <button class="btn sm danger">Удалить</button></span></div>
-    <div class="rr"><span class="nm">Яндекс SpeechKit</span><span class="vv"><span class="badge2 ok">сохранён</span> <button class="btn sm danger">Удалить</button></span></div>
-    <div class="rr"><span class="nm">GigaChat</span><span class="vv"><span class="badge2 warn">не задан</span></span></div>
-  </div></div></div>
-  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Ключи и токены хранятся в Диспетчере учётных данных Windows, а не в config.toml и не в базе. В конфиге лежит только имя записи — ключи не попадают в экспорт профиля, в логи и в архив баг-репорта.</div>
-  <div class="srow"><div class="lbl"><div class="t">Разрешить сетевые запросы (облачные сервисы)</div><div class="d">Когда выключено, Айрис работает только офлайн: облачные распознавание, синтез и языковые модели недоступны, ни одного исходящего запроса не уходит.</div></div><div class="ctl"><button class="sw" aria-pressed="true"><i></i></button></div></div>
-</div>
+<div class="spsub">Что Айрис записывает в историю и аудит, автоочистка по сроку, удаление данных, журнал аудита, обзор данных на диске и хранение ключей сервисов. Телеметрии нет — все данные остаются на вашем компьютере.</div>
 
 <div class="sgroup"><div class="gh">Телеметрия</div>
-  <div class="srow"><div class="lbl"><div class="t">Отправлять анонимную статистику</div><div class="d">По умолчанию выключено. Функции сбора в Айрис нет вообще — включать нечего. Переключатель оставлен для прозрачности.</div></div><div class="ctl"><button class="sw" aria-pressed="false"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Телеметрия</div><div class="d">Ayris не собирает статистику и не отправляет её. Функции сбора в приложении нет вообще — включать нечего, поэтому переключатель недоступен.</div></div><div class="ctl"><button class="sw" aria-pressed="false" disabled><i></i></button></div></div>
   <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Проверить можно самому: запустите сетевой сниффер (Wireshark или монитор во вкладке «Логи») и убедитесь, что без вашего действия Айрис не открывает ни одного исходящего соединения.</div>
 </div>
 
-<div class="sgroup"><div class="gh">Данные приложения</div>
-  <div class="srow"><div class="lbl"><div class="t">Папка данных</div><div class="d">%APPDATA%\Ayris — настройки, база данных, модели, логи и резервные копии.</div></div><div class="ctl"><button class="btn">Открыть папку</button></div></div>
-  <div class="srow col"><div class="lbl"><div class="t">Сбросить все данные</div><div class="d">Удаляет историю, аудит, буфер обмена, переменные, таймеры и версии команд. Перед сбросом создаётся резервная копия базы, сами команды остаются. Для подтверждения нужно ввести слово «СБРОС».</div></div><div class="ctl"><div class="sbtns"><button class="btn danger">Сбросить все данные</button></div></div></div>
+<div class="sgroup"><div class="gh">Что записывать</div>
+  <div class="srow"><div class="lbl"><div class="t">Записывать распознанный текст</div><div class="d">Выключено — запись о команде остаётся, но сама фраза в «history» не сохраняется. Команда «повтори» и трассы во вкладке «Логи» останутся без текста.</div></div><div class="ctl"><button class="sw" data-path="privacy.record_transcripts" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Записывать содержимое буфера обмена</div><div class="d">Выключено — копирования перестают попадать в историю буфера немедленно.</div></div><div class="ctl"><button class="sw" data-path="privacy.record_clipboard" aria-pressed="true"><i></i></button></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Записывать параметры действий в аудит</div><div class="d">Выключено — запись в журнале аудита остаётся, но поле параметров пустое.</div></div><div class="ctl"><button class="sw" data-path="privacy.record_audit_params" aria-pressed="true"><i></i></button></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Переключатели действуют только на новые записи. Уже сохранённое удаляется кнопками ниже в разделе «Удаление данных».</div>
+</div>
+
+<div class="sgroup"><div class="gh">Автоочистка по сроку</div>
+  <div class="srow"><div class="lbl"><div class="t">История команд</div><div class="d">Удалять записи истории старше выбранного срока.</div></div><div class="ctl"><div class="sel" data-path="privacy.history_retention_days"><button class="sel-btn"><span>Никогда</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button data-val="0" class="sel-on">Никогда</button><button data-val="7">7 дней</button><button data-val="30">30 дней</button><button data-val="90">90 дней</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">История буфера обмена</div><div class="d">Незакреплённые записи буфера старше срока удаляются автоматически.</div></div><div class="ctl"><div class="sel" data-path="privacy.clipboard_retention_days"><button class="sel-btn"><span>Никогда</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button data-val="0" class="sel-on">Никогда</button><button data-val="7">7 дней</button><button data-val="30">30 дней</button><button data-val="90">90 дней</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Журнал аудита</div><div class="d">Записи аудита старше срока удаляются. По умолчанию аудит не чистится.</div></div><div class="ctl"><div class="sel" data-path="privacy.audit_retention_days"><button class="sel-btn"><span>Никогда</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button data-val="0" class="sel-on">Никогда</button><button data-val="7">7 дней</button><button data-val="30">30 дней</button><button data-val="90">90 дней</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Выполнить очистку сейчас</div><div class="d">Автоочистка ещё не выполнялась. Очистка по срокам также идёт при старте и раз в сутки.</div></div><div class="ctl"><div class="sbtns"><button class="btn" id="btn-privacy-cleanup">Выполнить очистку сейчас</button></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Удаление данных</div>
+  <div class="srow"><div class="lbl"><div class="t">История команд</div><div class="d">Удаляет все записи распознанных фраз и результатов из «history».</div></div><div class="ctl"><div class="sbtns"><button class="btn danger" id="btn-delete-history">Удалить историю</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">История буфера обмена</div><div class="d">Удаляет всю историю буфера обмена, включая закреплённые записи.</div></div><div class="ctl"><div class="sbtns"><button class="btn danger" id="btn-clear-clipboard">Очистить буфер</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Кэш моделей</div><div class="d">Удаляет скачанные модели распознавания, синтеза речи, активации и языковые. Это гигабайты, и после удаления их придётся скачать заново.</div></div><div class="ctl"><div class="sbtns"><button class="btn danger" id="btn-clear-models-cache">Очистить кэш моделей</button></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Логи</div><div class="d">Удаляет файлы журналов из папки logs. Текущий занятый файл может остаться.</div></div><div class="ctl"><div class="sbtns"><button class="btn danger" id="btn-delete-logs">Удалить логи</button></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Полный сброс профиля</div><div class="d">Удаляет историю, аудит, буфер, переменные, таймеры и версии команд. Перед сбросом создаётся резервная копия базы, сами команды остаются. Для подтверждения нужно ввести слово «СБРОС».</div></div><div class="ctl"><div class="sbtns"><button class="btn danger" id="btn-reset-profile">Сбросить профиль…</button></div></div></div>
+  <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>Каждое удаление необратимо и просит подтверждения с точным числом записей: «Будет удалено записей: N…».</div>
+</div>
+
+<div class="sgroup"><div class="gh">Журнал аудита</div>
+  <div class="srow"><div class="lbl"><div class="t">Период</div><div class="d">Показывать записи аудита за выбранный период.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>За всё время</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">За всё время</button><button>За сутки</button><button>За неделю</button><button>За месяц</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Результат</div><div class="d">Фильтр по исходу команды.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Любой результат</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Любой результат</button><button>Успех</button><button>Ошибка</button><button>Отменено</button><button>Таймаут</button><button>Отказано</button><button>Не распознано</button></div></div></div></div>
+  <div class="srow"><div class="lbl"><div class="t">Админ-права</div><div class="d">Фильтр по требованию прав администратора.</div></div><div class="ctl"><div class="sel"><button class="sel-btn"><span>Любые команды</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></button><div class="sel-menu"><button class="sel-on">Любые команды</button><button>Только требующие админ</button><button>Только обычные</button></div></div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Записи аудита</div><div class="d">Какая команда и с какими параметрами выполнена, с результатом и временем (UTC). Поиск по имени команды, до 500 записей на странице.</div></div><div class="ctl"><div class="sbtns"><button class="btn" id="btn-export-audit-csv">Экспорт в CSV</button><button class="btn" id="btn-export-audit-json">Экспорт в JSON</button></div></div></div>
+</div>
+
+<div class="sgroup"><div class="gh">Что и где хранится</div>
+  <div class="srow col"><div class="lbl"><div class="t">Обзор данных на диске</div><div class="d">Где лежат настройки, база, модели, логи и резервные копии. Размеры считаются в фоне; кнопка открывает папку в проводнике.</div></div><div class="ctl"><div class="restab">
+    <div class="rr"><span class="nm">Настройки</span><span class="vv">12 КБ <button class="btn sm" data-folder="settings">Открыть папку</button></span></div>
+    <div class="rr"><span class="nm">База данных</span><span class="vv">8.4 МБ <button class="btn sm" data-folder="root">Открыть папку</button></span></div>
+    <div class="rr"><span class="nm">Модели · распознавание</span><span class="vv">1.1 ГБ <button class="btn sm" data-folder="stt">Открыть папку</button></span></div>
+    <div class="rr"><span class="nm">Модели · синтез речи</span><span class="vv">63 МБ <button class="btn sm" data-folder="tts">Открыть папку</button></span></div>
+    <div class="rr"><span class="nm">Модели · активация</span><span class="vv">1.2 МБ <button class="btn sm" data-folder="wake">Открыть папку</button></span></div>
+    <div class="rr"><span class="nm">Модели · языковые</span><span class="vv">4.7 ГБ <button class="btn sm" data-folder="llm">Открыть папку</button></span></div>
+    <div class="rr"><span class="nm">Логи</span><span class="vv">24 МБ <button class="btn sm" data-folder="logs">Открыть папку</button></span></div>
+    <div class="rr"><span class="nm">Резервные копии БД</span><span class="vv">120 МБ <button class="btn sm" data-folder="backups">Открыть папку</button></span></div>
+    <div class="rr"><span class="nm">Черновики редактора</span><span class="vv">0.3 МБ <button class="btn sm" data-folder="drafts">Открыть папку</button></span></div>
+    <div class="rr"><span class="nm">Всего на диске</span><span class="vv">6.0 ГБ</span></div>
+  </div></div></div>
+  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Записей в таблицах — Команды: 12, История: 348, Аудит: 1240, Буфер обмена: 56, Таймеры: 3, Переменные: 8, Версии команд: 21, Модели: 7.</div>
+</div>
+
+<div class="sgroup"><div class="gh">API-ключи</div>
+  <div class="notice info"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>Ключи и токены хранятся в Диспетчере учётных данных Windows, а не в config.toml и не в базе. В config.toml лежит только имя записи (credential_ref) — ключи не попадают в экспорт профиля, в логи и в архив баг-репорта.</div>
+  <div class="srow col"><div class="lbl"><div class="t">Сохранённые ключи</div><div class="d">Ключи и токены сервисов, уже сохранённые в приложении. Показаны только сохранённые записи.</div></div><div class="ctl"><div class="restab">
+    <div class="rr"><span class="nm">OpenAI</span><span class="vv"><span class="badge2 ok">ключ сохранён</span></span></div>
+    <div class="rr"><span class="nm">Яндекс SpeechKit</span><span class="vv"><span class="badge2 ok">ключ сохранён</span></span></div>
+  </div></div></div>
+  <div class="srow col"><div class="lbl"><div class="t">Удалить сохранённые ключи</div><div class="d">Удаляет все ключи из Диспетчера учётных данных Windows. Действие необратимо и просит подтверждения.</div></div><div class="ctl"><div class="sbtns"><button class="btn danger" id="btn-clear-all-secrets">Удалить сохранённые ключи</button></div></div></div>
 </div>

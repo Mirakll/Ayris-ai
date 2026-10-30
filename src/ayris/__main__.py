@@ -457,8 +457,10 @@ def _run_application(options: CliOptions) -> int:
             submit_text=submit_text,
             profiles=ayris.profile_manager.list_all,
             switch_profile=ayris.profile_manager.switch,
+            profile_manager=ayris.profile_manager,
             snapshot=ayris.state.snapshot,
         )
+        window._pipeline = pipeline
         tray = TrayController(ayris, window, theme, parent=app)
         tray.start()
         scheduler.start()

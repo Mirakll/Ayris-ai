@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ayris UI & Avatar Mockups Hub</title>
+<style>
+  :root {
+    --bg: #0c0817;
+    --card: #15102a;
+    --card-hover: #1e173b;
+    --border: rgba(139, 92, 246, 0.25);
+    --border-hover: rgba(168, 85, 247, 0.6);
+    --accent: #a855f7;
+    --accent-light: #c084fc;
+    --text: #f3f4f6;
+    --text-muted: #9ca3af;
+    --tag-bg: rgba(168, 85, 247, 0.15);
+    --tag-color: #d8b4fe;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(circle at top center, #1b113a 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+    padding: 36px 24px;
+    line-height: 1.5;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  header { margin-bottom: 36px; text-align: center; }
+  h1 {
+    font-size: 32px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #fff 30%, var(--accent-light) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 10px;
+  }
+  p.subtitle { color: var(--text-muted); font-size: 15px; }
+  
+  .section-title {
+    font-size: 20px;
+    font-weight: 700;
+    margin: 32px 0 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  .section-title .badge {
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-weight: 600;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px;
+    text-decoration: none;
+    color: inherit;
+    transition: all 0.2s ease;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+  }
+  .card:hover {
+    background: var(--card-hover);
+    border-color: var(--border-hover);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.4);
+  }
+  .card-top { margin-bottom: 12px; }
+  .card-title {
+    font-size: 16px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .card-desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.45;
+  }
+  .card-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding-top: 10px;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+  }
+  .tag {
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--tag-bg);
+    color: var(--tag-color);
+    padding: 3px 8px;
+    border-radius: 6px;
+  }
+  .card-link {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-light);
+  }
+
+  .featured {
+    grid-column: 1 / -1;
+    background: linear-gradient(135deg, rgba(88, 28, 135, 0.4) 0%, rgba(21, 16, 42, 0.9) 100%);
+    border-color: rgba(168, 85, 247, 0.5);
+    padding: 24px;
+  }
+  .featured .card-title { font-size: 20px; }
+  .featured .card-desc { font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Ayris · Каталог интерактивных мокапов</h1>
+    <p class="subtitle">Локальный сервер запущен без кэша (no-store) — все изменения обновляются мгновенно</p>
+  </header>
+
+  <!-- 1. 3D Аватар и VRM -->
+  <div class="section-title">
+    <span>✨ 3D Аватар АйРИ (VRM & Mocap)</span>
+    <span class="badge">Флагман</span>
+  </div>
+  <div class="grid">
+    <a href="/design/mockups/avatar/variants/vrm.html" class="card featured">
+      <div class="card-top">
+        <div class="card-title">🌸 3D VRM Интерактивный Аватар (Основной)</div>
+        <div class="card-desc">Каноничная модель АйРИ (оверсайз белое худи, плиссированная юбка, звёздочка в волосах). 11 мокап-анимаций (сидит с физичной юбкой без задирания, паника, думает, говорит, радуется, спит, за шкирку и др.), мимика, вращение 360°, переключение моделей и скоростей.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Three.js + Mocap</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/avatar/index.html" class="card">
+      <div class="card-top">
+        <div class="card-title">👗 Хаб вариантов аватара</div>
+        <div class="card-desc">Сравнение стилей (3D VRM, Live2D, Pixel Art, 2D) и переключение форматов.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Avatar Hub</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/avatar/variants/vrm-preview-v3/qa/frame-review.html" class="card">
+      <div class="card-top">
+        <div class="card-title">🔍 QA Frame Review</div>
+        <div class="card-desc">Покадровый аудит переходов, клиппинга и анатомических поз.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">QA Tool</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+  </div>
+
+  <!-- 2. Редизайн 2 (Astra / Obsidian) -->
+  <div class="section-title">
+    <span>🌌 Redesign 2 (Astra / Obsidian / Modular)</span>
+    <span class="badge">Актуальный UI</span>
+  </div>
+  <div class="grid">
+    <a href="/design/mockups/redesign2/index.html" class="card">
+      <div class="card-top">
+        <div class="card-title">📑 Главный хаб Redesign 2</div>
+        <div class="card-desc">Все концепты обновлённого интерфейса приложения в единой галерее.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Index Hub</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/redesign2/2-astra-obsidian.html" class="card">
+      <div class="card-top">
+        <div class="card-title">🖤 2. Astra Obsidian</div>
+        <div class="card-desc">Глубокая обсидиановая тема, контрастные карточки, премиальный минимализм.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Obsidian</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/redesign2/2b-obsidian-violet.html" class="card">
+      <div class="card-top">
+        <div class="card-title">💜 2b. Obsidian Violet</div>
+        <div class="card-desc">Фирменный фиолетовый акцент АйРИ, стеклянные панели и свечение.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Violet Glow</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/redesign2/2c-obsidian-chat.html" class="card">
+      <div class="card-top">
+        <div class="card-title">💬 2c. Obsidian Chat</div>
+        <div class="card-desc">Макет встроенного диалогового чата с ассистентом в тёмной теме.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Chat UI</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/redesign2/1-astra-nebula.html" class="card">
+      <div class="card-top">
+        <div class="card-title">✨ 1. Astra Nebula</div>
+        <div class="card-desc">Космическая эстетика, туманности и неоновые акценты.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Nebula</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/redesign2/3-mission-control.html" class="card">
+      <div class="card-top">
+        <div class="card-title">🚀 3. Mission Control</div>
+        <div class="card-desc">Информативный дашборд с мониторингом метрик и статусов системы.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Dashboard</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/redesign2/5-modular.html" class="card">
+      <div class="card-top">
+        <div class="card-title">🧱 5. Modular Desktop</div>
+        <div class="card-desc">Модульный настраиваемый интерфейс с виджетами.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Widgets</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+  </div>
+
+  <!-- 3. Главный экран и Сфера -->
+  <div class="section-title">
+    <span>🔮 Главный экран & 3D Сфера / Икосаэдр</span>
+  </div>
+  <div class="grid">
+    <a href="/design/mockups/home/index.html" class="card">
+      <div class="card-top">
+        <div class="card-title">🏠 Home Screen Showcase</div>
+        <div class="card-desc">Интерактивные варианты домашнего экрана ассистента со сферой.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Home Hub</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/home/01-glass-depth.html" class="card">
+      <div class="card-top">
+        <div class="card-title">💎 Glass Depth Home</div>
+        <div class="card-desc">Стеклянная глубина с живой интерактивной сферой.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Glass UI</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/icosahedron/index.html" class="card">
+      <div class="card-top">
+        <div class="card-title">🔷 3D Icosahedron Core</div>
+        <div class="card-desc">Трёхмерное ядро ассистента в виде икосаэдра с реакцией на звук.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">3D WebGL</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+  </div>
+
+  <!-- 4. Командная строка и компоненты -->
+  <div class="section-title">
+    <span>⚡ Командная строка & Компоненты</span>
+  </div>
+  <div class="grid">
+    <a href="/design/mockups/command_redesign/index.html" class="card">
+      <div class="card-top">
+        <div class="card-title">⌨️ Command Palette Redesign</div>
+        <div class="card-desc">Варианты плавающего оверлея командной строки (Cinematic, Glass, Studio).</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Command Palette</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/node_editor_mockup.html" class="card">
+      <div class="card-top">
+        <div class="card-title">🕸️ Node Editor</div>
+        <div class="card-desc">Визуальный редактор нод для создания автоматизаций и макросов.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">Macro Graph</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+    <a href="/design/mockups/tray_variants.html" class="card">
+      <div class="card-top">
+        <div class="card-title">🔔 Tray Icon Variants</div>
+        <div class="card-desc">Варианты системных иконок для трея Windows.</div>
+      </div>
+      <div class="card-bottom">
+        <span class="tag">System Tray</span>
+        <span class="card-link">Открыть ➔</span>
+      </div>
+    </a>
+  </div>
+</div>
+</body>
+</html>

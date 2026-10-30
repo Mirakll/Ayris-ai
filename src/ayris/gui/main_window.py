@@ -13,8 +13,9 @@ drive it directly. Closing only hides it; :meth:`exit` is the real shutdown.
 from __future__ import annotations
 
 import ctypes
+import os
 from collections.abc import Callable, Iterable
-from typing import Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from PySide6.QtCore import (
     QAbstractNativeEventFilter,
@@ -53,6 +54,7 @@ from ayris.core.events import (
     AgentTurnFinished,
     AssistantReplied,
     AudioLevelChanged,
+    CancelRequested,
     ConfigChanged,
     EventBus,
     MacroFailed,
@@ -65,6 +67,7 @@ from ayris.core.events import (
     OverlayVisibilityRequested,
     TranscriptReady,
     TtsStarted,
+    WakeWordDetected,
 )
 from ayris.core.models import JsonObject, Profile
 from ayris.core.profile import ProfileSwitched
@@ -79,8 +82,16 @@ from ayris.gui.tabs import SECTIONS, PlaceholderTab, SearchEntry, SettingsTab, t
 from ayris.gui.theme import ThemeManager
 from ayris.gui.widgets import SearchField
 from ayris.gui.widgets.sphere.states import SphereState
+from ayris.utils.logger import get_logger
+
+if TYPE_CHECKING:
+    from ayris.core.pipeline import Pipeline
+    from ayris.core.profile import ProfileManager
+    from ayris.gui.obsidian.view import ObsidianView
 
 __all__ = ["MainWindow", "ShowWindowNativeEventFilter", "restored_geometry"]
+
+_log = get_logger(__name__)
 
 _STATE_DEBOUNCE_MS = 500
 _WINDOWS_EVENT_TYPE: Final = b"windows_generic_MSG"
@@ -171,6 +182,7 @@ class MainWindow(QMainWindow):
         submit_text: Callable[[str], None] | None = None,
         profiles: Callable[[], list[Profile]] | None = None,
         switch_profile: Callable[[Profile], object] | None = None,
+        profile_manager: ProfileManager | None = None,
         snapshot: StatusSnapshot | None = None,
     ) -> None:
         super().__init__(parent)
@@ -186,6 +198,7 @@ class MainWindow(QMainWindow):
         self._submit_text = submit_text
         self._profiles = profiles
         self._switch_profile = switch_profile
+        self._profile_manager = profile_manager
         self._pages: dict[str, SettingsTab] = {}
         self._current_section = "general"
         self._allow_close = False
@@ -197,6 +210,18 @@ class MainWindow(QMainWindow):
         # Last phrase printed from ``AssistantReplied``, so the ``TtsStarted``
         # that follows the same answer does not double the chat line.
         self._last_reply = ""
+        self._obsidian_view: ObsidianView | None = None
+        self._pipeline: Pipeline | None = None
+        self._current_state = "idle"
+        self._current_mode_name = "hybrid"
+        self._current_profile_name = "По умолчанию"
+        self._wake_detections = 0
+        self._wake_false_positives = 0
+        self._last_wake_phrase = ""
+        self._last_wake_confidence = 0.0
+        self._telemetry_timer = QTimer(self)
+        self._telemetry_timer.setInterval(2000)
+        self._telemetry_timer.timeout.connect(self._update_telemetry)
 
         self.setWindowTitle(__app_name__)
         self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
@@ -245,14 +270,21 @@ class MainWindow(QMainWindow):
     def set_state(self, state: SphereState | AssistantState | str) -> None:
         """Drive the sphere, the microphone highlight and the status line."""
         value = state.value if isinstance(state, SphereState | AssistantState) else str(state)
+        self._current_state = value
         self._showcase.set_state(value)
         self._dialog.set_voice_active(value == SphereState.LISTENING.value)
         default = _STATE_STATUS.get(AssistantState(value))
         if default is not None:
             self._dialog.set_status(default)
+        if self._obsidian_view is not None:
+            self._obsidian_view.set_state(value)
+            if default is not None:
+                self._obsidian_view.set_status(default)
 
     def set_status(self, text: str) -> None:
         self._dialog.set_status(text)
+        if self._obsidian_view is not None:
+            self._obsidian_view.set_status(text)
 
     def add_message(self, role: DialogKind | str, text: str) -> None:
         if isinstance(role, DialogKind):
@@ -260,18 +292,30 @@ class MainWindow(QMainWindow):
         else:
             kind = _ROLE_KIND.get(str(role), DialogKind.ANSWER)
         self._dialog.add_message(kind, text)
+        if self._obsidian_view is not None:
+            self._obsidian_view.add_message(kind.value, text)
 
     def set_level(self, level: float) -> None:
-        self._showcase.set_level(max(0.0, min(1.0, level)))
+        rms = max(0.0, min(1.0, level))
+        self._showcase.set_level(rms)
+        if self._obsidian_view is not None:
+            self._obsidian_view.set_level(rms)
 
     def set_mic(self, *, enabled: bool, mode: MicMode) -> None:
+        self._mic_enabled = enabled
         self._dialog.set_mic(enabled=enabled, mode=mode)
+        if self._obsidian_view is not None:
+            mode_str = mode.value if hasattr(mode, "value") else str(mode)
+            self._obsidian_view.set_mic(enabled, mode_str)
 
     def set_online(self, *, online: bool, detail: str = "") -> None:
         self._dialog.set_online(online=online, detail=detail)
 
     def set_profile(self, name: str) -> None:
+        self._current_profile_name = name
         self._dialog.set_profile(name)
+        if self._obsidian_view is not None:
+            self._obsidian_view.set_profile(name)
 
     def sync(self, snapshot: StatusSnapshot) -> None:
         self.set_state(snapshot.state.value)
@@ -303,6 +347,10 @@ class MainWindow(QMainWindow):
         self._stack.setCurrentWidget(page)
         self._sidebar.select_section(key)
         self._schedule_state_save()
+        if self._obsidian_view is not None:
+            import json
+
+            self._obsidian_view.run_js(f"if(typeof openSP==='function')openSP({json.dumps(key)});")
         return page
 
     def _set_settings_immersive(self, immersive: bool) -> None:
@@ -320,9 +368,17 @@ class MainWindow(QMainWindow):
         self._showcase.set_sphere_visible(False)
         self._settings_layer.setGeometry(self._root.rect())
         self._settings_layer.open_layer()
+        if self._obsidian_view is not None:
+            self._obsidian_view.run_js(
+                "const s=document.getElementById('settings');if(s)s.classList.add('show');"
+            )
 
     def close_settings(self) -> None:
         self._settings_layer.close_layer()
+        if self._obsidian_view is not None:
+            self._obsidian_view.run_js(
+                "const s=document.getElementById('settings');if(s)s.classList.remove('show');"
+            )
 
     def toggle_settings(self) -> None:
         if self._settings_layer.is_open:
@@ -369,6 +425,14 @@ class MainWindow(QMainWindow):
         self._showcase.set_fullscreen(active)
         self._dialog.set_flat(active)
         self._refresh_theme()
+        if self._obsidian_view is not None:
+            active_js = "true" if active else "false"
+            js = (
+                f"document.body.classList.toggle('full', {active_js});"
+                f"const a=document.getElementById('app');"
+                f"if(a)a.classList.toggle('full', {active_js});"
+            )
+            self._obsidian_view.run_js(js)
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -376,6 +440,8 @@ class MainWindow(QMainWindow):
         # Closing is accepted only during explicit application shutdown.
         self._allow_close = True
         self._state_timer.stop()
+        if hasattr(self, "_telemetry_timer"):
+            self._telemetry_timer.stop()
         self._save_window_state()
         for unsubscribe in self._unsubscribers:
             unsubscribe()
@@ -490,7 +556,39 @@ class MainWindow(QMainWindow):
         self._build_settings_layer()
         self._theme.theme_changed.connect(self._refresh_theme)
         self._refresh_theme()
-        return self._root
+
+        self._container = QStackedWidget(self)
+        self._container.setStyleSheet("background: transparent; border: none;")
+        self._container.addWidget(self._root)
+
+        is_test_env = bool(
+            os.environ.get("PYTEST_CURRENT_TEST")
+            or os.environ.get("AYRIS_TEST_OFFSCREEN")
+            or QGuiApplication.platformName() == "offscreen"
+            or os.environ.get("AYRIS_GUI_BACKEND") == "classic"
+        )
+        if not is_test_env:
+            try:
+                from ayris.gui.obsidian.server import ensure_obsidian_server
+                from ayris.gui.obsidian.view import ObsidianView
+
+                server = ensure_obsidian_server(window=self)
+                self._obsidian_view = ObsidianView(
+                    window=self, server=server, parent=self._container
+                )
+                self._container.addWidget(self._obsidian_view)
+                self._container.setCurrentWidget(self._obsidian_view)
+                self._telemetry_timer.start()
+            except Exception:
+                _log.exception(
+                    "Не удалось запустить ObsidianView, используется классический интерфейс"
+                )
+                self._obsidian_view = None
+                self._container.setCurrentWidget(self._root)
+        else:
+            self._container.setCurrentWidget(self._root)
+
+        return self._container
 
     def _build_settings_layer(self) -> None:
         self._settings_layer = SettingsLayer(self._theme, self._root)
@@ -542,6 +640,7 @@ class MainWindow(QMainWindow):
             bus.subscribe(OverlayVisibilityRequested, self._on_visibility),
             bus.subscribe(OpenCommandRequested, self._on_open_command),
             bus.subscribe(ConfigChanged, self._on_config_changed),
+            bus.subscribe(WakeWordDetected, self._on_wake_detected),
         ]
 
     def _on_config_changed(self, event: ConfigChanged) -> None:
@@ -554,8 +653,13 @@ class MainWindow(QMainWindow):
             self._apply_theme_follow(overlay.follow_system_theme)
 
     def _on_mode(self, event: ModeChanged) -> None:
+        self._current_mode_name = (
+            event.mic_mode.value if hasattr(event.mic_mode, "value") else str(event.mic_mode)
+        )
         self.set_state(event.state.value)
         self.set_mic(enabled=self._current_mic_enabled(), mode=event.mic_mode)
+        if self._obsidian_view is not None:
+            self._obsidian_view.set_mode(self._current_mode_name)
         if event.state is AssistantState.ERROR and event.detail:
             self.set_status(event.detail)
 
@@ -674,13 +778,140 @@ class MainWindow(QMainWindow):
         if self._bus is not None:
             self._bus.publish(MicToggleRequested())
 
+    def _on_trigger_voice(self) -> None:
+        if self._bus is None:
+            return
+        if self._current_state in ("listening", "recording"):
+            self._bus.publish(CancelRequested(reason="user"))
+        else:
+            self._bus.publish(WakeWordDetected(phrase="<ptt>"))
+
+    def _on_wake_detected(self, event: WakeWordDetected) -> None:
+        if event.phrase != "<ptt>":
+            self._wake_detections += 1
+            self._last_wake_phrase = event.phrase
+            self._last_wake_confidence = event.confidence
+            if self._obsidian_view is not None:
+                self._obsidian_view.on_wake_detected(
+                    event.phrase,
+                    event.confidence,
+                    self._wake_detections,
+                    self._wake_false_positives,
+                )
+
+    def _on_wake_reset(self) -> None:
+        self._wake_detections = 0
+        self._wake_false_positives = 0
+        if self._obsidian_view is not None:
+            self._obsidian_view.on_wake_detected("", 0.0, 0, 0)
+
+    def _on_wake_mark_false(self) -> None:
+        self._wake_false_positives += 1
+        if self._obsidian_view is not None:
+            self._obsidian_view.on_wake_detected(
+                self._last_wake_phrase,
+                self._last_wake_confidence,
+                self._wake_detections,
+                self._wake_false_positives,
+            )
+
+    def _on_pick_model(self) -> None:
+        import shutil
+        from pathlib import Path
+
+        from PySide6.QtWidgets import QFileDialog
+
+        from ayris.core.paths import get_paths
+
+        engine = str(self._manager.settings.voice.tts.engine)
+        ext = ".onnx" if engine == "piper" else (".pth" if engine == "xtts" else ".onnx")
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите файл модели голоса",
+            "",
+            f"Модель голоса (*{ext})",
+        )
+        if not chosen:
+            return
+        source = Path(chosen)
+        try:
+            target_dir = get_paths().tts_models_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+            dest = target_dir / source.name
+            if source.resolve() != dest.resolve():
+                shutil.copy2(source, dest)
+            self._manager.apply({"voice.tts.voice": source.name})
+        except Exception:
+            _log.exception("Не удалось скопировать модель голоса")
+
+    def _on_pick_color(self) -> None:
+        import json
+
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QColorDialog
+
+        current = self._manager.settings.overlay.sphere_accent or "#a855f7"
+        chosen = QColorDialog.getColor(QColor(current), self, "Выберите акцентный цвет сферы")
+        if chosen.isValid():
+            hex_str = chosen.name()
+            self._manager.apply({"overlay.sphere_accent": hex_str})
+            if self._obsidian_view is not None:
+                js = (
+                    "if(window.ayrisAPI && window.ayrisAPI.onAccentChanged) "
+                    f"window.ayrisAPI.onAccentChanged({json.dumps(hex_str)});"
+                )
+                self._obsidian_view.run_js(js)
+
+    def _on_pick_gguf(self) -> None:
+        from pathlib import Path
+
+        from PySide6.QtWidgets import QFileDialog
+
+        from ayris.core.paths import get_paths
+
+        models_dir = str(get_paths().llm_models_dir)
+        chosen, _ = QFileDialog.getOpenFileName(
+            self,
+            "Выберите GGUF файл модели",
+            models_dir,
+            "GGUF Models (*.gguf);;All Files (*)",
+        )
+        if chosen:
+            p = Path(chosen)
+            self._manager.apply({"ai.model_path": str(p), "ai.model": p.name})
+
+    def _on_pick_folder(self, target: str) -> None:
+        from PySide6.QtWidgets import QFileDialog
+
+        chosen = QFileDialog.getExistingDirectory(self, "Выберите папку")
+        if chosen and target == "actions.files.allowed_dirs":
+            dirs = list(self._manager.settings.actions.files.allowed_dirs)
+            if chosen not in dirs:
+                dirs.append(chosen)
+                self._manager.apply({"actions.files.allowed_dirs": dirs})
+
     def _on_profile_chosen(self, profile: object) -> None:
         if isinstance(profile, Profile) and self._switch_profile is not None:
             self._switch_profile(profile)
 
     def _reload_profiles(self) -> None:
         if self._profiles is not None:
-            self._dialog.set_profiles(tuple(self._profiles()))
+            profs = tuple(self._profiles())
+            self._dialog.set_profiles(profs)
+            if self._obsidian_view is not None:
+                self._obsidian_view.set_profiles([p.name for p in profs])
+
+    def _update_telemetry(self) -> None:
+        if self._obsidian_view is None:
+            return
+        try:
+            import psutil
+
+            cpu = int(psutil.cpu_percent())
+            ram = int(psutil.virtual_memory().percent)
+            self._obsidian_view.set_telemetry(cpu, ram, 0)
+        except Exception:
+            pass
 
     def _start_system_move(self) -> None:
         handle = self.windowHandle()
