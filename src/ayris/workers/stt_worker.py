@@ -607,9 +607,7 @@ class SttWorker(Worker):
         if not model_name:
             installed = self._first_installed_model(self._configured_engine())
             if installed is not None:
-                self.log.warning(
-                    "stt: модель не выбрана, беру установленную %s", installed.name
-                )
+                self.log.warning("stt: модель не выбрана, беру установленную %s", installed.name)
                 return installed
             raise SttError(
                 "stt: no offline model configured",
@@ -690,8 +688,7 @@ def _looks_like_model(directory: Path, engine_name: str) -> bool:
             return any(directory.glob("*.onnx"))
         if engine_name == "vosk":
             return (directory / "am").exists() or any(
-                (directory / sub / "am").exists()
-                for sub in ("vosk", "stt", "kws", "model")
+                (directory / sub / "am").exists() for sub in ("vosk", "stt", "kws", "model")
             )
         if engine_name == "whisper":
             return (directory / "model.bin").exists()

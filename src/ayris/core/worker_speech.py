@@ -68,7 +68,6 @@ _PHRASE_TIMEOUT_SEC = 2.0
 _WARM_TIMEOUT_SEC = 2.0
 
 
-
 class WorkerCaller(Protocol):
     """The one method the adapters need from the worker supervisor.
 

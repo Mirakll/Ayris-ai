@@ -198,6 +198,7 @@ class DownloadCoordinator:
         self._registry = registry
         self._handles: dict[str, DownloadHandle] = {}
         self._threads: dict[str, threading.Thread] = {}
+        self._progress: dict[str, dict[str, Any]] = {}
         self._lock = threading.Lock()
 
     def start(self, model_id: str) -> None:
@@ -205,6 +206,18 @@ class DownloadCoordinator:
             existing = self._threads.get(model_id)
             if existing is not None and existing.is_alive():
                 return
+            entry = self._registry.catalog.get(model_id)
+            total = entry.total_bytes if entry is not None else 0
+            self._progress[model_id] = {
+                "model_id": model_id,
+                "downloaded": 0,
+                "total": total,
+                "speed_bps": 0.0,
+                "eta_s": 0.0,
+                "fraction": 0.0,
+                "speed_str": "",
+                "eta_str": "Подготовка…",
+            }
             handle = DownloadHandle()
             self._handles[model_id] = handle
             thread = threading.Thread(
@@ -216,9 +229,33 @@ class DownloadCoordinator:
             self._threads[model_id] = thread
             thread.start()
 
+    def _on_progress(
+        self, model_id: str, downloaded: int, total: int, speed_bps: float, eta_s: float
+    ) -> None:
+        with self._lock:
+            fraction = min(1.0, downloaded / total) if total > 0 else 0.0
+            speed_mb = speed_bps / (1024 * 1024)
+            speed_str = f"{speed_mb:.1f} МБ/с" if speed_mb >= 0.1 else ""
+            if eta_s >= 60:
+                eta_str = f"осталось {int(eta_s // 60)} мин"
+            elif eta_s > 0:
+                eta_str = f"осталось {int(eta_s)} с"
+            else:
+                eta_str = ""
+            self._progress[model_id] = {
+                "model_id": model_id,
+                "downloaded": downloaded,
+                "total": total,
+                "speed_bps": speed_bps,
+                "eta_s": eta_s,
+                "fraction": fraction,
+                "speed_str": speed_str,
+                "eta_str": eta_str,
+            }
+
     def _run(self, model_id: str, handle: DownloadHandle) -> None:
         try:
-            self._registry.install(model_id, handle=handle)
+            self._registry.install(model_id, handle=handle, on_progress=self._on_progress)
         except DownloadCancelled:
             _log.info("загрузка %s отменена", model_id)
         except AyrisError as exc:
@@ -231,6 +268,7 @@ class DownloadCoordinator:
             with self._lock:
                 self._handles.pop(model_id, None)
                 self._threads.pop(model_id, None)
+                self._progress.pop(model_id, None)
 
     def cancel(self, model_id: str) -> None:
         with self._lock:
@@ -242,6 +280,10 @@ class DownloadCoordinator:
         with self._lock:
             thread = self._threads.get(model_id)
         return thread is not None and thread.is_alive()
+
+    def all_downloads(self) -> dict[str, dict[str, Any]]:
+        with self._lock:
+            return {k: dict(v) for k, v in self._progress.items()}
 
 
 class RegistryBackend:
@@ -287,6 +329,9 @@ class RegistryBackend:
     def is_downloading(self, model_id: str) -> bool:
         return self._coordinator.is_active(model_id)
 
+    def all_downloads(self) -> dict[str, dict[str, Any]]:
+        return self._coordinator.all_downloads()
+
 
 class _EmptyBackend:
     """Stand-in when no registry is available yet: an empty, inert catalog."""
@@ -330,20 +375,34 @@ class _EmptyBackend:
     def is_downloading(self, _model_id: str) -> bool:
         return False
 
+    def all_downloads(self) -> dict[str, dict[str, Any]]:
+        return {}
+
+
+_backend_instance: ModelManagerBackend | None = None
+_backend_lock = threading.Lock()
+
 
 def _default_backend(bus: EventBus | None) -> ModelManagerBackend:
     """Build a registry-backed backend, or an empty one if that is not possible."""
-    try:
-        from ayris.core.database import get_database
-        from ayris.core.repositories import Repositories
-        from ayris.models.registry import ModelRegistry
+    global _backend_instance
+    with _backend_lock:
+        if _backend_instance is not None:
+            return _backend_instance
+        try:
+            from ayris.core.database import get_database
+            from ayris.core.repositories import Repositories
+            from ayris.models.registry import ModelRegistry
 
-        repositories = Repositories(get_database())
-        registry = ModelRegistry(repositories.models, get_paths(), bus=bus)
-        return RegistryBackend(registry)
-    except Exception:
-        _log.exception("не удалось построить бэкенд менеджера моделей, показываю пустой каталог")
-        return _EmptyBackend()
+            repositories = Repositories(get_database())
+            registry = ModelRegistry(repositories.models, get_paths(), bus=bus)
+            _backend_instance = RegistryBackend(registry)
+            return _backend_instance
+        except Exception:
+            _log.exception(
+                "не удалось построить бэкенд менеджера моделей, показываю пустой каталог"
+            )
+            return _EmptyBackend()
 
 
 def _default_profile_manager(bus: EventBus | None, config: ConfigManager) -> ProfileManager | None:

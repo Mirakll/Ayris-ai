@@ -212,6 +212,9 @@ class FakeBackend:
     def is_downloading(self, model_id: str) -> bool:
         return model_id in self._downloading
 
+    def all_downloads(self) -> dict[str, dict[str, object]]:
+        return {}
+
 
 class FakeClock:
     def __init__(self) -> None:

@@ -27,7 +27,7 @@ download is never interrupted by a re-layout.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -124,6 +124,8 @@ class ModelManagerBackend(Protocol):
     def cancel_download(self, model_id: str) -> None: ...
 
     def is_downloading(self, model_id: str) -> bool: ...
+
+    def all_downloads(self) -> dict[str, dict[str, Any]]: ...
 
 
 class _BusRelay(QObject):

@@ -187,9 +187,7 @@ class SileroTtsEngine(TtsEngine):
             )
         try:
             torch.set_num_threads(threads)
-            model = torch.package.PackageImporter(opened).load_pickle(
-                "tts_models", "model"
-            )
+            model = torch.package.PackageImporter(opened).load_pickle("tts_models", "model")
             model.to(torch.device("cpu"))
         except Exception as exc:  # torch raises many unrelated types
             raise TtsError(
