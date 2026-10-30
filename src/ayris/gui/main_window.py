@@ -561,13 +561,13 @@ class MainWindow(QMainWindow):
         self._container.setStyleSheet("background: transparent; border: none;")
         self._container.addWidget(self._root)
 
-        is_test_env = bool(
-            os.environ.get("PYTEST_CURRENT_TEST")
-            or os.environ.get("AYRIS_TEST_OFFSCREEN")
-            or QGuiApplication.platformName() == "offscreen"
-            or os.environ.get("AYRIS_GUI_BACKEND") == "classic"
+        use_obsidian = (
+            os.environ.get("AYRIS_GUI_BACKEND") == "obsidian"
+            and not os.environ.get("PYTEST_CURRENT_TEST")
+            and not os.environ.get("AYRIS_TEST_OFFSCREEN")
+            and QGuiApplication.platformName() != "offscreen"
         )
-        if not is_test_env:
+        if use_obsidian:
             try:
                 from ayris.gui.obsidian.server import ensure_obsidian_server
                 from ayris.gui.obsidian.view import ObsidianView
