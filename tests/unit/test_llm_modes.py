@@ -538,3 +538,38 @@ def test_summary_is_folded_into_chat_system_prompt() -> None:
 def test_reset_phrases_are_detected_on_normalized_text(text: str, expected: bool) -> None:
     """Просьба забыть разговор ловится по нормализованной форме, а обычная речь — нет."""
     assert is_reset(text) is expected
+
+
+def test_dialog_memory_configure_updates_window() -> None:
+    """Изменение лимита на лету подрезает окно памяти."""
+    memory = DialogMemory(max_turns=10)
+    memory.remember("Раз", "Ответ 1")
+    memory.remember("Два", "Ответ 2")
+    assert len(memory.messages()) == 4
+    memory.configure(max_turns=2)
+    assert len(memory.messages()) == 2
+    assert memory.messages()[0].content == "Два"
+    assert memory.messages()[1].content == "Ответ 2"
+
+
+def test_pipeline_retains_dialog_memory_and_updates_on_settings() -> None:
+    """Пайплайн накапливает историю в памяти и передаёт её модели."""
+    memory = DialogMemory(max_turns=10)
+    llm = ScriptedLlm(_text("Привет!"), _text("Тебя зовут Артём."))
+    pipeline, _tts, _actions = _build(settings=_ai(), llm=llm, memory=memory)
+
+    pipeline.run_text("Меня зовут Артём")
+    assert len(memory.messages()) == 2
+
+    pipeline.run_text("Как меня зовут?")
+    assert len(llm.last_prompt) >= 4
+    roles = [m.role.value for m in llm.last_prompt]
+    assert roles[-3:] == ["user", "assistant", "user"]
+    assert llm.last_prompt[-3].content == "Меня зовут Артём"
+    assert llm.last_prompt[-2].content == "Привет!"
+    assert llm.last_prompt[-1].content == "Как меня зовут?"
+
+    # Обновление настроек с меньшим history_turns подрезает окно памяти
+    new_settings = _settings(free_chat=True, history_turns=2)
+    pipeline.apply_settings(new_settings)
+    assert len(memory.messages()) == 2

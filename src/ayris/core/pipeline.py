@@ -673,6 +673,11 @@ class Pipeline:
         # command ignores it, since neither can be an echo.
         self._echo_guard = not settings.voice.tts.interrupt_on_speech
         self._continue_listening = settings.voice.wake.continue_listening
+        if self._memory is not None:
+            self._memory.configure(
+                max_turns=settings.ai.history_turns,
+                summarize_after=settings.ai.summarize_after_turns,
+            )
 
     # ------------------------------------------------------------------
     # wiring

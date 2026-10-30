@@ -110,7 +110,9 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
     from ayris.core.worker_llm import WorkerLlmClient
     from ayris.core.worker_speech import WorkerPhraseSource, WorkerSttSource
     from ayris.nlu.index import TriggerIndex
+    from ayris.nlu.llm.memory import DialogMemory
     from ayris.nlu.llm.prompts import clear_template_cache
+    from ayris.nlu.llm.tools import CommandCard
     from ayris.nlu.matcher import Matcher, trigger_from_db
     from ayris.workers.registry import WorkerKind
 
@@ -176,6 +178,28 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
         if manager is not None and mode.uses_llm:
             manager.ensure_started(WorkerKind.LLM.value)
 
+    def catalog() -> Sequence[CommandCard]:
+        cards: list[CommandCard] = []
+        profile_id = profile_box["id"]
+        if profile_id is None:
+            return ()
+        for cmd in repos.commands.list_for_profile(profile_id):
+            if cmd.enabled and cmd.id is not None:
+                cards.append(
+                    CommandCard(
+                        command_id=cmd.id,
+                        name=cmd.name,
+                        description=cmd.description,
+                    )
+                )
+        return cards
+
+    memory = DialogMemory(
+        max_turns=app.settings.ai.history_turns,
+        summarize_after=app.settings.ai.summarize_after_turns,
+        profile_id=app.profile.id,
+    )
+
     pipeline = Pipeline(
         app.bus,
         state=app.state,
@@ -186,6 +210,8 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
         stt=stt,
         phrase_source=phrase_source,
         prewarm=prewarm,
+        catalog=catalog,
+        memory=memory,
     )
 
     # The chat/understanding consumer. Without a manager (the text-only test
@@ -216,6 +242,7 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
         # library is per-profile too, so it has to follow.
         profile_box["id"] = event.profile.id
         index.replace_all(load(None))
+        memory.profile(event.profile.id)
         # A profile can carry its own chat.txt/nlu.txt override, so drop any
         # template the previous profile cached and let the next turn reread.
         clear_template_cache()

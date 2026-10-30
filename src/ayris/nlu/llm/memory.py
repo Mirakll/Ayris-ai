@@ -213,6 +213,22 @@ class DialogMemory:
         self.reset()
         return True
 
+    def configure(
+        self,
+        *,
+        max_turns: int | None = None,
+        summarize_after: int | None = None,
+        max_chars: int | None = None,
+    ) -> None:
+        """Обновить лимиты реплик на лету и подрезать окно."""
+        if max_turns is not None:
+            self._max_turns = max(0, max_turns)
+        if summarize_after is not None:
+            self._summarize_after = max(0, summarize_after)
+        if max_chars is not None:
+            self._max_chars = max(0, max_chars)
+        self._compact()
+
     # --- внутреннее ---------------------------------------------------------
 
     def _compact(self) -> None:
