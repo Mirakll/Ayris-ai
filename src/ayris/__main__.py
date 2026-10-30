@@ -394,6 +394,12 @@ def _run_application(options: CliOptions) -> int:
             )
 
         engine = dispatcher._engine
+        from typing import cast
+
+        from ayris.actions.registry import ActionRegistry
+        from ayris.nlu.llm.tools import RegistryGateway
+
+        pipeline.set_gateway(RegistryGateway(cast(ActionRegistry, engine.registry)))
         set_active_devtools_services(
             DevToolsServices(
                 pipeline=pipeline,
