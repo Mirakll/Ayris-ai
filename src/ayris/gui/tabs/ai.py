@@ -1569,6 +1569,17 @@ class AiTab(SettingsTab):
     def _build_history_section(self) -> None:
         self._model_header("История диалога")
 
+        self._memory_mode_combo = ThemedComboBox()
+        self._memory_mode_combo.addItem("Скользящее окно (по умолчанию)", "sliding_window")
+        self._memory_mode_combo.addItem("Долговременная память MemGPT (факты + архив)", "memgpt")
+        self.bind_combo(self._memory_mode_combo, "ai.memory_mode", "Режим памяти")
+        self._model_card(
+            "Режим памяти",
+            "Тип хранения диалога: простое скользящее окно последних реплик или "
+            "долговременная память MemGPT с фактами о пользователе и поиском по архиву.",
+            self._memory_mode_combo,
+        )
+
         self._history_slider = SliderField(
             self._theme, minimum=0, maximum=100, value=10, unit="реплик", label="Длина истории"
         )
@@ -1588,6 +1599,17 @@ class AiTab(SettingsTab):
             "После скольких реплик сворачивать историю в краткий пересказ. 0 — никогда; "
             "иначе не меньше длины истории.",
             self._summary_slider,
+        )
+
+        self._recall_slider = SliderField(
+            self._theme, minimum=0, maximum=10, value=3, unit="записей", label="Архивных фактов"
+        )
+        self.bind_int_slider(self._recall_slider, "ai.long_term_recall_limit", "Лимит воспоминаний")
+        self._model_card(
+            "Подмешивание из архива",
+            "Сколько релевантных реплик из архива прошлых дней подмешивать "
+            "в запрос к модели (в режиме MemGPT).",
+            self._recall_slider,
         )
 
         body = self.panel()

@@ -95,7 +95,13 @@ from ayris.nlu.llm.agent import AgentStep, run_agent
 from ayris.nlu.llm.base import LlmClient, LlmMessage, LlmResponse, LlmTool, NullLlmClient
 from ayris.nlu.llm.factory import is_cloud_provider
 from ayris.nlu.llm.json_nlu import NluDecision, interpret, resolve_command
-from ayris.nlu.llm.memory import DialogMemory, is_reset
+from ayris.nlu.llm.memory import (
+    DialogMemory,
+    extract_forget_fact,
+    extract_remember_fact,
+    is_query_facts,
+    is_reset,
+)
 from ayris.nlu.llm.prompts import build_chat_prompt, build_nlu_prompt
 from ayris.nlu.llm.tools import (
     ActionReply,
@@ -677,6 +683,8 @@ class Pipeline:
             self._memory.configure(
                 max_turns=settings.ai.history_turns,
                 summarize_after=settings.ai.summarize_after_turns,
+                mode=settings.ai.memory_mode,
+                recall_limit=settings.ai.long_term_recall_limit,
             )
 
     # ------------------------------------------------------------------
@@ -1436,6 +1444,7 @@ class Pipeline:
         same single path — the trigger dispatcher — so tasks 39/40 checks are not
         duplicated. Every other outcome is spoken and closed here.
         """
+        self._maybe_handle_memory_command(session)
         self._maybe_reset_memory(session)
         self._instant_intercept(session)
         self._intercept_gibberish(session)
@@ -1497,6 +1506,52 @@ class Pipeline:
         self._respond(session, MEMORY_RESET_MESSAGE)
         self._done(session, ExecutionResult.OK)
         raise _Stop(ExecutionResult.OK)
+
+    def _maybe_handle_memory_command(self, session: _Session) -> None:
+        """Интерактивное управление долговременной памятью MemGPT.
+
+        Поддерживает:
+        - Запомни: [факт] -> сохранение в Core Memory
+        - Что ты обо мне знаешь? / Вспомни факты -> чтение Core Memory
+        - Забудь факт: [факт] -> удаление из Core Memory
+        В режиме sliding_window (или при сухом прогоне) управление отключено.
+        """
+        memory = self._memory
+        if memory is None or session.dry_run or memory.mode != "memgpt":
+            return
+
+        text = session.text
+        fact_to_remember = extract_remember_fact(text)
+        if fact_to_remember:
+            memory.remember_fact(fact_to_remember)
+            session.trace.intent = session.trace.intent or "memory:remember"
+            self._respond(session, f"Запомнила: {fact_to_remember}")
+            self._done(session, ExecutionResult.OK)
+            raise _Stop(ExecutionResult.OK)
+
+        if is_query_facts(text):
+            facts = memory.list_facts()
+            if facts:
+                items = "\n".join(f"• {f}" for f in facts)
+                reply = f"Вот что я о вас знаю:\n{items}"
+            else:
+                reply = "В долговременной памяти пока нет сохранённых фактов о вас."
+            session.trace.intent = session.trace.intent or "memory:query_facts"
+            self._respond(session, reply)
+            self._done(session, ExecutionResult.OK)
+            raise _Stop(ExecutionResult.OK)
+
+        fact_to_forget = extract_forget_fact(text)
+        if fact_to_forget:
+            removed = memory.forget_fact(fact_to_forget)
+            if removed:
+                reply = f"Забыла факт: {fact_to_forget}"
+            else:
+                reply = f"Не нашла в памяти факт, похожий на «{fact_to_forget}»."
+            session.trace.intent = session.trace.intent or "memory:forget_fact"
+            self._respond(session, reply)
+            self._done(session, ExecutionResult.OK)
+            raise _Stop(ExecutionResult.OK)
 
     def _instant_intercept(self, session: _Session) -> None:
         """Let an action answer погода/время/курс before the model ever sees it.
@@ -1864,11 +1919,13 @@ class Pipeline:
             override_dir=self._prompt_override_dir,
         )
         memory = self._memory
-        if memory is not None and memory.summary:
-            # Fold the running summary into the single system message: Anthropic
-            # keeps ``system`` a separate field, so a second one would be dropped.
-            addon = f"Ранее в разговоре: {memory.summary}"
-            system = f"{system}\n\n{addon}" if system else addon
+        if memory is not None:
+            # Fold the running summary and MemGPT long-term context into the
+            # single system message: Anthropic keeps ``system`` a separate
+            # field, so a second one would be dropped.
+            addon = memory.format_system_addon(session.text)
+            if addon:
+                system = f"{system}\n\n{addon}" if system else addon
         messages = [LlmMessage.system(system)] if system else []
         if memory is not None:
             messages.extend(memory.messages())

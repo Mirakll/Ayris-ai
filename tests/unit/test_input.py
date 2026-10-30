@@ -68,6 +68,7 @@ from ayris.actions.input import mouse as mouse_module
 from ayris.actions.input.backend import (
     ABSOLUTE_MAX,
     BackendKind,
+    InputBlocked,
     InputDriverMissing,
     InterceptionBackend,
     KeyStroke,
@@ -1544,14 +1545,35 @@ class TestRealSendInput:
     a zero-width space, and the pointer goes back where it was.
     """
 
+    @pytest.fixture(autouse=True)
+    def _skip_if_desktop_inaccessible(self) -> None:
+        from ayris.utils.winapi import WinApiError, cursor_position
+
+        try:
+            cursor_position()
+        except WinApiError as exc:
+            if exc.code == 5 or "[5]" in str(exc):
+                pytest.skip("рабочий стол заблокирован или недоступен для ввода (Access Denied)")
+            raise
+
     def test_windows_accepts_a_real_keystroke(self) -> None:
         backend = SendInputBackend()
-        backend.key_down(KEYS["f24"])
-        backend.key_up(KEYS["f24"])
+        try:
+            backend.key_down(KEYS["f24"])
+            backend.key_up(KEYS["f24"])
+        except InputBlocked as exc:
+            if "[5]" in str(exc):
+                pytest.skip("рабочий стол заблокирован или недоступен для ввода (Access Denied)")
+            raise
 
     def test_windows_accepts_a_real_unicode_character(self) -> None:
         """The ``KEYEVENTF_UNICODE`` path: the code unit goes in ``wScan``, ``wVk`` is 0."""
-        SendInputBackend().type_text("​")
+        try:
+            SendInputBackend().type_text("​")
+        except InputBlocked as exc:
+            if "[5]" in str(exc):
+                pytest.skip("рабочий стол заблокирован или недоступен для ввода (Access Denied)")
+            raise
 
     def test_the_cursor_really_moves_and_comes_back(self) -> None:
         """``MOUSEEVENTF_ABSOLUTE | VIRTUALDESK`` end to end, against the real pointer."""

@@ -847,6 +847,19 @@ class AiConfig(ConfigSection):
         le=500,
         description="После скольких реплик сворачивать историю в краткий пересказ. 0 — никогда",
     )
+    memory_mode: Literal["sliding_window", "memgpt"] = Field(
+        default="sliding_window",
+        description=(
+            "Режим памяти модели: sliding_window — только последние реплики; "
+            "memgpt — долговременная память фактов о пользователе и архивный поиск"
+        ),
+    )
+    long_term_recall_limit: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Сколько релевантных воспоминаний из архива подтягивать в контекст",
+    )
     chat_system_prompt: str = Field(
         default=(
             "Ты Айрис — голосовой помощник на компьютере пользователя. "

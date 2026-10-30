@@ -110,7 +110,7 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
     from ayris.core.worker_llm import WorkerLlmClient
     from ayris.core.worker_speech import WorkerPhraseSource, WorkerSttSource
     from ayris.nlu.index import TriggerIndex
-    from ayris.nlu.llm.memory import DialogMemory
+    from ayris.nlu.llm.memory import DialogMemory, SqliteMemoryStore
     from ayris.nlu.llm.prompts import clear_template_cache
     from ayris.nlu.llm.tools import CommandCard
     from ayris.nlu.matcher import Matcher, trigger_from_db
@@ -194,10 +194,14 @@ def install_pipeline(app: AyrisApp, manager: WorkerManager | None = None) -> Pip
                 )
         return cards
 
+    memory_store = SqliteMemoryStore(app.database)
     memory = DialogMemory(
+        store=memory_store,
         max_turns=app.settings.ai.history_turns,
         summarize_after=app.settings.ai.summarize_after_turns,
         profile_id=app.profile.id,
+        mode=app.settings.ai.memory_mode,
+        recall_limit=app.settings.ai.long_term_recall_limit,
     )
 
     pipeline = Pipeline(
