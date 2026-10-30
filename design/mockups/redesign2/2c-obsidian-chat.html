@@ -642,9 +642,9 @@ button:focus-visible,input:focus-visible,[tabindex]:focus-visible{outline:2px so
 
 <div class="sgroup"><div class="gh">Режим распознавания</div>
   <div class="srow col"><div class="lbl"><div class="t">Как Айрис понимает фразы</div><div class="d">От режима зависит, участвует ли языковая модель.</div></div><div class="ctl"><div class="seg" id="ai-mode-seg"><button data-mode="commands">Только команды</button><button data-mode="hybrid" class="active">Гибрид</button><button data-mode="ai">Только ИИ</button></div></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Только команды</div><div class="d">Айрис выполняет только заготовленные команды и честно сообщает, когда фразу не удалось сопоставить. Модель не используется.</div></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Гибрид</div><div class="d">Сначала подбирается команда из библиотеки; если ничего не совпало, фраза уходит модели.</div></div><div class="ctl"><span class="badge2 ok" id="ai-mode-status-badge">выбрано</span></div></div>
-  <div class="srow"><div class="lbl"><div class="t">Только ИИ</div><div class="d">Любая фраза уходит модели; ответ озвучивается.</div></div></div>
+  <div class="srow" data-mode-row="commands" style="cursor: pointer;"><div class="lbl"><div class="t">Только команды</div><div class="d">Айрис выполняет только заготовленные команды и честно сообщает, когда фразу не удалось сопоставить. Модель не используется.</div></div><div class="ctl"><span class="badge2 ok" style="display: none;">выбрано</span></div></div>
+  <div class="srow" data-mode-row="hybrid" style="cursor: pointer;"><div class="lbl"><div class="t">Гибрид</div><div class="d">Сначала подбирается команда из библиотеки; если ничего не совпало, фраза уходит модели.</div></div><div class="ctl"><span class="badge2 ok">выбрано</span></div></div>
+  <div class="srow" data-mode-row="ai" style="cursor: pointer;"><div class="lbl"><div class="t">Только ИИ</div><div class="d">Любая фраза уходит модели; ответ озвучивается.</div></div><div class="ctl"><span class="badge2 ok" style="display: none;">выбрано</span></div></div>
   <div class="notice warn"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4M12 17h.01M10.3 3.9 2 18a2 2 0 0 0 1.7 3h16.6a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>В этом режиме заготовленные команды не срабатывают напрямую — всё решает модель.</div>
 </div>
 
